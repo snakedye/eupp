@@ -1,7 +1,7 @@
 use super::{
     Hash, Version,
     ledger::Ledger,
-    transaction::{Transaction, TransactionHash},
+    transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
 
@@ -17,6 +17,12 @@ pub struct BlockHeader {
     pub version: Version,
     pub previous_block_hash: Hash,
     pub merkle_root: Hash,
+}
+
+#[derive(Debug, Clone)]
+pub enum BlockError {
+    InvalidBlockHash(String),
+    TransactionError(super::transaction::TransactionError),
 }
 
 impl BlockHeader {
@@ -51,24 +57,36 @@ impl Block {
         }
     }
 
-    pub fn verify(&self, ledger: &Ledger) -> Result<(), super::transaction::TransactionError> {
-        if ledger
-            .get_block(&self.previous_block_hash)
-            .ok_or(super::transaction::TransactionError::InvalidPreviousBlockHash)?
-            .header()
-            .hash::<Blake2s256>()
-            == self.header().previous_block_hash
-        {
-            self.transactions
-                .iter()
-                .try_for_each(|tx| tx.verify(ledger))
-        } else {
-            Err(super::transaction::TransactionError::InvalidPreviousBlockHash)
+    pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), BlockError> {
+        // We only check if there's a previous block
+        //
+        // Otherwise this block is the genesis block and we don't need to verify it
+        if ledger.get_last_block_metadata().is_some() {
+            let previous_block = ledger.get_block_metadata(&self.previous_block_hash).ok_or(
+                BlockError::InvalidBlockHash(format!(
+                    "Previous block hash not found: {}",
+                    hex::encode(&self.previous_block_hash)
+                )),
+            )?;
+
+            if previous_block.hash != self.header().previous_block_hash {
+                return Err(BlockError::InvalidBlockHash(
+                    "Previous block hash mismatch".to_string(),
+                ));
+            }
         }
+
+        self.transactions
+            .iter()
+            .try_for_each(|tx| tx.verify(ledger).map_err(BlockError::TransactionError))
+    }
+
+    pub fn lead_utxo(&self) -> &Output {
+        self.transactions.first().unwrap().outputs.first().unwrap()
     }
 
     /// Returns the merkle root of the transactions in the block.
-    fn merkle_root(&self) -> TransactionHash {
+    pub(crate) fn merkle_root(&self) -> TransactionHash {
         merkle_root::<Blake2s256>(&self.transactions)
     }
 }

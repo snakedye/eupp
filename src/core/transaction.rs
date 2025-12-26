@@ -14,13 +14,13 @@ pub struct Transaction {
 
 pub type TransactionHash = Hash;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TransactionError {
     /// The referenced transaction was not found in the ledger.
     InvalidInput { txid: Hash },
 
     /// The referenced output (UTXO) was not found in the given transaction.
-    InvalidOutput { txid: Hash, index: usize },
+    InvalidOutput(OutputId),
 
     /// A signature could not be parsed or did not verify.
     InvalidSignature { reason: String },
@@ -31,9 +31,6 @@ pub enum TransactionError {
     /// Total outputs exceed total inputs.
     InsufficientInputAmount { total_input: u64, total_output: u64 },
 
-    /// The previous block hash does not match the expected hash.
-    InvalidPreviousBlockHash,
-
     /// Specific coinbase (mint) validation failed (mask/amount rules).
     CoinbaseValidation { reason: String },
 }
@@ -43,10 +40,10 @@ impl fmt::Display for TransactionError {
         use TransactionError::*;
         match self {
             InvalidInput { txid } => write!(f, "Invalid input: referenced txid {:02x?}", txid),
-            InvalidOutput { txid, index } => write!(
+            InvalidOutput(OutputId { tx_hash, index }) => write!(
                 f,
                 "Invalid output: referenced txid {:02x?} index {}",
-                txid, index
+                tx_hash, index
             ),
             InvalidSignature { reason } => write!(f, "Invalid signature: {}", reason),
             InvalidPublicKey { reason } => write!(f, "Invalid public key: {}", reason),
@@ -58,7 +55,6 @@ impl fmt::Display for TransactionError {
                 "Insufficient input amount: inputs={} outputs={}",
                 total_input, total_output
             ),
-            InvalidPreviousBlockHash => write!(f, "Invalid previous block hash"),
             CoinbaseValidation { reason } => write!(f, "Coinbase validation failed: {}", reason),
         }
     }
@@ -74,17 +70,32 @@ pub struct Input {
     pub public_key: PublicKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputId {
-    pub transaction_id: TransactionHash,
-    pub output_index: usize,
+    pub tx_hash: TransactionHash,
+    pub index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
     pub amount: u64,
     pub data_hash: Hash,
     pub commitment: Hash,
+}
+
+impl Ord for OutputId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.tx_hash.cmp(&other.tx_hash) {
+            std::cmp::Ordering::Equal => self.index.cmp(&other.index),
+            other => other,
+        }
+    }
+}
+
+impl PartialOrd for OutputId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Transaction {
@@ -104,8 +115,8 @@ impl Transaction {
         hasher.update(&self.inputs.len().to_le_bytes());
         for input in &self.inputs {
             hasher.update(&[input.version as u8]);
-            hasher.update(&input.output_id.transaction_id);
-            hasher.update(&input.output_id.output_index.to_le_bytes());
+            hasher.update(&input.output_id.tx_hash);
+            hasher.update(&input.output_id.index.to_le_bytes());
             hasher.update(&input.signature);
             hasher.update(&input.public_key);
         }
@@ -120,23 +131,17 @@ impl Transaction {
     }
 
     /// Verifies the transaction against the ledger.
-    pub fn verify(&self, ledger: &Ledger) -> Result<(), TransactionError> {
+    pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
         let mut total_input_amount: u64 = 0;
+        let is_coinbase = ledger.get_last_block_metadata().is_none();
         for (i, input) in self.inputs.iter().enumerate() {
-            // Lookup referenced transaction
-            let tx = ledger
-                .get_transaction(&input.output_id.transaction_id)
+            // Lookup referenced utxo
+            let utxo = ledger
+                .get_utxo(&input.output_id)
                 .ok_or(TransactionError::InvalidInput {
-                    txid: input.output_id.transaction_id,
+                    txid: input.output_id.tx_hash,
                 })?;
 
-            // Lookup referenced utxo within that transaction
-            let utxo = tx.outputs.get(input.output_id.output_index).ok_or(
-                TransactionError::InvalidOutput {
-                    txid: input.output_id.transaction_id,
-                    index: input.output_id.output_index,
-                },
-            )?;
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
 
             // Coinbase (mint) specific validation: input index 0 is the lead/mint UTXO
@@ -164,10 +169,7 @@ impl Transaction {
             } else {
                 // Regular UTXO verification: commitment must match provided public key
                 if !utxo.verify(&input.public_key) {
-                    return Err(TransactionError::InvalidOutput {
-                        txid: input.output_id.transaction_id,
-                        index: input.output_id.output_index,
-                    });
+                    return Err(TransactionError::InvalidOutput(input.output_id));
                 }
             }
 
@@ -191,7 +193,7 @@ impl Transaction {
         }
 
         let total_output_amount: u64 = self.outputs.iter().map(|output| output.amount).sum();
-        if total_output_amount > total_input_amount {
+        if !is_coinbase && total_output_amount > total_input_amount {
             return Err(TransactionError::InsufficientInputAmount {
                 total_input: total_input_amount,
                 total_output: total_output_amount,
@@ -222,8 +224,8 @@ where
     D: Digest,
     I: Iterator<Item = &'a Output>,
 {
-    hasher.update(&output_id.transaction_id);
-    hasher.update(&output_id.output_index.to_le_bytes());
+    hasher.update(&output_id.tx_hash);
+    hasher.update(&output_id.index.to_le_bytes());
     for Output {
         amount: data,
         data_hash,
@@ -240,7 +242,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{block::Block, ledger::Ledger};
+    use crate::core::{
+        block::Block,
+        ledger::{InMemoryLedger, Ledger},
+    };
     use blake2::Blake2s256;
     use ed25519_dalek::Signer;
 
@@ -271,8 +276,8 @@ mod tests {
         // Prepare a fake transaction id and outputs
         let txid: [u8; 32] = [9u8; 32];
         let output_id = OutputId {
-            transaction_id: txid,
-            output_index: 1usize,
+            tx_hash: txid,
+            index: 1usize,
         };
 
         let out1 = Output {
@@ -293,7 +298,7 @@ mod tests {
         // Compute expected via manual hasher
         let mut hasher = Blake2s256::new();
         hasher.update(&txid);
-        hasher.update(&output_id.output_index.to_le_bytes());
+        hasher.update(&output_id.index.to_le_bytes());
         for o in &outputs {
             hasher.update(&o.amount.to_le_bytes());
             hasher.update(&o.data_hash);
@@ -310,8 +315,8 @@ mod tests {
         let input = Input {
             version: Version::V1,
             output_id: OutputId {
-                transaction_id: [1u8; 32],
-                output_index: 0,
+                tx_hash: [1u8; 32],
+                index: 0,
             },
             signature: vec![],
             public_key: [2u8; 32],
@@ -335,8 +340,8 @@ mod tests {
         hasher.update(&tx.inputs.len().to_le_bytes());
         for inp in &tx.inputs {
             hasher.update(&[inp.version as u8]);
-            hasher.update(&inp.output_id.transaction_id);
-            hasher.update(&inp.output_id.output_index.to_le_bytes());
+            hasher.update(&inp.output_id.tx_hash);
+            hasher.update(&inp.output_id.index.to_le_bytes());
             hasher.update(&inp.signature);
             hasher.update(&inp.public_key);
         }
@@ -354,7 +359,7 @@ mod tests {
     #[test]
     fn test_transaction_verify_invalid_public_key() {
         // Create a ledger with one block containing a funding transaction
-        let mut ledger = Ledger::new();
+        let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let pk = [11u8; 32];
@@ -378,14 +383,14 @@ mod tests {
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(Version::V1, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block);
+        ledger.add_block(block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let input = Input {
             version: Version::V1,
             output_id: OutputId {
-                transaction_id: funding_txid,
-                output_index: 0,
+                tx_hash: funding_txid,
+                index: 0,
             },
             signature: vec![],
             public_key: pk, // same public key used to construct commitment
@@ -417,8 +422,8 @@ mod tests {
         // Prepare a fake transaction id and outputs
         let txid: [u8; 32] = [9u8; 32];
         let output_id = OutputId {
-            transaction_id: txid,
-            output_index: 1usize,
+            tx_hash: txid,
+            index: 1usize,
         };
 
         let outputs = vec![Output {
@@ -441,7 +446,7 @@ mod tests {
     #[test]
     fn test_transaction_verify_invalid_input_output_totals() {
         // Create a ledger with one block containing a funding transaction
-        let mut ledger = Ledger::new();
+        let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data_hash = [12u8; 32];
@@ -463,12 +468,12 @@ mod tests {
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block);
+        ledger.add_block(block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
-            transaction_id: funding_txid,
-            output_index: 0,
+            tx_hash: funding_txid,
+            index: 0,
         };
         let new_outputs = vec![Output {
             amount: 150,
@@ -501,7 +506,7 @@ mod tests {
     #[test]
     fn test_transaction_verify_valid_coinbase() {
         // Create a ledger with one block containing a funding transaction
-        let mut ledger = Ledger::new();
+        let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data_hash = [12u8; 32];
@@ -524,12 +529,12 @@ mod tests {
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block);
+        ledger.add_block(block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
-            transaction_id: funding_txid,
-            output_index: 0,
+            tx_hash: funding_txid,
+            index: 0,
         };
         let new_outputs = vec![Output {
             amount: reward,
@@ -562,7 +567,7 @@ mod tests {
     #[test]
     fn test_transaction_verify_invalid_coinbase() {
         // Create a ledger with one block containing a funding transaction
-        let mut ledger = Ledger::new();
+        let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data_hash = [12u8; 32];
@@ -585,12 +590,12 @@ mod tests {
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block);
+        ledger.add_block(block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
-            transaction_id: funding_txid,
-            output_index: 0,
+            tx_hash: funding_txid,
+            index: 0,
         };
         let new_outputs = vec![Output {
             amount: 1,
