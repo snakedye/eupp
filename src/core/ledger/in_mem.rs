@@ -11,14 +11,15 @@ use crate::core::{
 use super::{BlockMetadata, Ledger};
 
 pub struct InMemoryLedger {
-    // 1. The Block Index: Hash -> Metadata (including Total Supply)
+    /// Block metadata index
     pub block_index: HashMap<Hash, BlockMetadata>,
 
-    // 2. The UTXO Set: OutPoint -> Output
-    // This represents the "Current State" of the world.
+    // The complete set of unspent transaction outputs (UTXOs)
     pub utxo_set: BTreeMap<OutputId, Output>,
 
-    // 3. The Best Tip: Points to the block with the Maximum Accumulated Supply (MAS)
+    /// Points to the block with the Maximum Accumulated Supply (MAS)
+    ///
+    /// This is the main branch of the blockchain.
     pub tip: Hash,
 }
 
@@ -79,7 +80,7 @@ impl Ledger for InMemoryLedger {
         let total_supply;
         let prev_locked_supply = self
             .block_index
-            .get(&block.previous_block_hash)
+            .get(&block.prev_block_hash)
             .map(|meta| meta.locked_supply)
             .unwrap_or_default();
         let locked_supply = block
@@ -89,10 +90,10 @@ impl Ledger for InMemoryLedger {
 
         // Get the previous block metadata
         if self.block_index.len() > 1 {
-            let prev_meta = self.block_index.get(&block.previous_block_hash).ok_or(
+            let prev_meta = self.block_index.get(&block.prev_block_hash).ok_or(
                 BlockError::InvalidBlockHash(format!(
                     "Previous block hash not found: {}",
-                    hex::encode(&block.previous_block_hash)
+                    hex::encode(&block.prev_block_hash)
                 )),
             )?;
 
@@ -109,7 +110,7 @@ impl Ledger for InMemoryLedger {
 
         let metadata = BlockMetadata {
             hash: block.header().hash::<Blake2s256>(),
-            prev_block_hash: block.previous_block_hash,
+            prev_block_hash: block.prev_block_hash,
             available_supply: total_supply,
             locked_supply,
             height,

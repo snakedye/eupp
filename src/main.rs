@@ -25,9 +25,9 @@ fn main() {
     let mut prev_tx_hash;
 
     let coinbase_tx = Transaction {
-        version: core::Version::V1,
         inputs: vec![], // coinbase has no inputs
         outputs: vec![Output {
+            version: core::Version::V1,
             amount: 100000,
             data: [0u8; 32],
             commitment: mask,

@@ -8,14 +8,14 @@ use blake2::{Blake2s256, Digest};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub version: Version,
-    pub previous_block_hash: Hash,
+    pub prev_block_hash: Hash,
     pub transactions: Vec<Transaction>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockHeader {
     pub version: Version,
-    pub previous_block_hash: Hash,
+    pub prev_block_hash: Hash,
     pub merkle_root: Hash,
 }
 
@@ -27,12 +27,13 @@ pub enum BlockError {
 }
 
 impl BlockHeader {
+    /// Returns the hash of the block header.
     pub fn hash<T: Digest>(&self) -> Hash {
         let mut buf = [0u8; 32];
         let mut hasher = T::new();
 
         Digest::update(&mut hasher, &[self.version as u8]);
-        Digest::update(&mut hasher, &self.previous_block_hash);
+        Digest::update(&mut hasher, &self.prev_block_hash);
         Digest::update(&mut hasher, &self.merkle_root);
 
         buf.as_mut().copy_from_slice(hasher.finalize().as_ref());
@@ -41,10 +42,10 @@ impl BlockHeader {
 }
 
 impl Block {
-    pub fn new(version: Version, previous_block_hash: Hash) -> Self {
+    pub fn new(version: Version, prev_block_hash: Hash) -> Self {
         Self {
             version,
-            previous_block_hash,
+            prev_block_hash,
             transactions: Vec::new(),
         }
     }
@@ -53,7 +54,7 @@ impl Block {
     pub fn header(&self) -> BlockHeader {
         BlockHeader {
             version: self.version,
-            previous_block_hash: self.previous_block_hash,
+            prev_block_hash: self.prev_block_hash,
             merkle_root: self.merkle_root(),
         }
     }
@@ -63,14 +64,14 @@ impl Block {
         //
         // Otherwise this block is the genesis block and we don't need to verify it
         if ledger.get_last_block_metadata().is_some() {
-            let previous_block = ledger.get_block_metadata(&self.previous_block_hash).ok_or(
+            let previous_block = ledger.get_block_metadata(&self.prev_block_hash).ok_or(
                 BlockError::InvalidBlockHash(format!(
                     "Previous block hash not found: {}",
-                    hex::encode(&self.previous_block_hash)
+                    hex::encode(&self.prev_block_hash)
                 )),
             )?;
 
-            if previous_block.hash != self.header().previous_block_hash {
+            if previous_block.hash != self.header().prev_block_hash {
                 return Err(BlockError::InvalidBlockHash(
                     "Previous block hash mismatch".to_string(),
                 ));

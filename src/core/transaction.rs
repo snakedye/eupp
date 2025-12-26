@@ -1,13 +1,11 @@
 use super::calculate_reward;
 use super::{Hash, PublicKey, Version, create_commitment, ledger::Ledger};
 use blake2::{Blake2s256, Digest};
-use serde::{Deserialize, Serialize};
 use std::error;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
-    pub version: Version,
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
 }
@@ -62,22 +60,22 @@ impl fmt::Display for TransactionError {
 
 impl error::Error for TransactionError {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Input {
-    pub version: Version,
     pub output_id: OutputId,
     pub signature: Vec<u8>,
     pub public_key: PublicKey,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputId {
     pub tx_hash: TransactionHash,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Output {
+    pub version: Version,
     pub amount: u64,
     pub data: Hash,
     pub commitment: Hash,
@@ -100,21 +98,15 @@ impl PartialOrd for OutputId {
 
 impl Transaction {
     /// Creates a new transaction.
-    pub fn new(version: Version, inputs: Vec<Input>, outputs: Vec<Output>) -> Self {
-        Self {
-            version,
-            inputs,
-            outputs,
-        }
+    pub fn new(inputs: Vec<Input>, outputs: Vec<Output>) -> Self {
+        Self { inputs, outputs }
     }
 
     /// Calculates the hash of the transaction.
     pub fn hash<D: Digest>(&self) -> TransactionHash {
         let mut hasher = D::new();
-        hasher.update(&[self.version as u8]);
         hasher.update(&self.inputs.len().to_le_bytes());
         for input in &self.inputs {
-            hasher.update(&[input.version as u8]);
             hasher.update(&input.output_id.tx_hash);
             hasher.update(&input.output_id.index.to_le_bytes());
             hasher.update(&input.signature);
@@ -122,6 +114,7 @@ impl Transaction {
         }
         hasher.update(&self.outputs.len().to_le_bytes());
         for output in &self.outputs {
+            hasher.update(&[output.version as u8]);
             hasher.update(&output.amount.to_le_bytes());
             hasher.update(&output.data);
             hasher.update(&output.commitment);
@@ -166,11 +159,9 @@ impl Transaction {
                     });
                 }
             // Regular transactions
-            } else {
+            } else if !utxo.verify(&input.public_key) {
                 // Regular UTXO verification: commitment must match provided public key
-                if !utxo.verify(&input.public_key) {
-                    return Err(TransactionError::InvalidOutput(input.output_id));
-                }
+                return Err(TransactionError::InvalidOutput(input.output_id));
             }
 
             // Compute sighash and validate signature
@@ -204,11 +195,12 @@ impl Transaction {
 }
 
 impl Output {
-    pub fn new_with_pk(amount: u64, public_key: &PublicKey, data_hash: Hash) -> Self {
-        let commitment = create_commitment::<Blake2s256>(public_key, &data_hash);
+    pub fn new_v1(amount: u64, public_key: &PublicKey, data: &Hash) -> Self {
+        let commitment = create_commitment::<Blake2s256>(public_key, data);
         Self {
+            version: Version::V1,
             amount,
-            data: data_hash,
+            data: *data,
             commitment,
         }
     }
@@ -227,14 +219,16 @@ where
     hasher.update(&output_id.tx_hash);
     hasher.update(&output_id.index.to_le_bytes());
     for Output {
-        amount: data,
-        data: data_hash,
-        commitment: public_key_hash,
+        version,
+        amount,
+        data,
+        commitment,
     } in outputs
     {
-        hasher.update(&data.to_le_bytes());
-        hasher.update(&data_hash);
-        hasher.update(&public_key_hash);
+        hasher.update(&[*version as u8]);
+        hasher.update(&amount.to_le_bytes());
+        hasher.update(&data);
+        hasher.update(&commitment);
     }
     hasher.finalize().as_slice().try_into().unwrap()
 }
@@ -253,15 +247,10 @@ mod tests {
     fn test_output_verify_true_and_false() {
         // Setup a public key and data_hash
         let pk: [u8; 32] = [1u8; 32];
-        let data_hash: [u8; 32] = [2u8; 32];
+        let data: [u8; 32] = [2u8; 32];
 
         // Compute commitment via create_commitment and construct Output
-        let commitment = create_commitment::<Blake2s256>(&pk, &data_hash);
-        let output = Output {
-            amount: 42u64,
-            data: data_hash,
-            commitment,
-        };
+        let output = Output::new_v1(42, &pk, &data);
 
         // Should verify with the correct public key
         assert!(output.verify(&pk));
@@ -280,16 +269,9 @@ mod tests {
             index: 1usize,
         };
 
-        let out1 = Output {
-            amount: 10u64,
-            data: [4u8; 32],
-            commitment: [5u8; 32],
-        };
-        let out2 = Output {
-            amount: 20u64,
-            data: [6u8; 32],
-            commitment: [7u8; 32],
-        };
+        let pk = [1u8; 32];
+        let out1 = Output::new_v1(10, &pk, &[4u8; 32]);
+        let out2 = Output::new_v1(20, &pk, &[6u8; 32]);
         let outputs = vec![out1, out2];
 
         // Compute sighash via function
@@ -300,6 +282,7 @@ mod tests {
         hasher.update(&txid);
         hasher.update(&output_id.index.to_le_bytes());
         for o in &outputs {
+            hasher.update(&[o.version as u8]);
             hasher.update(&o.amount.to_le_bytes());
             hasher.update(&o.data);
             hasher.update(&o.commitment);
@@ -313,7 +296,6 @@ mod tests {
     fn test_transaction_hash() {
         // Build a transaction with one input and one output
         let input = Input {
-            version: Version::V1,
             output_id: OutputId {
                 tx_hash: [1u8; 32],
                 index: 0,
@@ -321,13 +303,8 @@ mod tests {
             signature: vec![],
             public_key: [2u8; 32],
         };
-        let output = Output {
-            amount: 10u64,
-            data: [3u8; 32],
-            commitment: [4u8; 32],
-        };
+        let output = Output::new_v1(10, &[0; 32], &[3u8; 32]);
         let tx = Transaction {
-            version: Version::V1,
             inputs: vec![input.clone()],
             outputs: vec![output.clone()],
         };
@@ -336,10 +313,8 @@ mod tests {
 
         // Manual hash
         let mut hasher = Blake2s256::new();
-        hasher.update(&[tx.version as u8]);
         hasher.update(&tx.inputs.len().to_le_bytes());
         for inp in &tx.inputs {
-            hasher.update(&[inp.version as u8]);
             hasher.update(&inp.output_id.tx_hash);
             hasher.update(&inp.output_id.index.to_le_bytes());
             hasher.update(&inp.signature);
@@ -347,6 +322,7 @@ mod tests {
         }
         hasher.update(&tx.outputs.len().to_le_bytes());
         for out in &tx.outputs {
+            hasher.update(&[out.version as u8]);
             hasher.update(&out.amount.to_le_bytes());
             hasher.update(&out.data);
             hasher.update(&out.commitment);
@@ -362,7 +338,6 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
-        let pk = [11u8; 32];
         let data = [12u8; 32];
         // Here the commitment is a mask since it's a coinbase transaction
         // A zero mask allows for any pubkey
@@ -370,9 +345,9 @@ mod tests {
         let reward = calculate_reward(&mask);
 
         let funding_tx = Transaction {
-            version: Version::V1,
             inputs: vec![],
             outputs: vec![Output {
+                version: Version::V1,
                 amount: 100,
                 data,
                 commitment: mask,
@@ -387,19 +362,18 @@ mod tests {
 
         // Now build a spending transaction that consumes the funding UTXO
         let input = Input {
-            version: Version::V1,
             output_id: OutputId {
                 tx_hash: funding_txid,
                 index: 0,
             },
             signature: vec![],
-            public_key: pk, // same public key used to construct commitment
+            public_key: [11u8; 32], // we use a random public key
         };
 
         let spending_tx = Transaction {
-            version: Version::V1,
             inputs: vec![input],
             outputs: vec![Output {
+                version: Version::V1,
                 amount: 100 - reward,
                 data: [0u8; 32],
                 commitment: [0u8; 32],
@@ -426,11 +400,7 @@ mod tests {
             index: 1usize,
         };
 
-        let outputs = vec![Output {
-            amount: 10u64,
-            data: [4u8; 32],
-            commitment: [5u8; 32],
-        }];
+        let outputs = vec![Output::new_v1(10u64, &public_key, &[5u8; 32])];
 
         // Compute the sighash
         let sighash = sighash(Blake2s256::new(), &output_id, outputs.iter());
@@ -455,9 +425,9 @@ mod tests {
         let mask = [0u8; 32];
 
         let funding_tx = Transaction {
-            version: Version::V1,
             inputs: vec![],
             outputs: vec![Output {
+                version: Version::V1,
                 amount: 100u64,
                 data,
                 commitment: mask,
@@ -475,23 +445,17 @@ mod tests {
             tx_hash: funding_txid,
             index: 0,
         };
-        let new_outputs = vec![Output {
-            amount: 150,
-            data,
-            commitment: mask,
-        }];
+        let new_outputs = vec![Output::new_v1(150, &mask, &data)]; // Any commitment will work with the mask chosen before
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {
-            version: Version::V1,
             output_id: utxo_id,
             signature,
             public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
         };
 
         let spending_tx = Transaction {
-            version: Version::V1,
             inputs: vec![input],
             outputs: new_outputs,
         };
@@ -516,9 +480,9 @@ mod tests {
         let reward = calculate_reward(&mask);
 
         let funding_tx = Transaction {
-            version: Version::V1,
             inputs: vec![],
             outputs: vec![Output {
+                version: Version::V1,
                 amount: 2 * reward,
                 data,
                 commitment: mask,
@@ -537,6 +501,7 @@ mod tests {
             index: 0,
         };
         let new_outputs = vec![Output {
+            version: Version::V1,
             amount: reward,
             data,
             commitment: mask,
@@ -545,14 +510,12 @@ mod tests {
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {
-            version: Version::V1,
             output_id: utxo_id,
             signature,
             public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
         };
 
         let spending_tx = Transaction {
-            version: Version::V1,
             inputs: vec![input],
             outputs: new_outputs,
         };
@@ -577,9 +540,9 @@ mod tests {
         let reward = calculate_reward(&mask);
 
         let funding_tx = Transaction {
-            version: Version::V1,
             inputs: vec![],
             outputs: vec![Output {
+                version: Version::V1,
                 amount: 2 * reward,
                 data,
                 commitment: mask,
@@ -598,6 +561,7 @@ mod tests {
             index: 0,
         };
         let new_outputs = vec![Output {
+            version: Version::V1,
             amount: 1,
             data,
             commitment: mask,
@@ -606,14 +570,12 @@ mod tests {
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {
-            version: Version::V1,
             output_id: utxo_id,
             signature,
             public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
         };
 
         let spending_tx = Transaction {
-            version: Version::V1,
             inputs: vec![input],
             outputs: new_outputs,
         };

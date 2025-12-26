@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 pub mod block;
@@ -13,7 +12,7 @@ type Hash = [u8; 32];
 ///
 /// Adding a short doc comment makes the intent explicit and makes the type
 /// easier to discover when browsing the code or generated documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Version {
     /// Initial protocol revision.
     V1 = 0,

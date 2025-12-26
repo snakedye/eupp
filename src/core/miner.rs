@@ -71,15 +71,12 @@ pub fn build_mining_tx_deterministic(
 
             // Build outputs: new mint (carry forward mask) and miner reward
             let new_mint_output = Output {
+                version: super::Version::V1,
                 amount: lead_utxo.amount.saturating_sub(reward),
                 data: data_hash,
                 commitment: mask,
             };
-            let miner_reward_output = Output {
-                amount: reward,
-                data: data_hash,
-                commitment: create_commitment::<Blake2s256>(&pk_bytes, &data_hash),
-            };
+            let miner_reward_output = Output::new_v1(reward, &pk_bytes, &data_hash);
             let outputs = vec![new_mint_output, miner_reward_output];
 
             // Compute sighash
@@ -97,7 +94,6 @@ pub fn build_mining_tx_deterministic(
 
             // Build input revealing pk and signature
             let input = Input {
-                version: super::Version::V1,
                 output_id: OutputId {
                     tx_hash: *prev_tx_hash,
                     index: 0,
@@ -107,7 +103,6 @@ pub fn build_mining_tx_deterministic(
             };
 
             let tx = Transaction {
-                version: super::Version::V1,
                 inputs: vec![input],
                 outputs,
             };
@@ -168,12 +163,12 @@ mod tests {
         // because (attempted & mask) == 0 for all attempted when mask == 0.
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
+            version: crate::core::Version::V1,
             amount: 100u64,
             data: [0u8; 32],
             commitment: mask,
         };
         let funding_tx = Transaction {
-            version: crate::core::Version::V1,
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
@@ -210,12 +205,12 @@ mod tests {
     fn test_build_mining_tx_deterministic_zero_attempts_returns_none() {
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
+            version: crate::core::Version::V1,
             amount: 100u64,
             data: [0u8; 32],
             commitment: mask,
         };
         let funding_tx = Transaction {
-            version: crate::core::Version::V1,
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
@@ -246,12 +241,12 @@ mod tests {
         }
 
         let prev_mint_output = Output {
+            version: crate::core::Version::V1,
             amount: 100u64,
             data: [0u8; 32],
             commitment: mask,
         };
         let funding_tx = Transaction {
-            version: crate::core::Version::V1,
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
