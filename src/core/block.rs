@@ -20,6 +20,7 @@ pub struct BlockHeader {
 }
 
 #[derive(Debug, Clone)]
+/// Represents errors that can occur when validating blocks.
 pub enum BlockError {
     InvalidBlockHash(String),
     TransactionError(super::transaction::TransactionError),
@@ -81,8 +82,9 @@ impl Block {
             .try_for_each(|tx| tx.verify(ledger).map_err(BlockError::TransactionError))
     }
 
-    pub fn lead_utxo(&self) -> &Output {
-        self.transactions.first().unwrap().outputs.first().unwrap()
+    /// Returns the lead (mint) UTXO if present.
+    pub fn lead_utxo(&self) -> Option<&Output> {
+        self.transactions.first().and_then(|tx| tx.outputs.first())
     }
 
     /// Returns the merkle root of the transactions in the block.

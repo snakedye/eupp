@@ -79,7 +79,7 @@ pub struct OutputId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
     pub amount: u64,
-    pub data_hash: Hash,
+    pub data: Hash,
     pub commitment: Hash,
 }
 
@@ -123,7 +123,7 @@ impl Transaction {
         hasher.update(&self.outputs.len().to_le_bytes());
         for output in &self.outputs {
             hasher.update(&output.amount.to_le_bytes());
-            hasher.update(&output.data_hash);
+            hasher.update(&output.data);
             hasher.update(&output.commitment);
         }
 
@@ -208,13 +208,13 @@ impl Output {
         let commitment = create_commitment::<Blake2s256>(public_key, &data_hash);
         Self {
             amount,
-            data_hash,
+            data: data_hash,
             commitment,
         }
     }
 
     pub fn verify(&self, public_key: &[u8; 32]) -> bool {
-        create_commitment::<Blake2s256>(public_key, &self.data_hash) == self.commitment
+        create_commitment::<Blake2s256>(public_key, &self.data) == self.commitment
     }
 }
 
@@ -228,7 +228,7 @@ where
     hasher.update(&output_id.index.to_le_bytes());
     for Output {
         amount: data,
-        data_hash,
+        data: data_hash,
         commitment: public_key_hash,
     } in outputs
     {
@@ -259,7 +259,7 @@ mod tests {
         let commitment = create_commitment::<Blake2s256>(&pk, &data_hash);
         let output = Output {
             amount: 42u64,
-            data_hash,
+            data: data_hash,
             commitment,
         };
 
@@ -282,12 +282,12 @@ mod tests {
 
         let out1 = Output {
             amount: 10u64,
-            data_hash: [4u8; 32],
+            data: [4u8; 32],
             commitment: [5u8; 32],
         };
         let out2 = Output {
             amount: 20u64,
-            data_hash: [6u8; 32],
+            data: [6u8; 32],
             commitment: [7u8; 32],
         };
         let outputs = vec![out1, out2];
@@ -301,7 +301,7 @@ mod tests {
         hasher.update(&output_id.index.to_le_bytes());
         for o in &outputs {
             hasher.update(&o.amount.to_le_bytes());
-            hasher.update(&o.data_hash);
+            hasher.update(&o.data);
             hasher.update(&o.commitment);
         }
         let expected: [u8; 32] = hasher.finalize().as_slice().try_into().unwrap();
@@ -323,7 +323,7 @@ mod tests {
         };
         let output = Output {
             amount: 10u64,
-            data_hash: [3u8; 32],
+            data: [3u8; 32],
             commitment: [4u8; 32],
         };
         let tx = Transaction {
@@ -348,7 +348,7 @@ mod tests {
         hasher.update(&tx.outputs.len().to_le_bytes());
         for out in &tx.outputs {
             hasher.update(&out.amount.to_le_bytes());
-            hasher.update(&out.data_hash);
+            hasher.update(&out.data);
             hasher.update(&out.commitment);
         }
         let expected: [u8; 32] = hasher.finalize().as_slice().try_into().unwrap();
@@ -363,7 +363,7 @@ mod tests {
 
         // Build funding (previous) transaction that creates a UTXO
         let pk = [11u8; 32];
-        let data_hash = [12u8; 32];
+        let data = [12u8; 32];
         // Here the commitment is a mask since it's a coinbase transaction
         // A zero mask allows for any pubkey
         let mask = [0u8; 32];
@@ -374,7 +374,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![Output {
                 amount: 100,
-                data_hash,
+                data,
                 commitment: mask,
             }],
         };
@@ -401,7 +401,7 @@ mod tests {
             inputs: vec![input],
             outputs: vec![Output {
                 amount: 100 - reward,
-                data_hash: [0u8; 32],
+                data: [0u8; 32],
                 commitment: [0u8; 32],
             }],
         };
@@ -428,7 +428,7 @@ mod tests {
 
         let outputs = vec![Output {
             amount: 10u64,
-            data_hash: [4u8; 32],
+            data: [4u8; 32],
             commitment: [5u8; 32],
         }];
 
@@ -449,7 +449,7 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
-        let data_hash = [12u8; 32];
+        let data = [12u8; 32];
         // Here the commitment is a mask since it's a coinbase transaction
         // A zero mask allows for any pubkey
         let mask = [0u8; 32];
@@ -459,7 +459,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![Output {
                 amount: 100u64,
-                data_hash,
+                data,
                 commitment: mask,
             }],
         };
@@ -477,7 +477,7 @@ mod tests {
         };
         let new_outputs = vec![Output {
             amount: 150,
-            data_hash: data_hash,
+            data,
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
@@ -509,7 +509,7 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
-        let data_hash = [12u8; 32];
+        let data = [12u8; 32];
         // Here the commitment is a mask since it's a coinbase transaction
         // A zero mask allows for any pubkey
         let mask = [0u8; 32];
@@ -520,7 +520,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![Output {
                 amount: 2 * reward,
-                data_hash,
+                data,
                 commitment: mask,
             }],
         };
@@ -538,7 +538,7 @@ mod tests {
         };
         let new_outputs = vec![Output {
             amount: reward,
-            data_hash: data_hash,
+            data,
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
@@ -570,7 +570,7 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
 
         // Build funding (previous) transaction that creates a UTXO
-        let data_hash = [12u8; 32];
+        let data = [12u8; 32];
         // Here the commitment is a mask since it's a coinbase transaction
         // A zero mask allows for any pubkey
         let mask = [1u8; 32];
@@ -581,7 +581,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![Output {
                 amount: 2 * reward,
-                data_hash,
+                data,
                 commitment: mask,
             }],
         };
@@ -599,7 +599,7 @@ mod tests {
         };
         let new_outputs = vec![Output {
             amount: 1,
-            data_hash: data_hash,
+            data,
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);

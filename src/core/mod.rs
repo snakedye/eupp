@@ -9,12 +9,18 @@ pub mod transaction;
 type PublicKey = [u8; 32];
 type Hash = [u8; 32];
 
+/// Protocol version used throughout the codebase.
+///
+/// Adding a short doc comment makes the intent explicit and makes the type
+/// easier to discover when browsing the code or generated documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Version {
+    /// Initial protocol revision.
     V1 = 0,
 }
 
 // Helpers
+/// Create a 32-byte commitment from a public key and data hash using `D`.
 pub fn create_commitment<D: Digest>(pk: &PublicKey, data_hash: &Hash) -> Hash {
     let mut hasher = D::new();
     hasher.update(pk);
@@ -46,16 +52,6 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
 /// - Base reward = 1 (pure powers of two)
 /// - exponent = floor(difficulty / SCALE_FACTOR)
 /// - reward = min(HARD_CAP, 2^exponent)
-///
-/// This yields the table:
-/// - difficulty 0..=3  -> 2^0 = 1  (spam protection)
-/// - difficulty 16     -> 2^4 = 16
-/// - difficulty 32     -> 2^8 = 256
-/// - difficulty 48     -> 2^12 = 4096
-/// - difficulty 60     -> 2^15 = 32768
-/// - difficulty 64     -> 2^16 = 65536
-/// - difficulty 68     -> 2^17 = 131072 -> capped to 100000
-/// - difficulty 80     -> 2^20 = 1_048_576 -> capped to 100000
 pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     const HARD_CAP: u64 = 100_000;
     const MIN_REWARD: u64 = 1;

@@ -56,6 +56,20 @@ impl InMemoryLedger {
         }
         Ok(())
     }
+
+    fn get_tx_outpus(&self, tx_hash: &Hash) -> impl Iterator<Item = Output> {
+        self.utxo_set
+            .range(
+                OutputId {
+                    tx_hash: *tx_hash,
+                    index: 0,
+                }..OutputId {
+                    tx_hash: *tx_hash,
+                    index: usize::MAX,
+                },
+            )
+            .map(|(_, output)| *output)
+    }
 }
 
 impl Ledger for InMemoryLedger {
@@ -68,7 +82,10 @@ impl Ledger for InMemoryLedger {
             .get(&block.previous_block_hash)
             .map(|meta| meta.locked_supply)
             .unwrap_or_default();
-        let locked_supply = block.lead_utxo().amount;
+        let locked_supply = block
+            .lead_utxo()
+            .map(|utxo| utxo.amount)
+            .unwrap_or_default();
 
         // Get the previous block metadata
         if self.block_index.len() > 1 {
@@ -112,8 +129,8 @@ impl Ledger for InMemoryLedger {
                 .map(|meta| meta.available_supply)
                 .unwrap_or(0)
         {
+            // Update the tip to the new metadata hash.
             self.tip = metadata.hash;
-            println!("New Tip! Total Supply: {}", total_supply);
         }
 
         self.block_index.insert(metadata.hash, metadata);

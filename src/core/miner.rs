@@ -72,12 +72,12 @@ pub fn build_mining_tx_deterministic(
             // Build outputs: new mint (carry forward mask) and miner reward
             let new_mint_output = Output {
                 amount: lead_utxo.amount.saturating_sub(reward),
-                data_hash,
+                data: data_hash,
                 commitment: mask,
             };
             let miner_reward_output = Output {
                 amount: reward,
-                data_hash,
+                data: data_hash,
                 commitment: create_commitment::<Blake2s256>(&pk_bytes, &data_hash),
             };
             let outputs = vec![new_mint_output, miner_reward_output];
@@ -169,7 +169,7 @@ mod tests {
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
             amount: 100u64,
-            data_hash: [0u8; 32],
+            data: [0u8; 32],
             commitment: mask,
         };
         let funding_tx = Transaction {
@@ -196,7 +196,7 @@ mod tests {
         // Miner reward commitment should be the commitment of the revealed public key
         let input = &tx.inputs[0];
         let expected_commitment =
-            create_commitment::<Blake2s256>(&input.public_key, &tx.outputs[1].data_hash);
+            create_commitment::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
@@ -211,7 +211,7 @@ mod tests {
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
             amount: 100u64,
-            data_hash: [0u8; 32],
+            data: [0u8; 32],
             commitment: mask,
         };
         let funding_tx = Transaction {
@@ -247,7 +247,7 @@ mod tests {
 
         let prev_mint_output = Output {
             amount: 100u64,
-            data_hash: [0u8; 32],
+            data: [0u8; 32],
             commitment: mask,
         };
         let funding_tx = Transaction {
@@ -292,7 +292,7 @@ mod tests {
         // Miner reward commitment should match revealed public key
         let input = &tx.inputs[0];
         let expected_commitment =
-            create_commitment::<Blake2s256>(&input.public_key, &tx.outputs[1].data_hash);
+            create_commitment::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
