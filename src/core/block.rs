@@ -51,9 +51,10 @@ impl Block {
         }
     }
 
-    pub fn verify(&self, ledger: &Ledger) -> Option<()> {
+    pub fn verify(&self, ledger: &Ledger) -> Result<(), super::transaction::TransactionError> {
         if ledger
-            .get_block(&self.previous_block_hash)?
+            .get_block(&self.previous_block_hash)
+            .ok_or(super::transaction::TransactionError::InvalidPreviousBlockHash)?
             .header()
             .hash::<Blake2s256>()
             == self.header().previous_block_hash
@@ -61,9 +62,8 @@ impl Block {
             self.transactions
                 .iter()
                 .try_for_each(|tx| tx.verify(ledger))
-                .ok()
         } else {
-            None
+            Err(super::transaction::TransactionError::InvalidPreviousBlockHash)
         }
     }
 

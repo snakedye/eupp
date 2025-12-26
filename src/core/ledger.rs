@@ -9,9 +9,9 @@ use super::{
 };
 
 pub struct Ledger {
-    chain: Vec<Block>,
-    tx_lookup: HashMap<TransactionHash, TxCursor>,
-    block_lookup: HashMap<Hash, BlockCursor>,
+    pub chain: Vec<Block>,
+    pub tx_lookup: HashMap<TransactionHash, TxCursor>,
+    pub block_lookup: HashMap<Hash, BlockCursor>,
 }
 
 struct TxCursor {

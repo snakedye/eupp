@@ -1,73 +1,82 @@
 mod core;
 
+use core::calculate_reward;
+
 use crate::core::{
     block::Block,
     ledger::Ledger,
     miner,
     transaction::{Output, Transaction},
 };
+use blake2::Blake2s256;
 
 fn main() {
-    println!("AUPP demo: create coinbase block, add to ledger, then mine the second block");
+    println!("AUPP demo: create coinbase block, then continuously mine.");
 
     // Create an in-memory ledger
     let mut ledger = Ledger::new();
 
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.
-    // We'll place a simple mask in the `public_key_hash` field of the minting output.
-    let mask: [u8; 32] = [0x00u8; 32]; // mask for (Hash(x) & M) == 0
+    // We'll place a simple mask in the `commitment` field of the minting output.
+    // A mask requiring ~2.5 bytes of zeros for a valid PoW solution.
+    let mask = [0_u8; 32];
 
     let coinbase_tx = Transaction {
         version: core::Version::V1,
         inputs: vec![], // coinbase has no inputs
         outputs: vec![Output {
-            amount: 0u64,         // arbitrary payload
-            data_hash: [0u8; 32], // empty data hash for demo purposes
-            commitment: mask,     // encoding the minting mask
+            amount: 100000,
+            data_hash: [0u8; 32],
+            commitment: mask,
         }],
     };
-    let coinbase_tx_hash = coinbase_tx.hash::<blake2::Blake2s256>();
 
     let mut coinbase_block = Block::new(core::Version::V1, [0u8; 32]);
     coinbase_block.transactions.push(coinbase_tx);
+    let coinbase_block_hash = coinbase_block.header().hash::<Blake2s256>();
 
     // Add genesis/coinbase block to ledger
     ledger.add_block(coinbase_block);
     println!(
-        "Added coinbase (genesis) block to ledger. Chain height: {}",
-        ledger.chain_len()
+        "Added Genesis Block (Height {}). Hash: {}",
+        ledger.chain_len(),
+        hex::encode(&coinbase_block_hash)
     );
 
-    // Mine the second block by spending the minting UTXO from the previous (genesis) block.
-    // The miner key is derived during mining; no separate miner destination is required here.
+    loop {
+        // Get the last block in the chain to mine on top of it
+        let prev_block = ledger.chain.last().expect("chain should not be empty");
+        let new_height = ledger.chain_len() + 1;
 
-    // Retrieve reference to the previous block (genesis)
-    let prev_block = ledger
-        .get_block(&coinbase_tx_hash)
-        .expect("expected genesis block present");
+        println!(
+            "\nMining Block #{} (on top of block with hash: {})...",
+            new_height,
+            hex::encode(prev_block.header().hash::<Blake2s256>())
+        );
 
-    // Attempt to mine: allow some number of attempts (deterministic miner wrapper uses random seed internally)
-    let max_attempts = 10_000u64;
+        // Mine the next block. We use u64::MAX attempts to mine "forever" until a solution is found.
+        match miner::build_next_block(prev_block, u64::MAX) {
+            Some((_signing_key, new_block)) => {
+                let new_block_hash = new_block.header().hash::<Blake2s256>();
+                println!(
+                    "Found a potential block! Hash: {}",
+                    hex::encode(new_block_hash)
+                );
 
-    println!("Starting mining attempt (up to {} tries)...", max_attempts);
-
-    // Use the helper that mines and assembles the next block for us.
-    match miner::build_next_block(prev_block, max_attempts) {
-        Some((_signing_key, new_block)) => {
-            println!("Found a valid mined block.");
-
-            // Verify the new block against the previous block before adding
-            if new_block.verify(&ledger).is_some() {
+                // Verify the new block before adding
+                new_block.verify(&ledger).unwrap();
                 ledger.add_block(new_block);
                 println!(
-                    "Mined second block and added to ledger. Chain height: {}",
+                    "Block #{} is valid and added to ledger. New chain height: {}",
+                    new_height,
                     ledger.chain_len()
                 );
             }
-        }
-        None => {
-            println!("Mining attempt failed (no solution found within attempt limit).");
+            None => {
+                // This should not happen with u64::MAX attempts
+                println!("Mining attempt failed unexpectedly. Retrying.");
+            }
         }
     }
 }

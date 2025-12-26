@@ -31,6 +31,9 @@ pub enum TransactionError {
     /// Total outputs exceed total inputs.
     InsufficientInputAmount { total_input: u64, total_output: u64 },
 
+    /// The previous block hash does not match the expected hash.
+    InvalidPreviousBlockHash,
+
     /// Specific coinbase (mint) validation failed (mask/amount rules).
     CoinbaseValidation { reason: String },
 }
@@ -55,6 +58,7 @@ impl fmt::Display for TransactionError {
                 "Insufficient input amount: inputs={} outputs={}",
                 total_input, total_output
             ),
+            InvalidPreviousBlockHash => write!(f, "Invalid previous block hash"),
             CoinbaseValidation { reason } => write!(f, "Coinbase validation failed: {}", reason),
         }
     }
