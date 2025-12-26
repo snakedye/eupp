@@ -1,106 +1,113 @@
 # White Paper: Agnostic UTXO Payload Protocol (AUPP)
 
-## Brainstorm
-
-- UTXO model
-  - Input: [version, tx_id, output_index, sig, pk]
-    - **sig**=sign(sk,Hash(tx_id∥output_index∥all_new_outputs))
-  - Output: [data (u64), H(pk)]
-    - It's up to higher protocols to determine how to use the data.
-- To spend a transaction you need to :
-  - Reveal the pk
-- Payment flow :
-  1. Receiver creates a sk/pk pair
-  2. Receiver hashes his pk -> H(pk)
-  3. Sender owns UTXO for H(sender_pk)
-  4. Sender create a transaction :
-  	- Input: [version, tx_id, output_index, sig, sender_pk]
-  	- Output: [data, H(pk)]
-- To know if a transaction is valid, a node just checks if :
-  - The pk hashes to H(pk)
-  - **sig** was made with he sk of the sender
-- Mining works by spending the first UTXO in the previous block
-- The PoW will be embedded in the hash of the UTXO ie :
-  - H(x) in the minting UTXO will only be a mask (ex: 11111100 could be a 32 bit mask)
-  - To spend you need to give an x where all the 0s in the mask are 0 in x.
-
 ## 1. Abstract
 
-The Agnostic UTXO Payload Protocol (AUPP) is a minimalist, secure distributed ledger design. Unlike traditional blockchains that hardcode currency "amounts," AUPP treats transaction outputs as arbitrary 64-bit unsigned integer (u64) payloads. This design creates a "Layer 1" that is strictly a verification and ordering layer, leaving the semantic interpretation of the data—whether it represents currency, voting weight, or game assets—to Layer 2 protocols.
+The **Agnostic UTXO Payload Protocol (AUPP)** introduces a minimalist Layer 1 designed for secure data commitment rather than embedded currency logic. It decouples value from state by structuring every output as a triad of **Amount**, **Data Hash**, and a **Cryptographic Commitment**. This design reduces the blockchain's role to a pure verification and ordering engine, creating a robust foundation for off-chain protocols to anchor their state without imposing their logic on the consensus layer.
 
 ## 2. Transaction Architecture
 
-A transaction consists of two primary components: **Inputs** and **Outputs**.
+AUPP utilizes a Unspent Transaction Output (UTXO) model where the state of the ledger is the set of all unspent outputs.
 
 ### 2.1 Input Structure
 
-Each input represents a claim on an existing unspent output. It contains:
+To spend an existing output, a transaction input must provide:
 
-- **Version**: Protocol versioning for forward compatibility.
-- **Transaction ID (tx_id)**: A hash of the previous transaction containing the funds.
-- **Output Index (output_id)**: The specific index of the output being spent.
-- **Public Key (pk)**: The key used to verify the spender's authority.
-- **Signature (sig)**: The cryptographic proof of authorization.
+- **Version**: Protocol versioning.
+- **Transaction ID (tx_id):** The hash of the previous transaction.
+- **Output Index (out_idx):** The specific index in the previous transaction.
+- **Public Key (pk):** The key used to satisfy the commitment.
+- **Signature (sig):** Cryptographic proof of authorization over the new outputs.
 
 ### 2.2 Output Structure
 
-Each output defines the new state of the assets:
+Each output defines the "locked" state of the assets:
 
-- **Agnostic Payload** (u64): An arbitrary 64-bit value.
-- **Recipient**: The destination address (script or public key hash).
+- **Amount (u64):** A 64-bit unsigned integer representing the fungible value.
+- **Data Hash (H(data)):** A 32-byte hash of an agnostic payload.
+- **Commitment (H(pk || H(data))):** A 32-byte hash that binds the spender's identity to the specific data hash.
+
+Note: In the current implementation commitments are computed by hashing the public key bytes concatenated with the data hash using Blake2s256.
 
 ## 3. Cryptographic Security Model
 
-The security of the LUTA protocol relies on a "Sighash" (Signature Hash) preimage that binds the signature to the transaction context.
+The security of AUPP relies on a "Double-Binding" mechanism. A transaction is only valid if the spender proves they own the key associated with the commitment **and** authorizes the specific destination of the funds.
 
-### 3.1 Signature Generation
+### 3.1 Commitment Verification
 
-To authorize a spend, the sender signs a hash containing both the **source** (to prevent replay on other inputs) and the **destination** (to prevent tampering).
+The spender must reveal their Public Key (pk). The network verifies that this key was the one intended by the original sender by checking:
 
-The signature is generated as follows:
-	```
-	sig=sign(sk,Hash(tx_id∥output_index∥all_new_outputs))
-	```
-### 3.2 Security Properties
+```plaintext
+create_commitment(pk, data_hash) == commitment
+```
 
-- **Replay Protection**: Because the  and  are included in the signed message, a signature used for "Input A" cannot be reused for "Input B," even if both are owned by the same user.
-- **Integrity**: Any modification to the amounts or recipients in  will invalidate the hash, causing the signature verification to fail.
-- **Non-Repudiation**: The use of the secret key () ensures that only the rightful owner could have generated the signature.
+This ensures that the holder of a different key cannot spend the amount unless it is presented alongside the exact public key committed to in the previous output.
+
+### 3.2 Signature Generation
+
+The signature (sig) is generated using Ed25519 in the current implementation. The signature is computed over a "Sighash" that includes the context of the spend to prevent replay attacks:
+
+```plaintext
+sig = sign(sk, Hash(tx_id ∥ out_idx ∥ all_new_outputs))
+```
+
+The code computes the sighash with Blake2s256 in a deterministic byte order and verifies signatures with Ed25519 using the revealed public key in the input.
 
 ## 4. Verification Workflow
 
-Nodes in the network validate transactions by executing the following logic:
+For a block to be accepted, nodes must validate every transaction against the following criteria:
 
-1. **Reconstruction**: The node gathers the tx_id, output_id and the list of proposed outputs from the transaction.
-2. **Hashing**: The node creates a local hash of these components.
-3. **Validation**: Using the provided Public Key (pk), the node verifies the signature against the local hash.
-4. **Finality**: If Vpk​(sig,Hash)=True, the transaction is considered authorized and added to the ledger.
+1. **Commitment Match:** For every input, `create_commitment(pk, data_hash) == commitment`.
+2. **Signature Validity:** The `sig` must be a valid Ed25519 signature.
+3. **Conservation of Value:** `sum(outputs) <= sum(inputs)`.
+4. **Reward Compliance:** If the transaction spends a Lead UTXO (Mining Tx), the output amount must not exceed the calculated limit:
+   ```plaintext
+   amount <= min(100000, 2^(difficulty/4))
+   ```
+5. **Data Integrity:** The `data_hash` remains cryptographically bound to the new outputs.
 
 ## 5. Mining Protocol: Chained Mask Proof-of-Work (CM-PoW)
 
-Unlike traditional PoW where miners hash a static header, CM-PoW integrates consensus into the UTXO set. Mining is defined as the act of successfully spending the **"Lead UTXO"** from the previous block.
+AUPP integrates consensus directly into the UTXO set. Mining is defined as the act of successfully spending the **"Lead UTXO"** (index 0) of the previous block.
 
-### 5.1 The Minting UTXO
+### 5.1 The Lead UTXO
 
-Every block contains a special output at index 0, known as the **Minting UTXO**. This output contains a cryptographic challenge instead of a standard public key requirement.
+Every block contains a special output at index 0. This output acts as the "Challenge" for the next block. It contains:
+- **The Mask:** A 32-byte value stored in the `commitment` field. Miners interpret this as a 256-bit mask.
+- **The Reward:** The `amount` field, which is generated by the network based on the mask difficulty.
 
-- **The Mask ():** A  value (e.g., `0xFFFFFFF0`) that defines the difficulty.
-- **The Challenge:** To spend this UTXO, a miner must provide a preimage  such that the bits defined by the mask satisfy a specific condition.
+### 5.2 The Mining Challenge
 
-### 5.2 Mining as a Transaction
+To "mine" the next block, a miner must generate a keypair where the Public Key (`pk`) satisfies the mask condition:
 
-To "mine" a block, a miner creates a transaction that consumes the previous block's Minting UTXO.
+```plaintext
+(mask & pk) == 0
+```
 
-- **Input:**  (The solution to the mask).
-- **Validation:** The network checks that .
-- **Evolution:** The successful miner creates a *new* Minting UTXO for the next block, potentially with an updated Mask to adjust difficulty.
+Because the miner must spend the previous block's Lead UTXO to claim the reward, the chain is physically linked. It is impossible to work on Block N+1 without the finalized state of Block N.
 
-### 5.3 Protocol Benefits
+### 5.3 Capped Incentive Curve
 
-- **Sequence Integrity:** It is impossible to mine Block  without knowing the output of Block , as the input for the next mining event is physically tied to the previous output.
-- **State Pruning:** Consensus data lives within the UTXO set, allowing nodes to verify the "tip" of the chain by looking at the spendability of the current Minting UTXO.
-- **Simplified L1:** The logic for "mining" is just another type of script validation in the L1 engine.
+To prevent inflation while incentivizing security, AUPP utilizes a Capped Exponential Reward function. The reward is not fixed; it is dynamic based on the difficulty of the mask the miner chooses to solve:
+
+```plaintext
+R(D) = min(100000, 2^(floor(D/4)))
+```
+
+- **Spam Prevention:** Low-difficulty blocks (weak masks) yield negligible rewards, making spam attacks economically unviable.
+- **The Hard Cap:** The reward ceilings at **100,000** units. This prevents hyper-inflation and establishes an economic equilibrium where miners are incentivized to maintain difficulty around the cap threshold (approx. 68 bits of difficulty).
+
+### 5.4 Consensus Rule: Maximum Accumulated Supply (MAS)
+
+To ensure the security of the ledger in a market-driven difficulty environment, AUPP discards the "Longest Chain" rule. Instead, the network follows the **Maximum Accumulated Supply (MAS)** rule.
+
+The "canonical" chain is defined as the path from the Genesis block to a leaf block that contains the highest cumulative sum of all Lead UTXO rewards:
+
+```plaintext
+Weight_chain = sum(Reward(Block_i) for i in range(0, height))
+```
+
+This ensures that a single high-difficulty block—representing significant computational effort—cannot be overtaken by a long sequence of low-difficulty "spam" blocks, as the exponential nature of the reward function ensures that work and value are cryptographically linked.
 
 ## 6. Conclusion
 
-AUPP provides a "dumb" base layer that offers "smart" security. By moving logic to the edges (Layer 2) and maintaining a rigid, context-aware signature model at the core, the protocol achieves maximum flexibility without sacrificing cryptographic integrity.
+By reducing the base layer to its absolute essentials—verification and ordering—AUPP provides a "dumb" but highly secure foundation for "smart" systems. Its rigid commitment structure, combined with a market-driven mining challenge, ensures that the ledger remains a neutral, auditable, and censorship-resistant arbiter of state. This minimalist design is not a limitation but a feature, offering a stable and predictable settlement layer upon which complex, high-throughput Layer 2 protocols can be built without compromising the integrity of the core ledger.
