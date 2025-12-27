@@ -13,7 +13,7 @@ corresponding `Op` by using `Op::try_from`.
 
 use core::fmt;
 
-use super::op::{OP_HEIGHT, OP_PUSH_U32, OP_SUPPLY, Op};
+use super::op::{OP_HEIGHT, OP_PUSH_BYTE, OP_PUSH_U32, OP_SUPPLY, Op};
 
 /// Errors that can occur while scanning a byte stream of opcodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +99,14 @@ impl<'a> Iterator for Scanner<'a> {
         // bytes and return fully-formed `Op` variants.
         match b {
             OP_PUSH_U32 => match self.read_u32_le() {
-                Some(v) => Some(Op::Push(v)),
+                Some(v) => Some(Op::PushU32(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
+            OP_PUSH_BYTE => match self.read_u8() {
+                Some(v) => Some(Op::PushByte(v)),
                 None => {
                     self.idx = self.bytes.len();
                     None
@@ -130,7 +137,16 @@ mod tests {
         let bytes = [OP_PUSH_U32, 0x78, 0x56, 0x34, 0x12]; // 0x12345678 little-endian
         let mut s = Scanner::new(&bytes);
         let got = s.next().unwrap();
-        assert_eq!(got, Op::Push(0x12345678));
+        assert_eq!(got, Op::PushU32(0x12345678));
+        assert!(s.next().is_none());
+    }
+
+    #[test]
+    fn scan_push_byte() {
+        let bytes = [OP_PUSH_BYTE, 0x42]; // Push the byte 0x42
+        let mut s = Scanner::new(&bytes);
+        let got = s.next().unwrap();
+        assert_eq!(got, Op::PushByte(0x42));
         assert!(s.next().is_none());
     }
 
@@ -152,7 +168,7 @@ mod tests {
         let v = collected;
         assert_eq!(
             v,
-            vec![Op::True, Op::Push(1), Op::Supply, Op::Height, Op::False]
+            vec![Op::True, Op::PushU32(1), Op::Supply, Op::Height, Op::False]
         );
     }
 

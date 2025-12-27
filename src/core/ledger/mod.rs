@@ -39,7 +39,4 @@ pub trait Ledger {
 
     /// Retrieves metadata for the most recently added block in the ledger.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
-
-    /// Retrieves all unspent transaction outputs (UTXOs) associated with a transaction.
-    fn get_tx_utxos(&self, tx_id: &Hash) -> impl Iterator<Item = Output>;
 }

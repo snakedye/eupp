@@ -18,6 +18,8 @@ pub mod r#const {
     pub const OP_SWAP: u8 = 0x04;
     /// Push a 32-bit unsigned integer (4 bytes follow the opcode, little-endian).
     pub const OP_PUSH_U32: u8 = 0x06;
+    /// Push a single byte onto the stack.
+    pub const OP_PUSH_BYTE: u8 = 0x07;
 
     pub const OP_IN_AMT: u8 = 0x10;
     pub const OP_IN_DATA: u8 = 0x11;
@@ -71,7 +73,11 @@ pub enum Op {
     /// `OP_PUSH_U32` it returns `Op::Push(0)` as a placeholder. The VM
     /// parser/executor (or the `Scanner`) must read the following 4 bytes and
     /// construct the real `Op::Push(value)` before execution.
-    Push(u32),
+    PushU32(u32),
+    /// Pushes a single byte onto the stack.
+    ///
+    /// Encoding: `[OP_PUSH_BYTE][u8 byte...]`.
+    PushByte(u8),
 
     /// Pushes the Amount of the UTXO being spent.
     InAmt,
@@ -147,7 +153,8 @@ impl core::convert::TryFrom<u8> for Op {
             OP_DUP => Ok(Op::Dup),
             OP_DROP => Ok(Op::Drop),
             OP_SWAP => Ok(Op::Swap),
-            OP_PUSH_U32 => Ok(Op::Push(0)), // placeholder; Scanner must read 4 bytes after opcode
+            OP_PUSH_U32 => Ok(Op::PushU32(0)), // placeholder; Scanner must read 4 bytes after opcode
+            OP_PUSH_BYTE => Ok(Op::PushByte(0)), // placeholder; Scanner must read 1 byte after opcode
 
             OP_IN_AMT => Ok(Op::InAmt),
             OP_IN_DATA => Ok(Op::InData),
@@ -186,7 +193,8 @@ impl From<Op> for u8 {
             Op::Dup => OP_DUP,
             Op::Drop => OP_DROP,
             Op::Swap => OP_SWAP,
-            Op::Push(_) => OP_PUSH_U32,
+            Op::PushU32(_) => OP_PUSH_U32,
+            Op::PushByte(_) => OP_PUSH_BYTE,
 
             Op::InAmt => OP_IN_AMT,
             Op::InData => OP_IN_DATA,
@@ -228,7 +236,7 @@ mod tests {
             Op::Dup,
             Op::Drop,
             Op::Swap,
-            Op::Push(0),
+            Op::PushU32(0),
             Op::InAmt,
             Op::InData,
             Op::InComm,
@@ -249,6 +257,7 @@ mod tests {
             Op::Verify,
             Op::Return,
             Op::If,
+            Op::PushByte(0),
         ];
 
         for &op in &all {
@@ -260,7 +269,7 @@ mod tests {
 
     #[test]
     fn push_u32_into_opcode_byte() {
-        let op = Op::Push(0x12345678);
+        let op = Op::PushU32(0x12345678);
         let b: u8 = op.into();
         assert_eq!(b, OP_PUSH_U32);
     }
@@ -270,7 +279,15 @@ mod tests {
         // TryFrom only inspects the opcode byte; it cannot read the following
         // 4 payload bytes. We expect a placeholder Push(0).
         let parsed = Op::try_from(OP_PUSH_U32).expect("should parse push opcode");
-        assert_eq!(parsed, Op::Push(0));
+        assert_eq!(parsed, Op::PushU32(0));
+    }
+
+    #[test]
+    fn push_byte_tryfrom_returns_placeholder() {
+        // TryFrom only inspects the opcode byte; it cannot read the following
+        // payload byte. We expect a placeholder PushByte(0).
+        let parsed = Op::try_from(OP_PUSH_BYTE).expect("should parse push opcode");
+        assert_eq!(parsed, Op::PushByte(0));
     }
 
     #[test]

@@ -26,11 +26,19 @@ use op::Op;
 use scanner::Scanner;
 use sha2::Digest;
 use stack::Stack;
+use std::fmt;
 
-use super::transaction::{Input, OutputId, TransactionHash};
+use super::transaction::{Input, Output};
+
+/// Returns a standard pay-to-public-key script.
+/// This script expects a valid signature to be provided in the input.
+pub const fn p2pk_script() -> [u8; 5] {
+    use op::r#const::*;
+    [OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG, OP_VERIFY, OP_RETURN]
+}
 
 /// VM-level execution error kinds.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecError {
     StackUnderflow,
     VerifyFailed,
@@ -40,10 +48,30 @@ pub enum ExecError {
     UnknownOpcode, // fallback if something unexpected happens
 }
 
+/// Implement Display for ExecError to provide user-friendly error messages.
+impl fmt::Display for ExecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExecError::StackUnderflow => {
+                write!(f, "Stack underflow: not enough items on the stack")
+            }
+            ExecError::VerifyFailed => write!(f, "Verification failed: condition not met"),
+            ExecError::EndOfProgram => write!(f, "End of program: no more instructions to execute"),
+            ExecError::TypeMismatch => {
+                write!(f, "Type mismatch: unexpected value type on the stack")
+            }
+            ExecError::FetchFailed => write!(f, "Fetch failed: unable to retrieve required data"),
+            ExecError::UnknownOpcode => {
+                write!(f, "Unknown opcode: encountered an unrecognized instruction")
+            }
+        }
+    }
+}
+
 /// VM runtime holding a reference to a Ledger.
 pub struct Vm<'a, L> {
     input: &'a Input,
-    tx_hash: &'a TransactionHash,
+    new_outputs: &'a [Output],
     ledger: &'a L,
 }
 
@@ -78,10 +106,10 @@ type VmStack<'a> = Stack<'a, StackValue<'a>>;
 
 impl<'a, L: Ledger> Vm<'a, L> {
     /// Create a VM that references the provided ledger.
-    pub fn new(ledger: &'a L, input: &'a Input, tx_hash: &'a TransactionHash) -> Self {
+    pub fn new(ledger: &'a L, input: &'a Input, new_outputs: &'a [Output]) -> Self {
         Vm {
             ledger,
-            tx_hash,
+            new_outputs,
             input,
         }
     }
@@ -144,8 +172,9 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     }
                 }
 
-                // Immediate pushes (scanner already produces `Op::Push(u32)`)
-                Op::Push(n) => Ok(stack.push(n.into())),
+                // Immediate pushes (scanner already produces `Op::Push(u32)` or `Op::PushByte`)
+                Op::PushU32(n) => Ok(stack.push(n.into())),
+                Op::PushByte(b) => Ok(stack.push((b as u32).into())),
 
                 // Ledger / transaction related (placeholders or small integrations)
                 Op::InAmt => {
@@ -174,21 +203,21 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     match stack.pop() {
                         Some((idx, parent)) => {
                             let index: u32 = idx.into();
-                            let output_id = OutputId::new(*self.tx_hash, index as usize);
-                            match self.ledger.get_utxo(&output_id) {
-                                Some(output) => match op {
-                                    Op::OutAmt => Ok(parent.push(StackValue::U32(output.amount))),
-                                    Op::OutData => {
-                                        buf = output.data;
-                                        Ok(parent.push(StackValue::HashRef(&buf)))
-                                    }
-                                    Op::OutComm => {
-                                        buf = output.commitment;
-                                        Ok(parent.push(StackValue::HashRef(&buf)))
-                                    }
-                                    _ => unreachable!(),
-                                },
-                                None => Err(ExecError::FetchFailed),
+                            let output = self
+                                .new_outputs
+                                .get(index as usize)
+                                .ok_or(ExecError::FetchFailed)?;
+                            match op {
+                                Op::OutAmt => Ok(parent.push(StackValue::U32(output.amount))),
+                                Op::OutData => {
+                                    buf = output.data;
+                                    Ok(parent.push(StackValue::HashRef(&buf)))
+                                }
+                                Op::OutComm => {
+                                    buf = output.commitment;
+                                    Ok(parent.push(StackValue::HashRef(&buf)))
+                                }
+                                _ => unreachable!(),
                             }
                         }
                         None => Err(ExecError::StackUnderflow),
@@ -221,31 +250,29 @@ impl<'a, L: Ledger> Vm<'a, L> {
 
                 // Crypto & hashing (placeholders)
                 Op::CheckSig => {
-                    // Pops pk, sig (top is sig, next is pk) and push 1 (true) as a
-                    // placeholder for 'valid signature'.
-                    match stack
-                        .pop()
-                        .and_then(|(sig, parent)| parent.pop().map(|(pk, _)| (sig, pk)))
-                    {
-                        Some((StackValue::HashRef(sig), StackValue::HashRef(pk))) => {
+                    // Pops pk, sig (top is sig, next is pk)
+                    if let Some((StackValue::HashRef(sig), parent1)) = stack.pop() {
+                        if let Some((StackValue::HashRef(pk), parent2)) = parent1.pop() {
                             let signature = ed25519_dalek::Signature::from_slice(sig)
                                 .map_err(|_| ExecError::VerifyFailed)?;
                             let msg = sighash(
                                 blake2::Blake2s256::new(),
                                 &self.input.output_id,
-                                self.ledger.get_tx_utxos(&self.tx_hash),
+                                self.new_outputs.iter().copied(),
                             );
-                            let mut pubkey = [0u8; 32];
-                            pubkey.copy_from_slice(pk);
-                            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey)
-                                .map_err(|_| ExecError::VerifyFailed)?;
-                            verifying_key
-                                .verify(&msg, &signature)
-                                .map(|_| stack.push(StackValue::U32(1)))
-                                .map_err(|_| ExecError::VerifyFailed)
+                            let mut pubkey_bytes = [0u8; 32];
+                            pubkey_bytes.copy_from_slice(pk);
+                            let verifying_key =
+                                ed25519_dalek::VerifyingKey::from_bytes(&pubkey_bytes)
+                                    .map_err(|_| ExecError::VerifyFailed)?;
+
+                            let result = verifying_key.verify(&msg, &signature).is_ok();
+                            Ok(parent2.push((result as u32).into()))
+                        } else {
+                            Err(ExecError::StackUnderflow)
                         }
-                        None => Err(ExecError::StackUnderflow),
-                        _ => Err(ExecError::TypeMismatch),
+                    } else {
+                        Err(ExecError::TypeMismatch)
                     }
                 }
                 Op::HashB2 => {
@@ -330,11 +357,12 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 }
                 Op::Return => {
                     // Immediately terminate the program: return current stack to
-                    return stack
+                    let code = stack
                         .get()
                         .copied()
                         .map(StackValue::into)
-                        .ok_or(ExecError::EndOfProgram);
+                        .unwrap_or_default();
+                    return Ok(code);
                 }
                 Op::If => {
                     // Pop condition. Skip next instruction if zero.
@@ -350,11 +378,612 @@ impl<'a, L: Ledger> Vm<'a, L> {
             }?;
             self.exec(scanner, stack)
         } else {
-            return stack
+            let code = stack
                 .get()
                 .copied()
                 .map(StackValue::into)
-                .ok_or(ExecError::EndOfProgram);
+                .unwrap_or_default();
+            return Ok(code);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        Hash, Version,
+        block::{Block, BlockError},
+        ledger::BlockMetadata,
+        transaction::{Input, Output, OutputId, TransactionHash},
+    };
+    use ed25519_dalek::{Signer, SigningKey};
+    use op::r#const::*;
+    use sha2::Digest;
+    use std::collections::HashMap;
+
+    // A mock ledger for testing purposes.
+    #[derive(Default, Clone)]
+    struct MockLedger {
+        utxos: HashMap<OutputId, Output>,
+        block_meta: Option<BlockMetadata>,
+    }
+
+    impl Ledger for MockLedger {
+        fn add_block(&mut self, _block: Block) -> Result<(), BlockError> {
+            unimplemented!()
+        }
+
+        fn get_block_metadata(&self, _hash: &Hash) -> Option<BlockMetadata> {
+            unimplemented!()
+        }
+
+        fn get_utxo(&self, id: &OutputId) -> Option<Output> {
+            self.utxos.get(id).copied()
+        }
+
+        fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
+            self.block_meta.clone()
+        }
+    }
+
+    fn default_input() -> Input {
+        Input {
+            output_id: OutputId::new([0; 32], 0),
+            signature: vec![0; 64],
+            public_key: [0; 32],
+        }
+    }
+
+    fn create_vm<'a>(
+        ledger: &'a MockLedger,
+        input: &'a Input,
+        new_outputs: &'a [Output],
+    ) -> Vm<'a, MockLedger> {
+        Vm::new(ledger, input, new_outputs)
+    }
+
+    #[test]
+    fn test_op_false() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_FALSE];
+        assert_eq!(vm.run(&code), Ok(0));
+    }
+
+    #[test]
+    fn test_op_true() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_TRUE];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_dup() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 123, OP_DUP, OP_ADD];
+        assert_eq!(vm.run(&code), Ok(246));
+    }
+
+    #[test]
+    fn test_op_drop() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_DROP];
+        assert_eq!(vm.run(&code), Ok(123));
+    }
+
+    #[test]
+    fn test_op_swap() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_SWAP, OP_SUB];
+        assert_eq!(vm.run(&code), Ok(200u32.wrapping_sub(123)));
+    }
+
+    #[test]
+    fn test_op_push_u32() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let val = 12345u32.to_le_bytes();
+        let code = [OP_PUSH_U32, val[0], val[1], val[2], val[3]];
+        assert_eq!(vm.run(&code), Ok(12345));
+    }
+
+    #[test]
+    fn test_op_push_byte() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let val = 100u8;
+        let code = [OP_PUSH_BYTE, val];
+        assert_eq!(vm.run(&code), Ok(100));
+    }
+
+    #[test]
+    fn test_op_in_amt() {
+        let output_id = OutputId::new(TransactionHash::default(), 0);
+        let input = Input {
+            output_id,
+            signature: vec![0; 64],
+            public_key: [0; 32],
+        };
+        let utxo = Output {
+            version: Version::V1,
+            amount: 100,
+            commitment: [0; 32],
+            data: [0; 32],
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_IN_AMT];
+        assert_eq!(vm.run(&code), Ok(100));
+    }
+
+    #[test]
+    fn test_op_in_data() {
+        let tx_hash = TransactionHash::default();
+        let output_id = OutputId::new(tx_hash, 0);
+        let mut data = [0; 32];
+        data[0] = 1;
+        let utxo = Output {
+            version: Version::V1,
+            amount: 100,
+            commitment: [0; 32],
+            data,
+        };
+        let input = Input {
+            output_id,
+            signature: vec![0; 64],
+            public_key: [0; 32],
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_IN_DATA, OP_DUP, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_in_comm() {
+        let tx_hash = TransactionHash::default();
+        let output_id = OutputId::new(tx_hash, 0);
+        let mut commitment = [0; 32];
+        commitment[0] = 1;
+        let utxo = Output {
+            version: Version::V1,
+            amount: 100,
+            commitment,
+            data: [0; 32],
+        };
+        let input = Input {
+            output_id,
+            signature: vec![0; 64],
+            public_key: [0; 32],
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+
+        let new_outputs = [utxo];
+        let vm = create_vm(&ledger, &input, &new_outputs);
+        let code = [OP_IN_COMM, OP_DUP, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(1));
+
+        let code_vs_data = [OP_IN_COMM, OP_IN_DATA, OP_EQUAL];
+        assert_eq!(vm.run(&code_vs_data), Ok(0));
+    }
+
+    #[test]
+    fn test_op_out_amt() {
+        let tx_hash = [1; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+        let utxo = Output {
+            version: Version::V1,
+            amount: 200,
+            commitment: [0; 32],
+            data: [0; 32],
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+        let input = default_input();
+
+        let new_outputs = [utxo];
+        let vm = create_vm(&ledger, &input, &new_outputs);
+        let val = 0u32.to_le_bytes();
+        let code = [OP_PUSH_U32, val[0], val[1], val[2], val[3], OP_OUT_AMT];
+        assert_eq!(vm.run(&code), Ok(200));
+    }
+
+    #[test]
+    fn test_op_out_data() {
+        let tx_hash = [1; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+        let mut data = [0; 32];
+        data[5] = 5;
+        let utxo = Output {
+            version: Version::V1,
+            amount: 200,
+            commitment: [0; 32],
+            data,
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+        let input = default_input();
+
+        let new_outputs = [utxo];
+        let vm = create_vm(&ledger, &input, &new_outputs);
+
+        let val = 0u32.to_le_bytes();
+        let code = [
+            OP_PUSH_U32,
+            val[0],
+            val[1],
+            val[2],
+            val[3],
+            OP_OUT_DATA,
+            OP_DUP,
+            OP_EQUAL,
+        ];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_out_comm() {
+        let tx_hash = [1; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+        let mut commitment = [0; 32];
+        commitment[5] = 5;
+        let utxo = Output {
+            version: Version::V1,
+            amount: 200,
+            commitment,
+            data: [0; 32],
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+        let input = default_input();
+
+        let new_outputs = [utxo];
+        let vm = create_vm(&ledger, &input, &new_outputs);
+
+        let val = 0u32.to_le_bytes();
+        let code = [
+            OP_PUSH_U32,
+            val[0],
+            val[1],
+            val[2],
+            val[3],
+            OP_OUT_COMM,
+            OP_DUP,
+            OP_EQUAL,
+        ];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_supply_height() {
+        let mut ledger = MockLedger::default();
+        ledger.block_meta = Some(BlockMetadata {
+            hash: [0; 32],
+            prev_block_hash: [0; 32],
+            height: 50,
+            available_supply: 100_000,
+            locked_supply: 0,
+        });
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [OP_SUPPLY];
+        assert_eq!(vm.run(&code), Ok(100_000));
+
+        let code = [OP_HEIGHT];
+        assert_eq!(vm.run(&code), Ok(50));
+    }
+
+    #[test]
+    fn test_op_supply_height_none() {
+        let ledger = MockLedger::default(); // No block_meta
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [OP_SUPPLY];
+        assert_eq!(vm.run(&code), Ok(0));
+
+        let code = [OP_HEIGHT];
+        assert_eq!(vm.run(&code), Ok(0));
+    }
+
+    #[test]
+    fn test_op_push_pk() {
+        let mut public_key = [0u8; 32];
+        public_key[10] = 10;
+        let input = Input {
+            output_id: OutputId::new([0; 32], 0),
+            signature: vec![0; 64],
+            public_key,
+        };
+        let ledger = MockLedger::default();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [OP_PUSH_PK, OP_DUP, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_push_sig() {
+        let mut signature = vec![0u8; 64];
+        signature[10] = 10;
+        let input = Input {
+            output_id: OutputId::new([0; 32], 0),
+            signature,
+            public_key: [0; 32],
+        };
+        let ledger = MockLedger::default();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [OP_PUSH_SIG, OP_DUP, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_checksig_valid() {
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+
+        let tx_hash = [1u8; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+
+        let ledger = MockLedger::default();
+        // ledger.tx_utxos.insert(tx_hash, vec![]);
+
+        let msg = sighash(blake2::Blake2s256::new(), &output_id, [].iter().copied());
+
+        let signature = signing_key.sign(&msg);
+
+        let input = Input {
+            output_id,
+            signature: signature.to_bytes().to_vec(),
+            public_key: verifying_key.to_bytes(),
+        };
+
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_checksig_invalid() {
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+
+        let other_signing_key = SigningKey::from_bytes(&[2u8; 32]);
+
+        let tx_hash = [1u8; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+
+        let ledger = MockLedger::default();
+
+        let msg = sighash(blake2::Blake2s256::new(), &output_id, [].iter().copied());
+
+        let signature = other_signing_key.sign(&msg); // Signed with wrong key
+
+        let input = Input {
+            output_id,
+            signature: signature.to_bytes().to_vec(),
+            public_key: verifying_key.to_bytes(),
+        };
+
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG];
+        assert_eq!(vm.run(&code), Ok(0));
+    }
+
+    #[test]
+    fn test_op_hash_b2() {
+        let tx_hash = TransactionHash::default();
+        let output_id = OutputId::new(tx_hash, 0);
+        let data = [5u8; 32];
+        let commitment = blake2::Blake2s256::digest(data).try_into().unwrap();
+        let utxo = Output {
+            version: Version::V1,
+            amount: 100,
+            commitment,
+            data,
+        };
+        let input = Input {
+            output_id,
+            signature: vec![0; 64],
+            public_key: [0; 32],
+        };
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(output_id, utxo);
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [OP_IN_DATA, OP_HASH_B2, OP_IN_COMM, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_equal() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 123, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(1));
+
+        let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(0));
+    }
+
+    #[test]
+    fn test_op_greater() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        // b > a -> 456 > 123
+        let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_GREATER];
+        assert_eq!(vm.run(&code), Ok(1));
+
+        // b > a -> 123 > 456
+        let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_GREATER];
+        assert_eq!(vm.run(&code), Ok(0));
+
+        // b > a -> 123 > 123
+        let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 123, OP_GREATER];
+        assert_eq!(vm.run(&code), Ok(0));
+    }
+
+    #[test]
+    fn test_op_add() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let val1 = 10u32.to_le_bytes();
+        let val2 = 20u32.to_le_bytes();
+        let code = [
+            OP_PUSH_U32,
+            val1[0],
+            val1[1],
+            val1[2],
+            val1[3],
+            OP_PUSH_U32,
+            val2[0],
+            val2[1],
+            val2[2],
+            val2[3],
+            OP_ADD,
+        ];
+        assert_eq!(vm.run(&code), Ok(30));
+    }
+
+    #[test]
+    fn test_op_sub() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 30, OP_PUSH_BYTE, 10, OP_SUB];
+        assert_eq!(vm.run(&code), Ok(20));
+    }
+
+    #[test]
+    fn test_op_verify_ok() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 1, OP_VERIFY, OP_TRUE];
+        assert_eq!(vm.run(&code), Ok(1));
+    }
+
+    #[test]
+    fn test_op_verify_fail() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 0, OP_VERIFY, OP_TRUE];
+        assert_eq!(vm.run(&code), Err(ExecError::VerifyFailed));
+    }
+
+    #[test]
+    fn test_op_return() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+        let code = [OP_PUSH_BYTE, 200, OP_RETURN, OP_TRUE];
+        assert_eq!(vm.run(&code), Ok(200));
+    }
+
+    #[test]
+
+    fn test_op_if() {
+        let ledger = MockLedger::default();
+
+        let input = default_input();
+
+        let vm = create_vm(&ledger, &input, &[]);
+
+        // Condition is 1, so OP_TRUE is executed
+        let val = 1u8;
+
+        let code = [OP_PUSH_BYTE, val, OP_IF, OP_TRUE];
+
+        assert_eq!(vm.run(&code), Ok(1));
+
+        // Condition is 0, so OP_TRUE is skipped. The next op is... nothing.
+        // It should end with an empty stack, which is an error.
+        let val = 0u8;
+        let code = [OP_PUSH_BYTE, val, OP_IF, OP_TRUE];
+        assert_eq!(vm.run(&code), Ok(0));
+
+        // Condition is 0, so OP_TRUE is skipped, OP_FALSE is executed.
+        let val = 0u8;
+        let code = [OP_PUSH_BYTE, val, OP_IF, OP_TRUE, OP_FALSE];
+
+        assert_eq!(vm.run(&code), Ok(0));
+    }
+
+    #[test]
+
+    fn test_p2pk_script_valid() {
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+        let tx_hash = [1u8; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+
+        let ledger = MockLedger::default();
+
+        let msg = sighash(blake2::Blake2s256::new(), &output_id, [].iter().copied());
+
+        let signature = signing_key.sign(&msg);
+        let input = Input {
+            output_id,
+
+            signature: signature.to_bytes().to_vec(),
+
+            public_key: verifying_key.to_bytes(),
+        };
+
+        let vm = create_vm(&ledger, &input, &[]);
+        let mut script = p2pk_script().to_vec();
+
+        assert_eq!(vm.run(&script), Ok(0));
+    }
+
+    #[test]
+    fn test_p2pk_script_invalid() {
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+
+        let other_signing_key = SigningKey::from_bytes(&[2u8; 32]);
+
+        let tx_hash = [1u8; 32];
+        let output_id = OutputId::new(tx_hash, 0);
+
+        let ledger = MockLedger::default();
+
+        let msg = sighash(blake2::Blake2s256::new(), &output_id, [].iter().copied());
+        let signature = other_signing_key.sign(&msg);
+
+        let input = Input {
+            output_id,
+            signature: signature.to_bytes().to_vec(),
+            public_key: verifying_key.to_bytes(),
+        };
+
+        let vm = create_vm(&ledger, &input, &[]);
+        let script = p2pk_script();
+
+        assert_eq!(vm.run(&script), Err(ExecError::VerifyFailed));
     }
 }

@@ -57,6 +57,20 @@ impl InMemoryLedger {
         }
         Ok(())
     }
+
+    fn get_tx_utxos(&self, tx_hash: &Hash) -> impl Iterator<Item = Output> {
+        self.utxo_set
+            .range(
+                OutputId {
+                    tx_hash: *tx_hash,
+                    index: 0,
+                }..OutputId {
+                    tx_hash: *tx_hash,
+                    index: usize::MAX,
+                },
+            )
+            .map(|(_, output)| *output)
+    }
 }
 
 impl Ledger for InMemoryLedger {
@@ -134,19 +148,5 @@ impl Ledger for InMemoryLedger {
 
     fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
         self.block_index.get(&self.tip).cloned()
-    }
-
-    fn get_tx_utxos(&self, tx_hash: &Hash) -> impl Iterator<Item = Output> {
-        self.utxo_set
-            .range(
-                OutputId {
-                    tx_hash: *tx_hash,
-                    index: 0,
-                }..OutputId {
-                    tx_hash: *tx_hash,
-                    index: usize::MAX,
-                },
-            )
-            .map(|(_, output)| *output)
     }
 }

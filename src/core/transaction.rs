@@ -1,4 +1,5 @@
 use super::calculate_reward;
+use super::vm::{ExecError, Vm, p2pk_script};
 use super::{Hash, PublicKey, Version, create_commitment, ledger::Ledger};
 use blake2::{Blake2s256, Digest};
 use std::error;
@@ -20,11 +21,8 @@ pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),
 
-    /// A signature could not be parsed or did not verify.
-    InvalidSignature { reason: String },
-
-    /// A public key could not be parsed or otherwise failed validation.
-    InvalidPublicKey { reason: String },
+    /// Execution error occurred during transaction validation.
+    Execution(ExecError),
 
     /// Total outputs exceed total inputs.
     InsufficientInputAmount { total_input: u32, total_output: u32 },
@@ -43,8 +41,7 @@ impl fmt::Display for TransactionError {
                 "Invalid output: referenced txid {:02x?} index {}",
                 tx_hash, index
             ),
-            InvalidSignature { reason } => write!(f, "Invalid signature: {}", reason),
-            InvalidPublicKey { reason } => write!(f, "Invalid public key: {}", reason),
+            Execution(err) => err.fmt(f),
             InsufficientInputAmount {
                 total_input,
                 total_output,
@@ -67,7 +64,7 @@ pub struct Input {
     pub public_key: PublicKey,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputId {
     pub tx_hash: TransactionHash,
     pub index: usize,
@@ -170,27 +167,19 @@ impl Transaction {
                 return Err(TransactionError::InvalidOutput(input.output_id));
             }
 
-            // Compute sighash and validate signature
-            let msg = sighash(
-                Blake2s256::new(),
-                &input.output_id,
-                self.outputs.iter().copied(),
-            );
-            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&input.public_key)
-                .map_err(|e| TransactionError::InvalidPublicKey {
-                    reason: format!("{:?}", e),
-                })?;
-            let signature =
-                ed25519_dalek::Signature::from_slice(&input.signature).map_err(|e| {
-                    TransactionError::InvalidSignature {
-                        reason: format!("{:?}", e),
-                    }
-                })?;
-            verifying_key.verify_strict(&msg, &signature).map_err(|e| {
-                TransactionError::InvalidSignature {
-                    reason: format!("{:?}", e),
+            let vm = Vm::new(ledger, &input, &self.outputs);
+            match utxo.version {
+                Version::V1 => {
+                    // V1 transactions use a simple P2PK script
+                    vm.run(&p2pk_script())
+                        .map_err(|err| TransactionError::Execution(err))?;
                 }
-            })?;
+                Version::V2 => {
+                    // V2 transactions can use a more complex script
+                    vm.run(&utxo.data)
+                        .map_err(|err| TransactionError::Execution(err))?;
+                }
+            }
         }
 
         let total_output_amount = self.outputs.iter().map(|output| output.amount).sum();
@@ -245,6 +234,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
     use crate::core::{
         block::Block,
@@ -392,7 +383,7 @@ mod tests {
 
         // Now verification should fail parsing the funding output's commitment as a public key
         match spending_tx.verify(&ledger) {
-            Err(TransactionError::InvalidSignature { .. }) => {}
+            Err(TransactionError::Execution(ExecError::VerifyFailed)) => {}
             other => panic!("Expected InvalidSignature error, got: {:?}", other),
         }
     }
@@ -593,6 +584,64 @@ mod tests {
         match spending_tx.verify(&ledger) {
             Err(TransactionError::CoinbaseValidation { .. }) => {}
             other => panic!("Expected CoinbaseValidation, got: {:?}", other),
+        }
+    }
+    #[test]
+    fn test_transaction_verify_v2() {
+        // Create a ledger with one block containing a funding transaction
+        let mut ledger = InMemoryLedger::new();
+
+        // Build funding (previous) transaction that creates a UTXO
+        let mut data = [0u8; 32];
+        data.as_mut_slice().write(&p2pk_script()).unwrap();
+        let mask = [0u8; 32]; // A zero mask allows for any pubkey
+        let reward = calculate_reward(&mask);
+
+        let funding_tx = Transaction {
+            inputs: vec![],
+            outputs: vec![Output {
+                version: Version::V2,
+                amount: 2 * reward,
+                data,
+                commitment: mask,
+            }],
+        };
+        let funding_txid = funding_tx.hash::<Blake2s256>();
+
+        // Create a block containing the funding transaction and add to ledger
+        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        block.transactions.push(funding_tx);
+        ledger.add_block(block).unwrap();
+
+        // Now build a spending transaction that consumes the funding UTXO
+        let utxo_id = OutputId {
+            tx_hash: funding_txid,
+            index: 0,
+        };
+        let new_outputs = vec![Output {
+            version: Version::V2,
+            amount: reward,
+            data,
+            commitment: mask,
+        }];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
+        let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+        let input = Input {
+            output_id: utxo_id,
+            signature,
+            public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
+        };
+
+        let spending_tx = Transaction {
+            inputs: vec![input],
+            outputs: new_outputs,
+        };
+
+        // Now verification should succeed
+        match spending_tx.verify(&ledger) {
+            Ok(_) => {}
+            other => panic!("Expected Ok, got: {:?}", other),
         }
     }
 }

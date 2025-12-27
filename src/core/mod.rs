@@ -6,8 +6,8 @@ pub mod miner;
 pub mod transaction;
 mod vm;
 
-type PublicKey = [u8; 32];
-type Hash = [u8; 32];
+pub type PublicKey = [u8; 32];
+pub type Hash = [u8; 32];
 
 /// Protocol version used throughout the codebase.
 ///
@@ -17,6 +17,8 @@ type Hash = [u8; 32];
 pub enum Version {
     /// Initial protocol revision.
     V1 = 0,
+    /// Second protocol revision.
+    V2 = 1,
 }
 
 // Helpers
