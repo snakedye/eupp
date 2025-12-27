@@ -955,7 +955,7 @@ mod tests {
         };
 
         let vm = create_vm(&ledger, &input, &[]);
-        let mut script = p2pk_script().to_vec();
+        let script = p2pk_script().to_vec();
 
         assert_eq!(vm.run(&script), Ok(0));
     }

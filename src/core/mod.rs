@@ -55,7 +55,7 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
 /// - exponent = floor(difficulty / SCALE_FACTOR)
 /// - reward = min(HARD_CAP, 2^exponent)
 pub fn calculate_reward(mask: &[u8; 32]) -> u32 {
-    const HARD_CAP: u32 = 100_000;
+    const HARD_CAP: u32 = 1_000_000;
     const MIN_REWARD: u32 = 1;
     const SCALE_FACTOR: u32 = 4;
     const MAX_SAFE_EXPONENT: u32 = 127; // safe for shifting u128
@@ -142,8 +142,8 @@ mod tests {
         // difficulty = 68
         let mask = mask_with_ones(68);
         let reward = calculate_reward(&mask);
-        // exponent = floor(68/4) = 17 -> 2^17 = 131072 -> capped to 100000
-        assert_eq!(reward, 100_000);
+        // exponent = floor(68/4) = 17 -> 2^17 = 131072
+        assert_eq!(reward, 131072);
     }
 
     #[test]
@@ -152,7 +152,7 @@ mod tests {
         let mask = mask_with_ones(80);
         let reward = calculate_reward(&mask);
         // exponent = 20 -> 2^20 = 1_048_576 -> capped
-        assert_eq!(reward, 100_000);
+        assert_eq!(reward, 1_000_000);
     }
 
     // Additional checks matching the requested table

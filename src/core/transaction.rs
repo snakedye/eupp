@@ -204,6 +204,16 @@ impl Output {
         }
     }
 
+    pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
+        let commitment = create_commitment::<Blake2s256>(public_key, script);
+        Self {
+            version: Version::V2,
+            amount,
+            data: *script,
+            commitment,
+        }
+    }
+
     pub fn verify(&self, public_key: &[u8; 32]) -> bool {
         create_commitment::<Blake2s256>(public_key, &self.data) == self.commitment
     }
