@@ -27,7 +27,7 @@ pub enum TransactionError {
     InvalidPublicKey { reason: String },
 
     /// Total outputs exceed total inputs.
-    InsufficientInputAmount { total_input: u64, total_output: u64 },
+    InsufficientInputAmount { total_input: u32, total_output: u32 },
 
     /// Specific coinbase (mint) validation failed (mask/amount rules).
     CoinbaseValidation { reason: String },
@@ -76,9 +76,15 @@ pub struct OutputId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Output {
     pub version: Version,
-    pub amount: u64,
+    pub amount: u32,
     pub data: Hash,
     pub commitment: Hash,
+}
+
+impl OutputId {
+    pub fn new(tx_hash: TransactionHash, index: usize) -> Self {
+        Self { tx_hash, index }
+    }
 }
 
 impl Ord for OutputId {
@@ -125,7 +131,7 @@ impl Transaction {
 
     /// Verifies the transaction against the ledger.
     pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
-        let mut total_input_amount: u64 = 0;
+        let mut total_input_amount = 0_u32;
         let is_coinbase = ledger.get_last_block_metadata().is_none();
         for (i, input) in self.inputs.iter().enumerate() {
             // Lookup referenced utxo
@@ -165,7 +171,11 @@ impl Transaction {
             }
 
             // Compute sighash and validate signature
-            let msg = sighash(Blake2s256::new(), &input.output_id, self.outputs.iter());
+            let msg = sighash(
+                Blake2s256::new(),
+                &input.output_id,
+                self.outputs.iter().copied(),
+            );
             let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&input.public_key)
                 .map_err(|e| TransactionError::InvalidPublicKey {
                     reason: format!("{:?}", e),
@@ -183,7 +193,7 @@ impl Transaction {
             })?;
         }
 
-        let total_output_amount: u64 = self.outputs.iter().map(|output| output.amount).sum();
+        let total_output_amount = self.outputs.iter().map(|output| output.amount).sum();
         if !is_coinbase && total_output_amount > total_input_amount {
             return Err(TransactionError::InsufficientInputAmount {
                 total_input: total_input_amount,
@@ -195,7 +205,7 @@ impl Transaction {
 }
 
 impl Output {
-    pub fn new_v1(amount: u64, public_key: &PublicKey, data: &Hash) -> Self {
+    pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
         let commitment = create_commitment::<Blake2s256>(public_key, data);
         Self {
             version: Version::V1,
@@ -214,7 +224,7 @@ impl Output {
 pub fn sighash<'a, D, I>(mut hasher: D, output_id: &'a OutputId, outputs: I) -> Hash
 where
     D: Digest,
-    I: Iterator<Item = &'a Output>,
+    I: Iterator<Item = Output>,
 {
     hasher.update(&output_id.tx_hash);
     hasher.update(&output_id.index.to_le_bytes());
@@ -225,7 +235,7 @@ where
         commitment,
     } in outputs
     {
-        hasher.update(&[*version as u8]);
+        hasher.update(&[version as u8]);
         hasher.update(&amount.to_le_bytes());
         hasher.update(&data);
         hasher.update(&commitment);
@@ -275,7 +285,7 @@ mod tests {
         let outputs = vec![out1, out2];
 
         // Compute sighash via function
-        let s1 = sighash(Blake2s256::new(), &output_id, outputs.iter());
+        let s1 = sighash(Blake2s256::new(), &output_id, outputs.iter().copied());
 
         // Compute expected via manual hasher
         let mut hasher = Blake2s256::new();
@@ -400,10 +410,10 @@ mod tests {
             index: 1usize,
         };
 
-        let outputs = vec![Output::new_v1(10u64, &public_key, &[5u8; 32])];
+        let outputs = vec![Output::new_v1(10, &public_key, &[5u8; 32])];
 
         // Compute the sighash
-        let sighash = sighash(Blake2s256::new(), &output_id, outputs.iter());
+        let sighash = sighash(Blake2s256::new(), &output_id, outputs.iter().copied());
 
         // Sign the sighash
         let signature = signing_key.sign(&sighash);
@@ -428,7 +438,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![Output {
                 version: Version::V1,
-                amount: 100u64,
+                amount: 100,
                 data,
                 commitment: mask,
             }],
@@ -447,7 +457,7 @@ mod tests {
         };
         let new_outputs = vec![Output::new_v1(150, &mask, &data)]; // Any commitment will work with the mask chosen before
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter());
+        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {
             output_id: utxo_id,
@@ -507,7 +517,7 @@ mod tests {
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter());
+        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {
             output_id: utxo_id,
@@ -567,7 +577,7 @@ mod tests {
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter());
+        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {
             output_id: utxo_id,

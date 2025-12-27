@@ -65,8 +65,8 @@ fn main() {
             hex::encode(prev_block.hash)
         );
 
-        // Mine the next block. We use u64::MAX attempts to mine "forever" until a solution is found.
-        match miner::build_next_block(&ledger, &prev_tx_hash, u64::MAX) {
+        // Mine the next block. We use usize::MAX attempts to mine "forever" until a solution is found.
+        match miner::build_next_block(&ledger, &prev_tx_hash, usize::MAX) {
             Some((_signing_key, new_block)) => {
                 let new_block_hash = new_block.header().hash::<Blake2s256>();
                 println!(

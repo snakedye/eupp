@@ -1,0 +1,295 @@
+#![allow(clippy::upper_case_acronyms)]
+//! Opcode definitions and `Op` enum for the VM.
+//!
+//! This file places all opcode byte constants in a child `const` module and
+//! re-exports them at the module root. The `Op` enum and conversions remain
+//! defined here so callers can use `Op` alongside the opcode values.
+
+/// Opcode constants are collected in this submodule so they are grouped and
+/// can be managed independently of the `Op` type.
+pub mod r#const {
+    //! Raw opcode byte values.
+
+    // Stack / VM opcodes
+    pub const OP_FALSE: u8 = 0x00;
+    pub const OP_TRUE: u8 = 0x01;
+    pub const OP_DUP: u8 = 0x02;
+    pub const OP_DROP: u8 = 0x03;
+    pub const OP_SWAP: u8 = 0x04;
+    /// Push a 32-bit unsigned integer (4 bytes follow the opcode, little-endian).
+    pub const OP_PUSH_U32: u8 = 0x06;
+
+    pub const OP_IN_AMT: u8 = 0x10;
+    pub const OP_IN_DATA: u8 = 0x11;
+    pub const OP_IN_COMM: u8 = 0x12;
+    pub const OP_OUT_AMT: u8 = 0x13;
+    pub const OP_OUT_DATA: u8 = 0x14;
+    pub const OP_OUT_COMM: u8 = 0x15;
+    // pub const OP_TX_FEE: u8 = 0x16;
+
+    /// Push current total supply onto the stack.
+    pub const OP_SUPPLY: u8 = 0x50;
+    /// Push current block height onto the stack.
+    pub const OP_HEIGHT: u8 = 0x51;
+
+    pub const OP_PUSH_PK: u8 = 0x20;
+    pub const OP_PUSH_SIG: u8 = 0x21;
+
+    pub const OP_CHECKSIG: u8 = 0x30;
+    pub const OP_HASH_B2: u8 = 0x31;
+    pub const OP_EQUAL: u8 = 0x32;
+    pub const OP_GREATER: u8 = 0x33;
+    pub const OP_ADD: u8 = 0x34;
+    pub const OP_SUB: u8 = 0x35;
+
+    pub const OP_VERIFY: u8 = 0x40;
+    pub const OP_RETURN: u8 = 0x41;
+    pub const OP_IF: u8 = 0x42;
+}
+
+// Re-export the constants so existing imports like `use crate::core::vm::op::OP_TRUE`
+// continue to work.
+pub use r#const::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    /// Pushes an empty array (0) onto the stack.
+    False,
+    /// Pushes a 1 onto the stack.
+    True,
+    /// Duplicates the top item on the stack.
+    Dup,
+    /// Removes the top item from the stack.
+    Drop,
+    /// Swaps the top two items on the stack.
+    Swap,
+    /// Pushes a 32-bit unsigned integer (u32) onto the stack.
+    ///
+    /// Encoding: `[OP_PUSH_U32][u32 le bytes...]`.
+    ///
+    /// Note: `TryFrom<u8>` can only inspect the opcode byte, so when it sees
+    /// `OP_PUSH_U32` it returns `Op::Push(0)` as a placeholder. The VM
+    /// parser/executor (or the `Scanner`) must read the following 4 bytes and
+    /// construct the real `Op::Push(value)` before execution.
+    Push(u32),
+
+    /// Pushes the Amount of the UTXO being spent.
+    InAmt,
+    /// Pushes the Data Hash of the UTXO being spent.
+    InData,
+    /// Pushes the Commitment of the UTXO being spent.
+    InComm,
+    /// Pops index, pushes Amount of Output[index].
+    OutAmt,
+    /// Pops index, pushes Data Hash of Output[index].
+    OutData,
+    /// Pops index, pushes Commitment of Output[index].
+    OutComm,
+    /// Pushes the total fee (∑In − ∑Out) of the transaction.
+    // TxFee,
+    /// Pushes the current total supply of the currency onto the stack.
+    Supply,
+    /// Pushes the current block height onto the stack.
+    Height,
+
+    /// Pushes the 32-byte Public Key from the input.
+    PushPk,
+    /// Pushes the 64-byte Signature from the input.
+    PushSig,
+
+    /// Pops pk, sig. Checks Ed25519 signature against the transaction sighash.
+    CheckSig,
+    /// Pops data, pushes Blake2s256 hash.
+    HashB2,
+    /// Pops two items, pushes 1 if equal, 0 otherwise.
+    Equal,
+    /// Pops a, b. Pushes 1 if b > a.
+    Greater,
+    /// Pops a, b. Pushes a + b.
+    Add,
+    /// Pops a, b. Pushes b − a.
+    Sub,
+
+    /// Pops top item. If 0 (False), the entire transaction is invalid.
+    Verify,
+    /// Immediately terminates the script.
+    Return,
+    /// Executes subsequent code only if the top item is non-zero.
+    If,
+}
+
+/// Error returned when decoding an opcode byte into an `Op`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpDecodeError(pub u8);
+
+impl OpDecodeError {
+    /// Returns the unknown opcode byte.
+    pub fn unknown_byte(self) -> u8 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for OpDecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "unknown opcode byte: 0x{:02x}", self.0)
+    }
+}
+
+impl std::error::Error for OpDecodeError {}
+
+impl core::convert::TryFrom<u8> for Op {
+    type Error = OpDecodeError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            OP_FALSE => Ok(Op::False),
+            OP_TRUE => Ok(Op::True),
+            OP_DUP => Ok(Op::Dup),
+            OP_DROP => Ok(Op::Drop),
+            OP_SWAP => Ok(Op::Swap),
+            OP_PUSH_U32 => Ok(Op::Push(0)), // placeholder; Scanner must read 4 bytes after opcode
+
+            OP_IN_AMT => Ok(Op::InAmt),
+            OP_IN_DATA => Ok(Op::InData),
+            OP_IN_COMM => Ok(Op::InComm),
+            OP_OUT_AMT => Ok(Op::OutAmt),
+            OP_OUT_DATA => Ok(Op::OutData),
+            OP_OUT_COMM => Ok(Op::OutComm),
+            // OP_TX_FEE => Ok(Op::TxFee),
+            OP_SUPPLY => Ok(Op::Supply),
+            OP_HEIGHT => Ok(Op::Height),
+
+            OP_PUSH_PK => Ok(Op::PushPk),
+            OP_PUSH_SIG => Ok(Op::PushSig),
+
+            OP_CHECKSIG => Ok(Op::CheckSig),
+            OP_HASH_B2 => Ok(Op::HashB2),
+            OP_EQUAL => Ok(Op::Equal),
+            OP_GREATER => Ok(Op::Greater),
+            OP_ADD => Ok(Op::Add),
+            OP_SUB => Ok(Op::Sub),
+
+            OP_VERIFY => Ok(Op::Verify),
+            OP_RETURN => Ok(Op::Return),
+            OP_IF => Ok(Op::If),
+
+            other => Err(OpDecodeError(other)),
+        }
+    }
+}
+
+impl From<Op> for u8 {
+    fn from(op: Op) -> u8 {
+        match op {
+            Op::False => OP_FALSE,
+            Op::True => OP_TRUE,
+            Op::Dup => OP_DUP,
+            Op::Drop => OP_DROP,
+            Op::Swap => OP_SWAP,
+            Op::Push(_) => OP_PUSH_U32,
+
+            Op::InAmt => OP_IN_AMT,
+            Op::InData => OP_IN_DATA,
+            Op::InComm => OP_IN_COMM,
+            Op::OutAmt => OP_OUT_AMT,
+            Op::OutData => OP_OUT_DATA,
+            Op::OutComm => OP_OUT_COMM,
+            // Op::TxFee => OP_TX_FEE,
+            Op::Supply => OP_SUPPLY,
+            Op::Height => OP_HEIGHT,
+
+            Op::PushPk => OP_PUSH_PK,
+            Op::PushSig => OP_PUSH_SIG,
+
+            Op::CheckSig => OP_CHECKSIG,
+            Op::HashB2 => OP_HASH_B2,
+            Op::Equal => OP_EQUAL,
+            Op::Greater => OP_GREATER,
+            Op::Add => OP_ADD,
+            Op::Sub => OP_SUB,
+
+            Op::Verify => OP_VERIFY,
+            Op::Return => OP_RETURN,
+            Op::If => OP_IF,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::convert::TryFrom;
+
+    #[test]
+    fn roundtrip_all_simple_ops() {
+        let all = [
+            Op::False,
+            Op::True,
+            Op::Dup,
+            Op::Drop,
+            Op::Swap,
+            Op::Push(0),
+            Op::InAmt,
+            Op::InData,
+            Op::InComm,
+            Op::OutAmt,
+            Op::OutData,
+            Op::OutComm,
+            // Op::TxFee,
+            Op::Supply,
+            Op::Height,
+            Op::PushPk,
+            Op::PushSig,
+            Op::CheckSig,
+            Op::HashB2,
+            Op::Equal,
+            Op::Greater,
+            Op::Add,
+            Op::Sub,
+            Op::Verify,
+            Op::Return,
+            Op::If,
+        ];
+
+        for &op in &all {
+            let b: u8 = op.into();
+            let parsed = Op::try_from(b).expect("opcode should parse");
+            assert_eq!(parsed, op);
+        }
+    }
+
+    #[test]
+    fn push_u32_into_opcode_byte() {
+        let op = Op::Push(0x12345678);
+        let b: u8 = op.into();
+        assert_eq!(b, OP_PUSH_U32);
+    }
+
+    #[test]
+    fn push_u32_tryfrom_returns_placeholder() {
+        // TryFrom only inspects the opcode byte; it cannot read the following
+        // 4 payload bytes. We expect a placeholder Push(0).
+        let parsed = Op::try_from(OP_PUSH_U32).expect("should parse push opcode");
+        assert_eq!(parsed, Op::Push(0));
+    }
+
+    #[test]
+    fn supply_and_height_bytes() {
+        let s: u8 = Op::Supply.into();
+        let h: u8 = Op::Height.into();
+        assert_eq!(s, OP_SUPPLY);
+        assert_eq!(h, OP_HEIGHT);
+
+        let ps = Op::try_from(s).unwrap();
+        let ph = Op::try_from(h).unwrap();
+        assert_eq!(ps, Op::Supply);
+        assert_eq!(ph, Op::Height);
+    }
+
+    #[test]
+    fn unknown_byte_returns_err() {
+        // pick some unused opcode
+        let err = Op::try_from(0x99_u8).unwrap_err();
+        assert_eq!(err, OpDecodeError(0x99));
+    }
+}

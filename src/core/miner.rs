@@ -27,7 +27,7 @@ use super::{
 pub fn build_mining_tx_deterministic(
     prev_tx_hash: &TransactionHash,
     lead_utxo: &Output,
-    max_attempts: u64,
+    max_attempts: usize,
     master_seed: [u8; 32],
 ) -> Option<(SigningKey, Transaction)> {
     // Get previous minting tx/out
@@ -86,7 +86,7 @@ pub fn build_mining_tx_deterministic(
                     tx_hash: *prev_tx_hash,
                     index: 0,
                 },
-                outputs.iter(),
+                outputs.iter().copied(),
             );
 
             // Sign
@@ -118,7 +118,7 @@ pub fn build_mining_tx_deterministic(
 pub fn build_mining_tx(
     prev_tx_hash: &TransactionHash,
     lead_utxo: &Output,
-    max_attempts: u64,
+    max_attempts: usize,
 ) -> Option<(SigningKey, Transaction)> {
     let mut csprng = OsRng;
     let mut seed_bytes = [0u8; 32];
@@ -130,7 +130,7 @@ pub fn build_mining_tx(
 pub fn build_next_block<L: Ledger>(
     ledger: &L,
     prev_tx_hash: &TransactionHash,
-    max_attempts: u64,
+    max_attempts: usize,
 ) -> Option<(SigningKey, crate::core::block::Block)> {
     let lead_utxo = ledger.get_utxo(&OutputId {
         tx_hash: *prev_tx_hash,
@@ -164,7 +164,7 @@ mod tests {
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
             version: crate::core::Version::V1,
-            amount: 100u64,
+            amount: 100,
             data: [0u8; 32],
             commitment: mask,
         };
@@ -195,7 +195,11 @@ mod tests {
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
-        let sighash = sighash(Blake2s256::new(), &input.output_id, tx.outputs.iter());
+        let sighash = sighash(
+            Blake2s256::new(),
+            &input.output_id,
+            tx.outputs.iter().copied(),
+        );
         let vk = VerifyingKey::from_bytes(&input.public_key).expect("valid vk");
         let sig = Signature::from_slice(&input.signature).expect("valid signature");
         assert!(vk.verify_strict(&sighash, &sig).is_ok());
@@ -206,7 +210,7 @@ mod tests {
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
             version: crate::core::Version::V1,
-            amount: 100u64,
+            amount: 100,
             data: [0u8; 32],
             commitment: mask,
         };
@@ -242,7 +246,7 @@ mod tests {
 
         let prev_mint_output = Output {
             version: crate::core::Version::V1,
-            amount: 100u64,
+            amount: 100,
             data: [0u8; 32],
             commitment: mask,
         };
@@ -255,7 +259,7 @@ mod tests {
         // prev_block.transactions.push(funding_tx);
 
         // Allow a generous number of attempts but we expect to find a solution far fewer.
-        let max_attempts: u64 = 200_000;
+        let max_attempts = 200_000;
         let master_seed = [0u8; 32];
 
         let start = Instant::now();
@@ -291,7 +295,11 @@ mod tests {
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
-        let sighash = sighash(Blake2s256::new(), &input.output_id, tx.outputs.iter());
+        let sighash = sighash(
+            Blake2s256::new(),
+            &input.output_id,
+            tx.outputs.iter().copied(),
+        );
         let vk = VerifyingKey::from_bytes(&input.public_key).expect("valid vk");
         let sig = Signature::from_slice(&input.signature).expect("valid signature");
         assert!(vk.verify_strict(&sighash, &sig).is_ok());

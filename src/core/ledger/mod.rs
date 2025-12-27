@@ -17,13 +17,13 @@ pub struct BlockMetadata {
     pub prev_block_hash: Hash,
 
     /// The vertical position in the chain (Genesis = 0)
-    pub height: u64,
+    pub height: u32,
 
     /// The MAS Metric: Sum of all rewards from Genesis to this block.
-    pub available_supply: u64,
+    pub available_supply: u32,
 
     /// The MAS Metric: Sum of all locked rewards from Genesis to this block.
-    pub locked_supply: u64,
+    pub locked_supply: u32,
 }
 
 pub trait Ledger {
@@ -39,4 +39,7 @@ pub trait Ledger {
 
     /// Retrieves metadata for the most recently added block in the ledger.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
+
+    /// Retrieves all unspent transaction outputs (UTXOs) associated with a transaction.
+    fn get_tx_utxos(&self, tx_id: &Hash) -> impl Iterator<Item = Output>;
 }

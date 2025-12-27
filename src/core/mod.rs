@@ -4,6 +4,7 @@ pub mod block;
 pub mod ledger;
 pub mod miner;
 pub mod transaction;
+mod vm;
 
 type PublicKey = [u8; 32];
 type Hash = [u8; 32];
@@ -51,9 +52,9 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
 /// - Base reward = 1 (pure powers of two)
 /// - exponent = floor(difficulty / SCALE_FACTOR)
 /// - reward = min(HARD_CAP, 2^exponent)
-pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
-    const HARD_CAP: u64 = 100_000;
-    const MIN_REWARD: u64 = 1;
+pub fn calculate_reward(mask: &[u8; 32]) -> u32 {
+    const HARD_CAP: u32 = 100_000;
+    const MIN_REWARD: u32 = 1;
     const SCALE_FACTOR: u32 = 4;
     const MAX_SAFE_EXPONENT: u32 = 127; // safe for shifting u128
 
@@ -81,7 +82,7 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     if reward128 >= u128::from(HARD_CAP) {
         HARD_CAP
     } else {
-        let r = reward128 as u64;
+        let r = reward128 as u32;
         if r < MIN_REWARD { MIN_REWARD } else { r }
     }
 }
