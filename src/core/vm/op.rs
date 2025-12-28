@@ -43,6 +43,8 @@ pub mod r#const {
     /// Pops `n` items, hashes them using Blake2s256, and pushes the result.
     pub const OP_MUL_HASH_B2: u8 = 0x36;
     pub const OP_GREATER: u8 = 0x33;
+    /// Concatenate the top two byte arrays on the stack.
+    pub const OP_CAT: u8 = 0x37;
     pub const OP_ADD: u8 = 0x34;
     pub const OP_SUB: u8 = 0x35;
 
@@ -114,6 +116,8 @@ pub enum Op {
     MulHashB2(u8),
     /// Pops a, b. Pushes 1 if b > a.
     Greater,
+    /// Concatenates the top two byte arrays on the stack.
+    Cat,
     /// Pops a, b. Pushes a + b.
     Add,
     /// Pops a, b. Pushes b − a.
@@ -177,6 +181,7 @@ impl core::convert::TryFrom<u8> for Op {
             OP_HASH_B2 => Ok(Op::HashB2),
             OP_EQUAL => Ok(Op::Equal),
             OP_GREATER => Ok(Op::Greater),
+            OP_CAT => Ok(Op::Cat),
             OP_ADD => Ok(Op::Add),
             OP_SUB => Ok(Op::Sub),
 
@@ -218,6 +223,7 @@ impl From<Op> for u8 {
             Op::HashB2 => OP_HASH_B2,
             Op::Equal => OP_EQUAL,
             Op::Greater => OP_GREATER,
+            Op::Cat => OP_CAT,
             Op::Add => OP_ADD,
             Op::Sub => OP_SUB,
 
@@ -258,6 +264,7 @@ mod tests {
             Op::HashB2,
             Op::Equal,
             Op::Greater,
+            Op::Cat,
             Op::Add,
             Op::Sub,
             Op::Verify,

@@ -1,19 +1,5 @@
 /*!
-VM runtime implementing opcode execution using the project's `Stack` type.
-
-This VM:
-- holds a reference to a `Ledger` implementation (read-only),
-- exposes `Vm::run(&self, code: &[u8]) -> Result<Vec<u128>, VmError>`,
-- decodes instructions via `Scanner` and executes them, manipulating a
-  persistent `Stack<'_, u128>` value.
-
-Notes:
-- This is a simple, deterministic implementation of the opcode semantics
-  described earlier. Some opcodes that normally require external data
-  (signatures, transaction inputs, hashing) are implemented as placeholders
-  or use ledger data where it makes sense (`Supply`, `Height`).
-- The `Stack` in `stack.rs` is used directly (persistent, zero-cost linked
-  list); pushes/pop/replace semantics follow that implementation's API.
+VM runtime implementing opcode execution.
 */
 
 mod op;
@@ -40,14 +26,14 @@ pub const fn p2pk_script() -> &'static [u8] {
         OP_CHECKSIG,
         OP_VERIFY,
         // --- Corrected Part 2 ---
-        OP_IN_COMM,     // Push the original commitment from the UTXO
-        OP_IN_DATA,     // Push the data (the "secret") from the UTXO
-        OP_PUSH_PK,     // Push the public key
-        OP_MUL_HASH_B2, // Calculate HASH(public_key, data)
-        2,              // Number of inputs to hash
-        OP_EQUAL,       // Compare: HASH(public_key, data) == original_commitment
-        OP_VERIFY,      // Fail if they are not equal
-        OP_RETURN,      // Succeed
+        OP_IN_COMM, // Push the original commitment from the UTXO
+        OP_IN_DATA, // Push the data (the "secret") from the UTXO
+        OP_PUSH_PK, // Push the public key
+        OP_CAT,     // Concatenate public_key and data
+        OP_HASH_B2, // Calculate HASH(concatenated data)
+        OP_EQUAL,   // Compare: HASH(public_key, data) == original_commitment
+        OP_VERIFY,  // Fail if they are not equal
+        OP_RETURN,  // Succeed
     ]
 }
 
@@ -61,10 +47,9 @@ pub const fn check_sig_script() -> &'static [u8] {
 pub enum ExecError {
     StackUnderflow,
     VerifyFailed,
-    EndOfProgram,
     TypeMismatch,
     FetchFailed,
-    UnknownOpcode, // fallback if something unexpected happens
+    Unimplemented, // fallback if something unexpected happens
 }
 
 /// Implement Display for ExecError to provide user-friendly error messages.
@@ -75,13 +60,12 @@ impl fmt::Display for ExecError {
                 write!(f, "Stack underflow: not enough items on the stack")
             }
             ExecError::VerifyFailed => write!(f, "Verification failed: condition not met"),
-            ExecError::EndOfProgram => write!(f, "End of program: no more instructions to execute"),
             ExecError::TypeMismatch => {
                 write!(f, "Type mismatch: unexpected value type on the stack")
             }
             ExecError::FetchFailed => write!(f, "Fetch failed: unable to retrieve required data"),
-            ExecError::UnknownOpcode => {
-                write!(f, "Unknown opcode: encountered an unrecognized instruction")
+            ExecError::Unimplemented => {
+                write!(f, "This opcode is not implemented yet")
             }
         }
     }
@@ -135,6 +119,12 @@ impl<'a> StackValue<'a> {
             StackValue::Bytes(slice) => OwnedStackValue::Bytes(slice.to_vec()),
         }
     }
+    fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            StackValue::Bytes(bytes) => bytes.to_vec(),
+            StackValue::U32(int) => int.to_be_bytes().to_vec(),
+        }
+    }
 }
 
 impl Default for OwnedStackValue {
@@ -183,24 +173,23 @@ impl<'a, L: Ledger> Vm<'a, L> {
         I: Iterator<Item = Op>,
     {
         if let Some(op) = scanner.next() {
-            let buf;
-            let stack = match op {
+            return match op {
                 // Literals / stack constants
-                Op::False => Ok(stack.push(0.into())),
-                Op::True => Ok(stack.push(1.into())),
+                Op::False => return self.exec(scanner, stack.push(0.into())),
+                Op::True => return self.exec(scanner, stack.push(1.into())),
 
                 // Stack manipulation
                 Op::Dup => {
                     // duplicate top item
                     match stack.get() {
-                        Some(&v) => Ok(stack.push(v)),
+                        Some(&v) => return self.exec(scanner, stack.push(v)),
                         None => Err(ExecError::StackUnderflow),
                     }
                 }
                 Op::Drop => {
                     // pop top
                     match stack.pop() {
-                        Some((_v, parent)) => Ok(*parent),
+                        Some((_v, parent)) => return self.exec(scanner, *parent),
                         None => Err(ExecError::StackUnderflow),
                     }
                 }
@@ -209,7 +198,7 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     if let Some((a, parent1)) = stack.pop() {
                         if let Some((b, parent2)) = parent1.pop() {
                             stack = parent2.push(b);
-                            Ok(stack.push(a))
+                            return self.exec(scanner, stack.push(a));
                         } else {
                             Err(ExecError::StackUnderflow)
                         }
@@ -219,8 +208,8 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 }
 
                 // Immediate pushes (scanner already produces `Op::Push(u32)` or `Op::PushByte`)
-                Op::PushU32(n) => Ok(stack.push(n.into())),
-                Op::PushByte(b) => Ok(stack.push((b as u32).into())),
+                Op::PushU32(n) => return self.exec(scanner, stack.push(n.into())),
+                Op::PushByte(b) => return self.exec(scanner, stack.push((b as u32).into())),
 
                 // Ledger / transaction related (placeholders or small integrations)
                 Op::InAmt => {
@@ -228,41 +217,43 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         .ledger
                         .get_utxo(&self.input.output_id)
                         .ok_or(ExecError::FetchFailed)?;
-                    Ok(stack.push(utxo.amount.into()))
+                    return self.exec(scanner, stack.push(utxo.amount.into()));
                 }
-                Op::InData | Op::InComm => {
+                Op::InData => {
                     let utxo = self
                         .ledger
                         .get_utxo(&self.input.output_id)
                         .ok_or(ExecError::FetchFailed)?;
-                    buf = match op {
-                        Op::InData => utxo.data,
-                        Op::InComm => utxo.commitment,
-                        _ => unreachable!(),
-                    };
-                    Ok(stack.push(StackValue::Bytes(&buf)))
+                    return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.data)));
+                }
+                Op::InComm => {
+                    let utxo = self
+                        .ledger
+                        .get_utxo(&self.input.output_id)
+                        .ok_or(ExecError::FetchFailed)?;
+                    return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.commitment)));
                 }
                 // The opcode should contain the index of the output to push.
-                Op::OutAmt(idx) | Op::OutData(idx) | Op::OutComm(idx) => {
-                    // Pops index then pushes requested field; we don't have outputs
-                    // context here, so implement safe behavior: use the provided index
-                    // and push 0 or empty as placeholder if out of bounds.
+                Op::OutAmt(idx) => {
                     let output = self
                         .new_outputs
                         .get(idx as usize)
                         .ok_or(ExecError::FetchFailed)?;
-                    match op {
-                        Op::OutAmt(_) => Ok(stack.push(StackValue::U32(output.amount))),
-                        Op::OutData(_) => {
-                            buf = output.data;
-                            Ok(stack.push(StackValue::Bytes(&buf)))
-                        }
-                        Op::OutComm(_) => {
-                            buf = output.commitment;
-                            Ok(stack.push(StackValue::Bytes(&buf)))
-                        }
-                        _ => unreachable!(),
-                    }
+                    return self.exec(scanner, stack.push(StackValue::U32(output.amount)));
+                }
+                Op::OutData(idx) => {
+                    let output = self
+                        .new_outputs
+                        .get(idx as usize)
+                        .ok_or(ExecError::FetchFailed)?;
+                    return self.exec(scanner, stack.push(StackValue::Bytes(&output.data)));
+                }
+                Op::OutComm(idx) => {
+                    let output = self
+                        .new_outputs
+                        .get(idx as usize)
+                        .ok_or(ExecError::FetchFailed)?;
+                    return self.exec(scanner, stack.push(StackValue::Bytes(&output.commitment)));
                 }
 
                 // Chain state
@@ -271,18 +262,22 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         .ledger
                         .get_last_block_metadata()
                         .map_or(0, |meta| meta.available_supply);
-                    Ok(stack.push(supply.into()))
+                    return self.exec(scanner, stack.push(supply.into()));
                 }
                 Op::Height => {
                     let height = self
                         .ledger
                         .get_last_block_metadata()
                         .map_or(0, |meta| meta.height);
-                    Ok(stack.push(height.into()))
+                    return self.exec(scanner, stack.push(height.into()));
                 }
 
-                Op::PushPk => Ok(stack.push(self.input.public_key.as_slice().into())),
-                Op::PushSig => Ok(stack.push(self.input.signature.as_slice().into())),
+                Op::PushPk => {
+                    return self.exec(scanner, stack.push(self.input.public_key.as_slice().into()));
+                }
+                Op::PushSig => {
+                    return self.exec(scanner, stack.push(self.input.signature.as_slice().into()));
+                }
 
                 // Crypto & hashing (placeholders)
                 Op::CheckSig => {
@@ -303,12 +298,12 @@ impl<'a, L: Ledger> Vm<'a, L> {
                                     .map_err(|_| ExecError::VerifyFailed)?;
 
                             let result = verifying_key.verify(&msg, &signature).is_ok();
-                            Ok(parent2.push((result as u32).into()))
+                            return self.exec(scanner, parent2.push((result as u32).into()));
                         } else {
-                            Err(ExecError::StackUnderflow)
+                            return Err(ExecError::StackUnderflow);
                         }
                     } else {
-                        Err(ExecError::TypeMismatch)
+                        return Err(ExecError::TypeMismatch);
                     }
                 }
                 Op::HashB2 => match stack.pop() {
@@ -319,8 +314,8 @@ impl<'a, L: Ledger> Vm<'a, L> {
                                 blake2::Blake2s256::digest(&data.to_be_bytes())
                             }
                         };
-                        buf = hash.try_into().unwrap();
-                        Ok(parent.push(StackValue::Bytes(&buf)))
+                        let hash_bytes: [u8; 32] = hash.try_into().unwrap();
+                        return self.exec(scanner, parent.push(StackValue::Bytes(&hash_bytes)));
                     }
                     None => Err(ExecError::StackUnderflow),
                 },
@@ -334,7 +329,7 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         }
                     }
                     let hash = hasher.finalize();
-                    buf = hash.try_into().unwrap();
+                    let buf: [u8; 32] = hash.try_into().unwrap();
                     return self.exec(scanner, iter.stack().push(StackValue::Bytes(&buf)));
                 }
 
@@ -342,14 +337,12 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 Op::Equal => match stack.pop() {
                     Some((a, parent1)) => match parent1.pop() {
                         Some((b, parent2)) => {
-                            println!("Processing value A: {:?}", a);
-                            println!("Processing value B: {:?}", b);
                             let res = (a == b) as u32;
-                            Ok(parent2.push(res.into()))
+                            return self.exec(scanner, parent2.push(res.into()));
                         }
-                        None => Err(ExecError::StackUnderflow),
+                        None => return Err(ExecError::StackUnderflow),
                     },
-                    None => Err(ExecError::StackUnderflow),
+                    None => return Err(ExecError::StackUnderflow),
                 },
                 // Pops a,b pushes 1 if b>a (consistent with earlier spec)
                 Op::Greater => match stack.pop() {
@@ -357,13 +350,29 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         Some((b, parent2)) => match (a, b) {
                             (StackValue::U32(a), StackValue::U32(b)) => {
                                 let res = (b > a) as u32;
-                                Ok(parent2.push(res.into()))
+                                return self.exec(scanner, parent2.push(res.into()));
                             }
-                            _ => Err(ExecError::TypeMismatch),
+                            _ => return Err(ExecError::TypeMismatch),
                         },
-                        None => Err(ExecError::StackUnderflow),
+                        None => return Err(ExecError::StackUnderflow),
                     },
-                    None => Err(ExecError::StackUnderflow),
+                    None => return Err(ExecError::StackUnderflow),
+                },
+                Op::Cat => match stack.pop() {
+                    Some((a, parent1)) => match parent1.pop() {
+                        Some((b, parent2)) => {
+                            let a_bytes = a.to_bytes();
+                            let b_bytes = b.to_bytes();
+                            let mut concatenated =
+                                Vec::with_capacity(a_bytes.len() + b_bytes.len());
+                            concatenated.extend_from_slice(&a_bytes);
+                            concatenated.extend_from_slice(&b_bytes);
+                            return self
+                                .exec(scanner, parent2.push(StackValue::Bytes(&concatenated)));
+                        }
+                        None => return Err(ExecError::StackUnderflow),
+                    },
+                    None => return Err(ExecError::StackUnderflow),
                 },
                 Op::Add => {
                     // Pops a,b pushes b+a
@@ -371,13 +380,13 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         Some((StackValue::U32(a), parent1)) => match parent1.pop() {
                             Some((StackValue::U32(b), parent2)) => {
                                 let sum = b.wrapping_add(a);
-                                Ok(parent2.push(sum.into()))
+                                return self.exec(scanner, parent2.push(sum.into()));
                             }
-                            None => Err(ExecError::StackUnderflow),
-                            _ => Err(ExecError::TypeMismatch),
+                            None => return Err(ExecError::StackUnderflow),
+                            _ => return Err(ExecError::TypeMismatch),
                         },
-                        None => Err(ExecError::StackUnderflow),
-                        _ => Err(ExecError::TypeMismatch),
+                        None => return Err(ExecError::StackUnderflow),
+                        _ => return Err(ExecError::TypeMismatch),
                     }
                 }
                 Op::Sub => {
@@ -386,13 +395,13 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         Some((StackValue::U32(a), parent1)) => match parent1.pop() {
                             Some((StackValue::U32(b), parent2)) => {
                                 let sum = b.wrapping_sub(a);
-                                Ok(parent2.push(sum.into()))
+                                return self.exec(scanner, parent2.push(sum.into()));
                             }
-                            None => Err(ExecError::StackUnderflow),
-                            _ => Err(ExecError::TypeMismatch),
+                            None => return Err(ExecError::StackUnderflow),
+                            _ => return Err(ExecError::TypeMismatch),
                         },
-                        None => Err(ExecError::StackUnderflow),
-                        _ => Err(ExecError::TypeMismatch),
+                        None => return Err(ExecError::StackUnderflow),
+                        _ => return Err(ExecError::TypeMismatch),
                     }
                 }
 
@@ -400,32 +409,31 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 Op::Verify => {
                     // Pops top item. If 0 -> entire transaction (script) invalid.
                     match stack.pop() {
-                        Some((StackValue::U32(0), _)) => Err(ExecError::VerifyFailed),
-                        Some((_, parent)) => Ok(*parent),
-                        None => Err(ExecError::StackUnderflow),
+                        Some((StackValue::U32(0), _)) => return Err(ExecError::VerifyFailed),
+                        Some((_, parent)) => return self.exec(scanner, *parent),
+                        None => return Err(ExecError::StackUnderflow),
                     }
                 }
-                Op::Return => {
-                    return Ok(stack.get().map(StackValue::to_owned).unwrap_or_default());
-                }
-                Op::If => stack
-                    .pop()
-                    .map_or(Err(ExecError::StackUnderflow), |(cond, parent)| {
-                        // We skip the entire if block if the condition is false.
-                        if matches!(cond, StackValue::U32(0)) {
-                            scanner.find(|op| matches!(op, Op::EndIf));
-                            // We return the parent stack after skipping the if block.
-                            // Could be used for another if block.
-                            Ok(stack)
-                        } else if matches!(cond, StackValue::Bytes(_)) {
-                            Err(ExecError::TypeMismatch)
-                        } else {
-                            Ok(*parent)
+                Op::Return => Ok(stack.get().map(StackValue::to_owned).unwrap_or_default()),
+                Op::If => {
+                    match stack.pop() {
+                        Some((cond, parent)) => {
+                            if matches!(cond, StackValue::U32(0)) {
+                                scanner.find(|op| matches!(op, Op::EndIf));
+                                // Skip the if block and recurse with the parent stack.
+                                return self.exec(scanner, stack);
+                            } else if matches!(cond, StackValue::Bytes(_)) {
+                                return Err(ExecError::TypeMismatch);
+                            } else {
+                                // Recurse with the parent stack.
+                                return self.exec(scanner, *parent);
+                            }
                         }
-                    }),
-                Op::EndIf => Ok(stack),
-            }?;
-            self.exec(scanner, stack)
+                        None => return Err(ExecError::StackUnderflow),
+                    }
+                }
+                Op::EndIf => return self.exec(scanner, stack),
+            };
         } else {
             return Ok(stack.get().map(StackValue::to_owned).unwrap_or_default());
         }
@@ -1044,6 +1052,24 @@ mod tests {
         assert_eq!(
             vm.run(&code),
             Ok(OwnedStackValue::Bytes(expected_hash.to_vec()))
+        );
+    }
+    #[test]
+    fn test_op_cat() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [
+            OP_PUSH_BYTE,
+            1,
+            OP_PUSH_BYTE,
+            2,
+            OP_CAT, // Concatenate the top two byte arrays
+        ];
+        assert_eq!(
+            vm.run(&code),
+            Ok(OwnedStackValue::Bytes(vec![0, 0, 0, 2, 0, 0, 0, 1]))
         );
     }
 }
