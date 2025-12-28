@@ -385,6 +385,18 @@ impl<'a, L: Ledger> Vm<'a, L> {
                                 let res = (b > a) as u8;
                                 return self.exec(scanner, parent2.push(res.into()));
                             }
+                            (StackValue::U32(a), StackValue::U32(b)) => {
+                                let res = (b > a) as u8;
+                                return self.exec(scanner, parent2.push(res.into()));
+                            }
+                            (StackValue::U8(a), StackValue::U32(b)) => {
+                                let res = (b > a as u32) as u8;
+                                return self.exec(scanner, parent2.push(res.into()));
+                            }
+                            (StackValue::U32(a), StackValue::U8(b)) => {
+                                let res = (b as u32 > a) as u8;
+                                return self.exec(scanner, parent2.push(res.into()));
+                            }
                             _ => return Err(ExecError::TypeMismatch),
                         },
                         None => return Err(ExecError::StackUnderflow),
