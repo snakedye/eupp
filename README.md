@@ -48,8 +48,7 @@ Consensus in AUPP is defined by the transaction graph itself rather than an exte
 1. **Lead UTXO:** The output at index 0 of the previous block defines the next challenge.  
 2. **The Mask:** The commitment of this Lead UTXO acts as a bitmask for the next miner.  
 3. Mining Condition: A miner must find an Ed25519 public key ($pk$) such that:
-
-$$(mask \& pk) = 0$$
+$$(\text{mask} \land \text{pk}) = 0$$
 
 To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
 
