@@ -1,6 +1,6 @@
-use super::calculate_reward;
 use super::vm::{ExecError, Vm, check_sig_script, p2pk_script};
 use super::{Hash, PublicKey, Version, create_commitment, ledger::Ledger};
+use super::{Signature, VirtualSize, calculate_reward};
 use blake2::{Blake2s256, Digest};
 use std::error;
 use std::fmt;
@@ -11,13 +11,25 @@ pub struct Transaction {
     pub outputs: Vec<Output>,
 }
 
-impl fmt::Debug for Transaction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Transaction")
-            .field("inputs", &self.inputs)
-            .field("outputs", &self.outputs)
-            .finish()
-    }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OutputId {
+    pub tx_hash: TransactionHash,
+    pub index: u8,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Input {
+    pub output_id: OutputId,
+    pub signature: Signature,
+    pub public_key: PublicKey,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Output {
+    pub version: Version,
+    pub amount: u32,
+    pub data: Hash,
+    pub commitment: Hash,
 }
 
 pub type TransactionHash = Hash;
@@ -77,11 +89,12 @@ impl fmt::Display for TransactionError {
 
 impl error::Error for TransactionError {}
 
-#[derive(Clone, PartialEq, Eq)]
-pub struct Input {
-    pub output_id: OutputId,
-    pub signature: Vec<u8>,
-    pub public_key: PublicKey,
+impl VirtualSize for Input {
+    fn vsize(&self) -> usize {
+        // the pk and sig can be pruned after validation
+        let witness_len = self.public_key.len() + self.signature.len();
+        self.output_id.vsize() + witness_len / 2
+    }
 }
 
 impl fmt::Debug for Input {
@@ -94,10 +107,10 @@ impl fmt::Debug for Input {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OutputId {
-    pub tx_hash: TransactionHash,
-    pub index: usize,
+impl VirtualSize for OutputId {
+    fn vsize(&self) -> usize {
+        1 + self.tx_hash.len()
+    }
 }
 
 impl fmt::Debug for OutputId {
@@ -109,12 +122,11 @@ impl fmt::Debug for OutputId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Output {
-    pub version: Version,
-    pub amount: u32,
-    pub data: Hash,
-    pub commitment: Hash,
+impl VirtualSize for Output {
+    fn vsize(&self) -> usize {
+        let size = 1 + std::mem::size_of::<u64>() + self.data.len() + self.commitment.len();
+        if self.amount > 0 { size } else { size / 2 } // 0 amount outputs can be pruned after validation
+    }
 }
 
 impl fmt::Debug for Output {
@@ -129,7 +141,7 @@ impl fmt::Debug for Output {
 }
 
 impl OutputId {
-    pub fn new(tx_hash: TransactionHash, index: usize) -> Self {
+    pub fn new(tx_hash: TransactionHash, index: u8) -> Self {
         Self { tx_hash, index }
     }
 }
@@ -146,6 +158,26 @@ impl Ord for OutputId {
 impl PartialOrd for OutputId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl fmt::Debug for Transaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Transaction")
+            .field("inputs", &self.inputs)
+            .field("outputs", &self.outputs)
+            .finish()
+    }
+}
+
+impl VirtualSize for Transaction {
+    fn vsize(&self) -> usize {
+        self.inputs.iter().map(|input| input.vsize()).sum::<usize>()
+            + self
+                .outputs
+                .iter()
+                .map(|output| output.vsize())
+                .sum::<usize>()
     }
 }
 
@@ -334,7 +366,7 @@ mod tests {
         let txid: [u8; 32] = [9u8; 32];
         let output_id = OutputId {
             tx_hash: txid,
-            index: 1usize,
+            index: 1,
         };
 
         let pk = [1u8; 32];
@@ -368,7 +400,7 @@ mod tests {
                 tx_hash: [1u8; 32],
                 index: 0,
             },
-            signature: vec![],
+            signature: [0; 64],
             public_key: [2u8; 32],
         };
         let output = Output::new_v1(10, &[0; 32], &[3u8; 32]);
@@ -434,7 +466,7 @@ mod tests {
                 tx_hash: funding_txid,
                 index: 0,
             },
-            signature: vec![],
+            signature: [0; 64],
             public_key: [11u8; 32], // we use a random public key
         };
 
@@ -465,7 +497,7 @@ mod tests {
         let txid: [u8; 32] = [9u8; 32];
         let output_id = OutputId {
             tx_hash: txid,
-            index: 1usize,
+            index: 1,
         };
 
         let outputs = vec![Output::new_v1(10, &public_key, &[5u8; 32])];
@@ -516,7 +548,7 @@ mod tests {
         let new_outputs = vec![Output::new_v1(150, &mask, &data)]; // Any commitment will work with the mask chosen before
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
-        let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+        let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
             signature,
@@ -576,7 +608,7 @@ mod tests {
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
-        let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+        let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
             signature,
@@ -636,7 +668,7 @@ mod tests {
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
-        let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+        let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
             signature,
@@ -688,7 +720,7 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
-        let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+        let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
             signature,
@@ -738,11 +770,11 @@ mod tests {
         for i in 0..=max_allowed {
             let utxo_id = OutputId {
                 tx_hash: funding_txid,
-                index: i,
+                index: i as u8,
             };
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
             let sighash = sighash(Blake2s256::new(), &utxo_id, [].iter().copied());
-            let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+            let signature = signing_key.sign(&sighash).to_bytes();
             inputs.push(Input {
                 output_id: utxo_id,
                 signature,
@@ -809,7 +841,7 @@ mod tests {
                     tx_hash: funding_txid,
                     index: 0,
                 },
-                signature: vec![],
+                signature: [0; 64],
                 public_key: [11u8; 32],
             }],
             outputs,

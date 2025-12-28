@@ -6,7 +6,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use crate::core::transaction::{Input, Output, OutputId, Transaction};
 
 use super::{
-    calculate_reward, create_commitment,
+    calculate_reward,
     ledger::Ledger,
     matches_mask,
     transaction::{TransactionHash, sighash},
@@ -30,15 +30,8 @@ pub fn build_mining_tx_deterministic(
     max_attempts: usize,
     master_seed: [u8; 32],
 ) -> Option<(SigningKey, Transaction)> {
-    // Get previous minting tx/out
-    // let prev_mint_tx = prev_block.transactions.get(0)?;
-    // let lead_utxo = prev_mint_tx.outputs.get(0)?;
-
     // Mask is stored in previous minting output's commitment
     let mask = lead_utxo.commitment;
-
-    // Compute previous txid
-    // let prev_txid = prev_mint_tx.hash::<Blake2s256>();
 
     // Convert mask to array ref
     let mask_arr: [u8; 32] = mask;
@@ -98,7 +91,7 @@ pub fn build_mining_tx_deterministic(
                     tx_hash: *prev_tx_hash,
                     index: 0,
                 },
-                signature: signature.to_bytes().to_vec(),
+                signature: signature.to_bytes(),
                 public_key: pk_bytes,
             };
 
@@ -138,7 +131,6 @@ pub fn build_next_block<L: Ledger>(
     })?;
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let (signing_key, mining_tx) = build_mining_tx(prev_tx_hash, &lead_utxo, max_attempts)?;
-    println!("{:#?}", mining_tx);
 
     // Create a new block.
     let mut block =
@@ -153,7 +145,10 @@ pub fn build_next_block<L: Ledger>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::transaction::{Output, Transaction};
+    use crate::core::{
+        create_commitment,
+        transaction::{Output, Transaction},
+    };
     use blake2::Blake2s256;
     use ed25519_dalek::{Signature, VerifyingKey};
     use std::time::{Duration, Instant};

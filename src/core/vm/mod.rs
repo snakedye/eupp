@@ -551,7 +551,7 @@ mod tests {
     fn default_input() -> Input {
         Input {
             output_id: OutputId::new([0; 32], 0),
-            signature: vec![0; 64],
+            signature: [0; 64],
             public_key: [0; 32],
         }
     }
@@ -637,7 +637,7 @@ mod tests {
         let output_id = OutputId::new(TransactionHash::default(), 0);
         let input = Input {
             output_id,
-            signature: vec![0; 64],
+            signature: [0; 64],
             public_key: [0; 32],
         };
         let utxo = Output {
@@ -668,7 +668,7 @@ mod tests {
         };
         let input = Input {
             output_id,
-            signature: vec![0; 64],
+            signature: [0; 64],
             public_key: [0; 32],
         };
         let mut ledger = MockLedger::default();
@@ -693,7 +693,7 @@ mod tests {
         };
         let input = Input {
             output_id,
-            signature: vec![0; 64],
+            signature: [0; 64],
             public_key: [0; 32],
         };
         let mut ledger = MockLedger::default();
@@ -813,7 +813,7 @@ mod tests {
         public_key[10] = 10;
         let input = Input {
             output_id: OutputId::new([0; 32], 0),
-            signature: vec![0; 64],
+            signature: [0; 64],
             public_key,
         };
         let ledger = MockLedger::default();
@@ -825,7 +825,7 @@ mod tests {
 
     #[test]
     fn test_op_push_sig() {
-        let mut signature = vec![0u8; 64];
+        let mut signature = [0_u8; 64];
         signature[10] = 10;
         let input = Input {
             output_id: OutputId::new([0; 32], 0),
@@ -856,7 +856,7 @@ mod tests {
 
         let input = Input {
             output_id,
-            signature: signature.to_bytes().to_vec(),
+            signature: signature.to_bytes(),
             public_key: verifying_key.to_bytes(),
         };
 
@@ -883,7 +883,7 @@ mod tests {
 
         let input = Input {
             output_id,
-            signature: signature.to_bytes().to_vec(),
+            signature: signature.to_bytes(),
             public_key: verifying_key.to_bytes(),
         };
 
@@ -906,7 +906,7 @@ mod tests {
         };
         let input = Input {
             output_id,
-            signature: vec![0; 64],
+            signature: [0; 64],
             public_key: [0; 32],
         };
         let mut ledger = MockLedger::default();
@@ -1057,7 +1057,7 @@ mod tests {
         let signature = signing_key.sign(&msg);
         let input = Input {
             output_id,
-            signature: signature.to_bytes().to_vec(),
+            signature: signature.to_bytes(),
             public_key: verifying_key.to_bytes(),
         };
 
@@ -1084,7 +1084,7 @@ mod tests {
 
         let input = Input {
             output_id,
-            signature: signature.to_bytes().to_vec(),
+            signature: signature.to_bytes(),
             public_key: verifying_key.to_bytes(),
         };
 

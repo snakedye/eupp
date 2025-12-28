@@ -47,7 +47,7 @@ impl InMemoryLedger {
             let tx_id = tx.hash::<Blake2s256>();
             for (i, output) in tx.outputs.iter().enumerate() {
                 self.utxo_set
-                    .insert(OutputId::new(tx_id, i), output.clone());
+                    .insert(OutputId::new(tx_id, i as u8), output.clone());
             }
         }
         Ok(())

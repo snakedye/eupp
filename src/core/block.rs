@@ -1,5 +1,5 @@
 use super::{
-    Hash, Version,
+    Hash, Version, VirtualSize,
     ledger::Ledger,
     transaction::{Output, Transaction, TransactionHash},
 };
@@ -23,7 +23,16 @@ pub struct BlockHeader {
 /// Represents errors that can occur when validating blocks.
 pub enum BlockError {
     InvalidBlockHash(String),
+    InvalidBlockSize(usize),
     TransactionError(super::transaction::TransactionError),
+}
+
+impl VirtualSize for Block {
+    fn vsize(&self) -> usize {
+        size_of::<Version>()
+            + self.prev_block_hash.len()
+            + self.transactions.iter().map(|tx| tx.vsize()).sum::<usize>()
+    }
 }
 
 impl BlockHeader {
@@ -61,7 +70,6 @@ impl Block {
 
     pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), BlockError> {
         // We only check if there's a previous block
-        //
         // Otherwise this block is the genesis block and we don't need to verify it
         if ledger.get_last_block_metadata().is_some() {
             let previous_block = ledger.get_block_metadata(&self.prev_block_hash).ok_or(
@@ -76,6 +84,12 @@ impl Block {
                     "Previous block hash mismatch".to_string(),
                 ));
             }
+        }
+
+        let vsize = self.vsize();
+        // Check if the block virtual size exceeds 1 megabyte
+        if vsize > 1_000_000 {
+            return Err(BlockError::InvalidBlockSize(vsize));
         }
 
         self.transactions

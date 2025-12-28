@@ -8,6 +8,7 @@ mod vm;
 
 pub type PublicKey = [u8; 32];
 pub type Hash = [u8; 32];
+pub type Signature = [u8; 64];
 
 /// Protocol version used throughout the codebase.
 ///
@@ -19,6 +20,12 @@ pub enum Version {
     V1 = 0,
     /// Second protocol revision.
     V2 = 1,
+}
+
+/// Trait for calculating the virtual size of a type.
+pub trait VirtualSize {
+    /// Returns the virtual size of the type in bytes.
+    fn vsize(&self) -> usize;
 }
 
 // Helpers
