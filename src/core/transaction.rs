@@ -38,6 +38,11 @@ pub enum TransactionError {
 
     /// Specific coinbase (mint) validation failed (mask/amount rules).
     CoinbaseValidation { reason: String },
+
+    /// Number of inputs exceeds maximum allowed.
+    TooManyInputs(usize),
+    /// Number of outputs exceeds maximum allowed.
+    TooManyOutputs(usize),
 }
 
 impl fmt::Display for TransactionError {
@@ -60,6 +65,12 @@ impl fmt::Display for TransactionError {
                 total_input, total_output
             ),
             CoinbaseValidation { reason } => write!(f, "Coinbase validation failed: {}", reason),
+            TooManyInputs(max_allowed) => {
+                write!(f, "Too many inputs: maximum allowed is {}", max_allowed)
+            }
+            TooManyOutputs(max_allowed) => {
+                write!(f, "Too many outputs: maximum allowed is {}", max_allowed)
+            }
         }
     }
 }
@@ -168,7 +179,16 @@ impl Transaction {
     /// Verifies the transaction against the ledger.
     pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
         let mut total_input_amount = 0_u32;
+        let max_allowed = u8::MAX as usize;
         let is_genesis = ledger.get_last_block_metadata().is_none();
+
+        if self.inputs.len() > max_allowed {
+            return Err(TransactionError::TooManyInputs(max_allowed));
+        }
+        if self.outputs.len() > max_allowed {
+            return Err(TransactionError::TooManyOutputs(max_allowed));
+        }
+
         for (i, input) in self.inputs.iter().enumerate() {
             let vm = Vm::new(ledger, &input, &self.outputs);
             // Lookup referenced utxo
@@ -684,6 +704,121 @@ mod tests {
         match spending_tx.verify(&ledger) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
+        }
+    }
+    #[test]
+    fn test_transaction_verify_too_many_inputs() {
+        // Create a ledger with one block containing a funding transaction
+        let mut ledger = InMemoryLedger::new();
+
+        // Build funding (previous) transaction that creates a UTXO
+        let data = [12u8; 32];
+        let mask = [0u8; 32];
+        let reward = calculate_reward(&mask);
+
+        let funding_tx = Transaction {
+            inputs: vec![],
+            outputs: vec![Output {
+                version: Version::V1,
+                amount: reward,
+                data,
+                commitment: mask,
+            }],
+        };
+        let funding_txid = funding_tx.hash::<Blake2s256>();
+
+        // Create a block containing the funding transaction and add to ledger
+        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        block.transactions.push(funding_tx);
+        ledger.add_block(block).unwrap();
+
+        // Generate inputs exceeding the maximum allowed
+        let max_allowed = u8::MAX as usize;
+        let mut inputs = Vec::new();
+        for i in 0..=max_allowed {
+            let utxo_id = OutputId {
+                tx_hash: funding_txid,
+                index: i,
+            };
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+            let sighash = sighash(Blake2s256::new(), &utxo_id, [].iter().copied());
+            let signature = signing_key.sign(&sighash).to_bytes().to_vec();
+            inputs.push(Input {
+                output_id: utxo_id,
+                signature,
+                public_key: signing_key.verifying_key().to_bytes(),
+            });
+        }
+
+        let spending_tx = Transaction {
+            inputs,
+            outputs: vec![Output {
+                version: Version::V1,
+                amount: reward,
+                data,
+                commitment: mask,
+            }],
+        };
+
+        // Now verification should fail due to too many inputs
+        match spending_tx.verify(&ledger) {
+            Err(TransactionError::TooManyInputs(max)) if max == max_allowed => {}
+            other => panic!("Expected TooManyInputs error, got: {:?}", other),
+        }
+    }
+    #[test]
+    fn test_transaction_verify_too_many_outputs() {
+        // Create a ledger with one block containing a funding transaction
+        let mut ledger = InMemoryLedger::new();
+
+        // Build funding (previous) transaction that creates a UTXO
+        let data = [12u8; 32];
+        let mask = [0u8; 32];
+        let reward = calculate_reward(&mask);
+
+        let funding_tx = Transaction {
+            inputs: vec![],
+            outputs: vec![Output {
+                version: Version::V1,
+                amount: reward,
+                data,
+                commitment: mask,
+            }],
+        };
+        let funding_txid = funding_tx.hash::<Blake2s256>();
+
+        // Create a block containing the funding transaction and add to ledger
+        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        block.transactions.push(funding_tx);
+        ledger.add_block(block).unwrap();
+
+        // Generate outputs exceeding the maximum allowed
+        let max_allowed = u8::MAX as usize;
+        let outputs: Vec<Output> = (0..=max_allowed)
+            .map(|_| Output {
+                version: Version::V1,
+                amount: reward,
+                data,
+                commitment: mask,
+            })
+            .collect();
+
+        let spending_tx = Transaction {
+            inputs: vec![Input {
+                output_id: OutputId {
+                    tx_hash: funding_txid,
+                    index: 0,
+                },
+                signature: vec![],
+                public_key: [11u8; 32],
+            }],
+            outputs,
+        };
+
+        // Now verification should fail due to too many outputs
+        match spending_tx.verify(&ledger) {
+            Err(TransactionError::TooManyOutputs(max)) if max == max_allowed => {}
+            other => panic!("Expected TooManyOutputs error, got: {:?}", other),
         }
     }
 }
