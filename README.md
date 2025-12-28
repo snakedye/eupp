@@ -49,7 +49,7 @@ Consensus in AUPP is defined by the transaction graph itself rather than an exte
 2. **The Mask:** The commitment of this Lead UTXO acts as a bitmask for the next miner.  
 3. Mining Condition: A miner must find an Ed25519 public key ($pk$) such that:
 
-   $$(mask & pk) == 0$$
+$$(mask \& pk) = 0$$
 
 To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
 
@@ -57,7 +57,7 @@ To successfully mine the block, the miner must create a transaction that **spend
 
 The difficulty ($D$) is determined by the number of 1-bits in the mask. The reward grows exponentially to incentivize solving harder masks:
 
-$$R(D) = min(1_000_000, 2^{\lfloor D/4 \rfloor})$$
+$$R(D) = \min(1000000, 2^{\lfloor D/4 \rfloor})$$
 
 **5. Security and Economic Properties**
 
