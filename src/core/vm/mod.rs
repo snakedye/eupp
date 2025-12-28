@@ -32,9 +32,28 @@ use super::transaction::{Input, Output};
 
 /// Returns a standard pay-to-public-key script.
 /// This script expects a valid signature to be provided in the input.
-pub const fn p2pk_script() -> [u8; 5] {
+pub const fn p2pk_script() -> &'static [u8] {
     use op::r#const::*;
-    [OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG, OP_VERIFY, OP_RETURN]
+    &[
+        OP_PUSH_PK,
+        OP_PUSH_SIG,
+        OP_CHECKSIG,
+        OP_VERIFY,
+        // --- Corrected Part 2 ---
+        OP_IN_COMM,     // Push the original commitment from the UTXO
+        OP_IN_DATA,     // Push the data (the "secret") from the UTXO
+        OP_PUSH_PK,     // Push the public key
+        OP_MUL_HASH_B2, // Calculate HASH(public_key, data)
+        2,              // Number of inputs to hash
+        OP_EQUAL,       // Compare: HASH(public_key, data) == original_commitment
+        OP_VERIFY,      // Fail if they are not equal
+        OP_RETURN,      // Succeed
+    ]
+}
+
+pub const fn check_sig_script() -> &'static [u8] {
+    use op::r#const::*;
+    &[OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG, OP_VERIFY]
 }
 
 /// VM-level execution error kinds.
@@ -75,10 +94,16 @@ pub struct Vm<'a, L> {
     ledger: &'a L,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StackValue<'a> {
     U32(u32),
-    HashRef(&'a [u8]),
+    Bytes(&'a [u8]),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedStackValue {
+    U32(u32),
+    Bytes(Vec<u8>),
 }
 
 impl<'a> From<u32> for StackValue<'a> {
@@ -89,7 +114,7 @@ impl<'a> From<u32> for StackValue<'a> {
 
 impl<'a> From<&'a [u8]> for StackValue<'a> {
     fn from(value: &'a [u8]) -> Self {
-        StackValue::HashRef(value)
+        StackValue::Bytes(value)
     }
 }
 
@@ -97,12 +122,28 @@ impl<'a> Into<u32> for StackValue<'a> {
     fn into(self) -> u32 {
         match self {
             StackValue::U32(value) => value,
-            StackValue::HashRef(h) => h.as_ptr() as u32,
+            StackValue::Bytes(h) => h.as_ptr() as u32,
+            _ => panic!("Cannot convert Stream to u32"),
         }
     }
 }
 
-type VmStack<'a> = Stack<'a, StackValue<'a>>;
+impl<'a> StackValue<'a> {
+    fn to_owned(&self) -> OwnedStackValue {
+        match self {
+            StackValue::U32(value) => OwnedStackValue::U32(*value),
+            StackValue::Bytes(slice) => OwnedStackValue::Bytes(slice.to_vec()),
+        }
+    }
+}
+
+impl Default for OwnedStackValue {
+    fn default() -> Self {
+        Self::U32(0)
+    }
+}
+
+type VmStack<'a, 'b> = Stack<'a, StackValue<'b>>;
 
 impl<'a, L: Ledger> Vm<'a, L> {
     /// Create a VM that references the provided ledger.
@@ -119,7 +160,7 @@ impl<'a, L: Ledger> Vm<'a, L> {
     /// Returns a `u128` representing the exit code of the VM stack (top
     /// element first) after execution completes successfully. On error, a
     /// `VmError` is returned.
-    pub fn run(&self, code: &[u8]) -> Result<u32, ExecError> {
+    pub fn run(&self, code: &[u8]) -> Result<OwnedStackValue, ExecError> {
         let scanner = Scanner::new(code);
         // start with an empty persistent stack
         let stack: VmStack = Stack::new();
@@ -132,7 +173,12 @@ impl<'a, L: Ledger> Vm<'a, L> {
     }
 
     /// Execute the provided bytecode.
-    fn exec<I>(&self, scanner: &mut I, mut stack: VmStack) -> Result<u32, ExecError>
+    // This function needs a huge refactor to make it more readable and maintainable.
+    fn exec<'i, I>(
+        &self,
+        scanner: &'i mut I,
+        mut stack: VmStack,
+    ) -> Result<OwnedStackValue, ExecError>
     where
         I: Iterator<Item = Op>,
     {
@@ -194,55 +240,45 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         Op::InComm => utxo.commitment,
                         _ => unreachable!(),
                     };
-                    Ok(stack.push(StackValue::HashRef(&buf)))
+                    Ok(stack.push(StackValue::Bytes(&buf)))
                 }
-                Op::OutAmt | Op::OutData | Op::OutComm => {
+                // The opcode should contain the index of the output to push.
+                Op::OutAmt(idx) | Op::OutData(idx) | Op::OutComm(idx) => {
                     // Pops index then pushes requested field; we don't have outputs
-                    // context here, so implement safe behavior: pop index (if present)
-                    // and push 0 as placeholder.
-                    match stack.pop() {
-                        Some((idx, parent)) => {
-                            let index: u32 = idx.into();
-                            let output = self
-                                .new_outputs
-                                .get(index as usize)
-                                .ok_or(ExecError::FetchFailed)?;
-                            match op {
-                                Op::OutAmt => Ok(parent.push(StackValue::U32(output.amount))),
-                                Op::OutData => {
-                                    buf = output.data;
-                                    Ok(parent.push(StackValue::HashRef(&buf)))
-                                }
-                                Op::OutComm => {
-                                    buf = output.commitment;
-                                    Ok(parent.push(StackValue::HashRef(&buf)))
-                                }
-                                _ => unreachable!(),
-                            }
+                    // context here, so implement safe behavior: use the provided index
+                    // and push 0 or empty as placeholder if out of bounds.
+                    let output = self
+                        .new_outputs
+                        .get(idx as usize)
+                        .ok_or(ExecError::FetchFailed)?;
+                    match op {
+                        Op::OutAmt(_) => Ok(stack.push(StackValue::U32(output.amount))),
+                        Op::OutData(_) => {
+                            buf = output.data;
+                            Ok(stack.push(StackValue::Bytes(&buf)))
                         }
-                        None => Err(ExecError::StackUnderflow),
+                        Op::OutComm(_) => {
+                            buf = output.commitment;
+                            Ok(stack.push(StackValue::Bytes(&buf)))
+                        }
+                        _ => unreachable!(),
                     }
                 }
-                // Op::TxFee => {
-                //     // Push total fee - unknown here, push 0 placeholder.
-                //     unimplemented!()
-                // }
 
                 // Chain state
                 Op::Supply => {
-                    // If ledger provides last block metadata, push available_supply
                     let supply = self
                         .ledger
                         .get_last_block_metadata()
-                        .map(|meta| meta.available_supply.into());
-                    Ok(stack.push(supply.unwrap_or(0).into()))
+                        .map_or(0, |meta| meta.available_supply);
+                    Ok(stack.push(supply.into()))
                 }
                 Op::Height => {
                     let height = self
                         .ledger
                         .get_last_block_metadata()
-                        .map(|meta| meta.height.into());
-                    Ok(stack.push(height.unwrap_or(0).into()))
+                        .map_or(0, |meta| meta.height);
+                    Ok(stack.push(height.into()))
                 }
 
                 Op::PushPk => Ok(stack.push(self.input.public_key.as_slice().into())),
@@ -251,8 +287,8 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 // Crypto & hashing (placeholders)
                 Op::CheckSig => {
                     // Pops pk, sig (top is sig, next is pk)
-                    if let Some((StackValue::HashRef(sig), parent1)) = stack.pop() {
-                        if let Some((StackValue::HashRef(pk), parent2)) = parent1.pop() {
+                    if let Some((StackValue::Bytes(sig), parent1)) = stack.pop() {
+                        if let Some((StackValue::Bytes(pk), parent2)) = parent1.pop() {
                             let signature = ed25519_dalek::Signature::from_slice(sig)
                                 .map_err(|_| ExecError::VerifyFailed)?;
                             let msg = sighash(
@@ -275,22 +311,39 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         Err(ExecError::TypeMismatch)
                     }
                 }
-                Op::HashB2 => {
-                    match stack.pop() {
-                        Some((StackValue::HashRef(data), parent)) => {
-                            // TODO: Implement hashing
-                            buf = blake2::Blake2s256::digest(data).try_into().unwrap();
-                            Ok(parent.push(StackValue::HashRef(&buf)))
-                        }
-                        None => Err(ExecError::StackUnderflow),
-                        _ => Err(ExecError::TypeMismatch),
+                Op::HashB2 => match stack.pop() {
+                    Some((data, parent)) => {
+                        let hash = match data {
+                            StackValue::Bytes(data) => blake2::Blake2s256::digest(data),
+                            StackValue::U32(data) => {
+                                blake2::Blake2s256::digest(&data.to_be_bytes())
+                            }
+                        };
+                        buf = hash.try_into().unwrap();
+                        Ok(parent.push(StackValue::Bytes(&buf)))
                     }
+                    None => Err(ExecError::StackUnderflow),
+                },
+                Op::MulHashB2(n) => {
+                    let mut iter = stack.iter();
+                    let mut hasher = blake2::Blake2s256::new();
+                    for value in iter.by_ref().take(n as usize) {
+                        match value {
+                            StackValue::Bytes(data) => hasher.update(data),
+                            StackValue::U32(data) => hasher.update(&data.to_be_bytes()),
+                        }
+                    }
+                    let hash = hasher.finalize();
+                    buf = hash.try_into().unwrap();
+                    return self.exec(scanner, iter.stack().push(StackValue::Bytes(&buf)));
                 }
 
                 // Comparisons / arithmetic
                 Op::Equal => match stack.pop() {
                     Some((a, parent1)) => match parent1.pop() {
                         Some((b, parent2)) => {
+                            println!("Processing value A: {:?}", a);
+                            println!("Processing value B: {:?}", b);
                             let res = (a == b) as u32;
                             Ok(parent2.push(res.into()))
                         }
@@ -298,19 +351,20 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     },
                     None => Err(ExecError::StackUnderflow),
                 },
-                Op::Greater => {
-                    // Pops a,b pushes 1 if b>a (consistent with earlier spec)
-                    match stack.pop() {
-                        Some((a, parent1)) => match parent1.pop() {
-                            Some((b, parent2)) => {
+                // Pops a,b pushes 1 if b>a (consistent with earlier spec)
+                Op::Greater => match stack.pop() {
+                    Some((a, parent1)) => match parent1.pop() {
+                        Some((b, parent2)) => match (a, b) {
+                            (StackValue::U32(a), StackValue::U32(b)) => {
                                 let res = (b > a) as u32;
                                 Ok(parent2.push(res.into()))
                             }
-                            None => Err(ExecError::StackUnderflow),
+                            _ => Err(ExecError::TypeMismatch),
                         },
                         None => Err(ExecError::StackUnderflow),
-                    }
-                }
+                    },
+                    None => Err(ExecError::StackUnderflow),
+                },
                 Op::Add => {
                     // Pops a,b pushes b+a
                     match stack.pop() {
@@ -345,45 +399,35 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 // Flow control / verification
                 Op::Verify => {
                     // Pops top item. If 0 -> entire transaction (script) invalid.
-                    stack
-                        .pop()
-                        .map_or(Err(ExecError::StackUnderflow), |(v, parent)| {
-                            if matches!(v, StackValue::U32(0)) {
-                                Err(ExecError::VerifyFailed)
-                            } else {
-                                Ok(*parent)
-                            }
-                        })
+                    match stack.pop() {
+                        Some((StackValue::U32(0), _)) => Err(ExecError::VerifyFailed),
+                        Some((_, parent)) => Ok(*parent),
+                        None => Err(ExecError::StackUnderflow),
+                    }
                 }
                 Op::Return => {
-                    // Immediately terminate the program: return current stack to
-                    let code = stack
-                        .get()
-                        .copied()
-                        .map(StackValue::into)
-                        .unwrap_or_default();
-                    return Ok(code);
+                    return Ok(stack.get().map(StackValue::to_owned).unwrap_or_default());
                 }
-                Op::If => {
-                    // Pop condition. Skip next instruction if zero.
-                    stack
-                        .pop()
-                        .map_or(Err(ExecError::StackUnderflow), |(cond, parent)| {
-                            if matches!(cond, StackValue::U32(0)) {
-                                scanner.next();
-                            }
+                Op::If => stack
+                    .pop()
+                    .map_or(Err(ExecError::StackUnderflow), |(cond, parent)| {
+                        // We skip the entire if block if the condition is false.
+                        if matches!(cond, StackValue::U32(0)) {
+                            scanner.find(|op| matches!(op, Op::EndIf));
+                            // We return the parent stack after skipping the if block.
+                            // Could be used for another if block.
+                            Ok(stack)
+                        } else if matches!(cond, StackValue::Bytes(_)) {
+                            Err(ExecError::TypeMismatch)
+                        } else {
                             Ok(*parent)
-                        })
-                }
+                        }
+                    }),
+                Op::EndIf => Ok(stack),
             }?;
             self.exec(scanner, stack)
         } else {
-            let code = stack
-                .get()
-                .copied()
-                .map(StackValue::into)
-                .unwrap_or_default();
-            return Ok(code);
+            return Ok(stack.get().map(StackValue::to_owned).unwrap_or_default());
         }
     }
 }
@@ -449,7 +493,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_FALSE];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -458,7 +502,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_TRUE];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -467,7 +511,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 123, OP_DUP, OP_ADD];
-        assert_eq!(vm.run(&code), Ok(246));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(246)));
     }
 
     #[test]
@@ -476,7 +520,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_DROP];
-        assert_eq!(vm.run(&code), Ok(123));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(123)));
     }
 
     #[test]
@@ -485,7 +529,10 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_SWAP, OP_SUB];
-        assert_eq!(vm.run(&code), Ok(200u32.wrapping_sub(123)));
+        assert_eq!(
+            vm.run(&code),
+            Ok(OwnedStackValue::U32(200u32.wrapping_sub(123)))
+        );
     }
 
     #[test]
@@ -495,7 +542,7 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
         let val = 12345u32.to_le_bytes();
         let code = [OP_PUSH_U32, val[0], val[1], val[2], val[3]];
-        assert_eq!(vm.run(&code), Ok(12345));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(12345)));
     }
 
     #[test]
@@ -505,7 +552,7 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
         let val = 100u8;
         let code = [OP_PUSH_BYTE, val];
-        assert_eq!(vm.run(&code), Ok(100));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(val as u32)));
     }
 
     #[test]
@@ -527,7 +574,7 @@ mod tests {
 
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_IN_AMT];
-        assert_eq!(vm.run(&code), Ok(100));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100)));
     }
 
     #[test]
@@ -552,7 +599,7 @@ mod tests {
 
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_IN_DATA, OP_DUP, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -578,10 +625,10 @@ mod tests {
         let new_outputs = [utxo];
         let vm = create_vm(&ledger, &input, &new_outputs);
         let code = [OP_IN_COMM, OP_DUP, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
 
         let code_vs_data = [OP_IN_COMM, OP_IN_DATA, OP_EQUAL];
-        assert_eq!(vm.run(&code_vs_data), Ok(0));
+        assert_eq!(vm.run(&code_vs_data), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -600,9 +647,8 @@ mod tests {
 
         let new_outputs = [utxo];
         let vm = create_vm(&ledger, &input, &new_outputs);
-        let val = 0u32.to_le_bytes();
-        let code = [OP_PUSH_U32, val[0], val[1], val[2], val[3], OP_OUT_AMT];
-        assert_eq!(vm.run(&code), Ok(200));
+        let code = [u8::from(Op::OutAmt(0)), 0];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(200)));
     }
 
     #[test]
@@ -624,18 +670,8 @@ mod tests {
         let new_outputs = [utxo];
         let vm = create_vm(&ledger, &input, &new_outputs);
 
-        let val = 0u32.to_le_bytes();
-        let code = [
-            OP_PUSH_U32,
-            val[0],
-            val[1],
-            val[2],
-            val[3],
-            OP_OUT_DATA,
-            OP_DUP,
-            OP_EQUAL,
-        ];
-        assert_eq!(vm.run(&code), Ok(1));
+        let code = [u8::from(Op::OutData(0)), 0, OP_DUP, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -657,18 +693,8 @@ mod tests {
         let new_outputs = [utxo];
         let vm = create_vm(&ledger, &input, &new_outputs);
 
-        let val = 0u32.to_le_bytes();
-        let code = [
-            OP_PUSH_U32,
-            val[0],
-            val[1],
-            val[2],
-            val[3],
-            OP_OUT_COMM,
-            OP_DUP,
-            OP_EQUAL,
-        ];
-        assert_eq!(vm.run(&code), Ok(1));
+        let code = [u8::from(Op::OutComm(0)), 0, OP_DUP, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -685,10 +711,10 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
 
         let code = [OP_SUPPLY];
-        assert_eq!(vm.run(&code), Ok(100_000));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100_000)));
 
         let code = [OP_HEIGHT];
-        assert_eq!(vm.run(&code), Ok(50));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(50)));
     }
 
     #[test]
@@ -698,10 +724,10 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
 
         let code = [OP_SUPPLY];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
 
         let code = [OP_HEIGHT];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -717,7 +743,7 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
 
         let code = [OP_PUSH_PK, OP_DUP, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -733,7 +759,7 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
 
         let code = [OP_PUSH_SIG, OP_DUP, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -759,7 +785,7 @@ mod tests {
 
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -786,7 +812,7 @@ mod tests {
 
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_PK, OP_PUSH_SIG, OP_CHECKSIG];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -811,7 +837,7 @@ mod tests {
         let vm = create_vm(&ledger, &input, &[]);
 
         let code = [OP_IN_DATA, OP_HASH_B2, OP_IN_COMM, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -820,10 +846,13 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 123, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
 
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_EQUAL];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
+
+        let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_EQUAL];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -834,15 +863,15 @@ mod tests {
 
         // b > a -> 456 > 123
         let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_GREATER];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
 
         // b > a -> 123 > 456
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_GREATER];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
 
         // b > a -> 123 > 123
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 123, OP_GREATER];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -865,7 +894,7 @@ mod tests {
             val2[3],
             OP_ADD,
         ];
-        assert_eq!(vm.run(&code), Ok(30));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(30)));
     }
 
     #[test]
@@ -874,7 +903,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 30, OP_PUSH_BYTE, 10, OP_SUB];
-        assert_eq!(vm.run(&code), Ok(20));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(20)));
     }
 
     #[test]
@@ -883,7 +912,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 1, OP_VERIFY, OP_TRUE];
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
     }
 
     #[test]
@@ -901,7 +930,7 @@ mod tests {
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);
         let code = [OP_PUSH_BYTE, 200, OP_RETURN, OP_TRUE];
-        assert_eq!(vm.run(&code), Ok(200));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(200)));
     }
 
     #[test]
@@ -918,19 +947,19 @@ mod tests {
 
         let code = [OP_PUSH_BYTE, val, OP_IF, OP_TRUE];
 
-        assert_eq!(vm.run(&code), Ok(1));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(1)));
 
         // Condition is 0, so OP_TRUE is skipped. The next op is... nothing.
         // It should end with an empty stack, which is an error.
         let val = 0u8;
         let code = [OP_PUSH_BYTE, val, OP_IF, OP_TRUE];
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
 
         // Condition is 0, so OP_TRUE is skipped, OP_FALSE is executed.
         let val = 0u8;
         let code = [OP_PUSH_BYTE, val, OP_IF, OP_TRUE, OP_FALSE];
 
-        assert_eq!(vm.run(&code), Ok(0));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -941,23 +970,24 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let ledger = MockLedger::default();
-
+        let mut ledger = MockLedger::default();
+        ledger.utxos.insert(
+            output_id,
+            Output::new_v1(100, &verifying_key.to_bytes(), &[0; 32]),
+        );
         let msg = sighash(blake2::Blake2s256::new(), &output_id, [].iter().copied());
 
         let signature = signing_key.sign(&msg);
         let input = Input {
             output_id,
-
             signature: signature.to_bytes().to_vec(),
-
             public_key: verifying_key.to_bytes(),
         };
 
         let vm = create_vm(&ledger, &input, &[]);
         let script = p2pk_script().to_vec();
 
-        assert_eq!(vm.run(&script), Ok(0));
+        assert_eq!(vm.run(&script), Ok(OwnedStackValue::U32(0)));
     }
 
     #[test]
@@ -985,5 +1015,35 @@ mod tests {
         let script = p2pk_script();
 
         assert_eq!(vm.run(&script), Err(ExecError::VerifyFailed));
+    }
+
+    #[test]
+    fn test_op_mul_hash_b2() {
+        let ledger = MockLedger::default();
+        let input = default_input();
+        let vm = create_vm(&ledger, &input, &[]);
+
+        let code = [
+            OP_PUSH_BYTE,
+            1, // Push first item
+            OP_PUSH_BYTE,
+            2, // Push second item
+            OP_PUSH_BYTE,
+            3, // Push third item
+            OP_MUL_HASH_B2,
+            3, // Hash the top 3 items
+        ];
+
+        // Execute the VM and check the result
+        let mut hasher = blake2::Blake2s256::new();
+        hasher.update(&3_u32.to_be_bytes());
+        hasher.update(&2_u32.to_be_bytes());
+        hasher.update(&1_u32.to_be_bytes());
+        let expected_hash = hasher.finalize();
+
+        assert_eq!(
+            vm.run(&code),
+            Ok(OwnedStackValue::Bytes(expected_hash.to_vec()))
+        );
     }
 }

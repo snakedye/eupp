@@ -11,41 +11,12 @@ next single byte and yields `Op::Push8(value)`. When it encounters
 corresponding `Op` by using `Op::try_from`.
 */
 
-use core::fmt;
-
-use super::op::{OP_HEIGHT, OP_PUSH_BYTE, OP_PUSH_U32, OP_SUPPLY, Op};
-
-/// Errors that can occur while scanning a byte stream of opcodes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScannerError {
-    /// The opcode byte was unknown.
-    UnknownOpcode(u8),
-    /// The stream ended before the expected payload bytes could be read.
-    UnexpectedEof,
-}
-
-impl fmt::Display for ScannerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            ScannerError::UnknownOpcode(b) => write!(f, "unknown opcode byte: 0x{:02x}", b),
-            ScannerError::UnexpectedEof => write!(f, "unexpected end of byte stream"),
-        }
-    }
-}
-
-impl std::error::Error for ScannerError {}
+use super::op::{
+    OP_HEIGHT, OP_MUL_HASH_B2, OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_U32,
+    OP_SUPPLY, Op,
+};
 
 /// An iterator that reads opcodes (and their payloads) from a byte slice.
-///
-/// Example:
-/// ```rust
-/// use core::convert::TryInto;
-/// use crate::core::vm::scanner::Scanner;
-/// use crate::core::vm::op::{OP_PUSH_1, Op};
-///
-/// let mut s = Scanner::new(&[OP_PUSH_1, 0x05]);
-/// assert_eq!(s.next(), Some(Ok(Op::Push8(0x05))));
-/// ```
 pub struct Scanner<'a> {
     bytes: &'a [u8],
     idx: usize,
@@ -57,7 +28,7 @@ impl<'a> Scanner<'a> {
         Scanner { bytes, idx: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.idx)
     }
 
@@ -112,17 +83,38 @@ impl<'a> Iterator for Scanner<'a> {
                     None
                 }
             },
-            OP_SUPPLY => Some(Op::Supply),
-            OP_HEIGHT => Some(Op::Height),
-            other => {
-                // For other single-byte opcodes rely on Op::try_from which maps
-                // known opcode bytes to `Op`. If it's unknown, translate the
-                // decode error to `ScannerError::UnknownOpcode`.
-                match Op::try_from(other) {
-                    Ok(op) => Some(op),
-                    Err(_) => None,
+            OP_MUL_HASH_B2 => match self.read_u8() {
+                Some(v) => Some(Op::MulHashB2(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
                 }
-            }
+            },
+            OP_SUPPLY => Some(Op::Supply),
+            OP_OUT_AMT => match self.read_u8() {
+                Some(v) => Some(Op::OutAmt(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
+            OP_OUT_DATA => match self.read_u8() {
+                Some(v) => Some(Op::OutData(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
+            OP_OUT_COMM => match self.read_u8() {
+                Some(v) => Some(Op::OutComm(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
+            OP_HEIGHT => Some(Op::Height),
+            // For other single-byte opcodes rely on Op::try_from
+            other => Op::try_from(other).ok(),
         }
     }
 }
@@ -151,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_sequence() {
+    fn scan_sequence_with_out_ops() {
         let bytes = [
             OP_TRUE,
             OP_PUSH_U32,
@@ -162,13 +154,28 @@ mod tests {
             OP_SUPPLY,
             OP_HEIGHT,
             OP_FALSE,
+            OP_OUT_AMT,
+            0x01,
+            OP_OUT_DATA,
+            0x02,
+            OP_OUT_COMM,
+            0x03,
         ];
 
         let collected: Vec<Op> = Scanner::new(&bytes).collect();
         let v = collected;
         assert_eq!(
             v,
-            vec![Op::True, Op::PushU32(1), Op::Supply, Op::Height, Op::False]
+            vec![
+                Op::True,
+                Op::PushU32(1),
+                Op::Supply,
+                Op::Height,
+                Op::False,
+                Op::OutAmt(1),
+                Op::OutData(2),
+                Op::OutComm(3),
+            ]
         );
     }
 

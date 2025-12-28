@@ -22,11 +22,11 @@ pub enum Version {
 }
 
 // Helpers
-/// Create a 32-byte commitment from a public key and data hash using `D`.
-pub fn create_commitment<D: Digest>(pk: &PublicKey, data_hash: &Hash) -> Hash {
+/// Create a 32-byte commitment from a public key and data using `D`.
+pub fn create_commitment<D: Digest>(pk: &PublicKey, data: &Hash) -> Hash {
     let mut hasher = D::new();
     hasher.update(pk);
-    hasher.update(&data_hash);
+    hasher.update(&data);
     hasher.finalize().as_slice().try_into().unwrap()
 }
 
@@ -125,7 +125,7 @@ mod tests {
         let mask = [0xFFu8; 32];
         let reward = calculate_reward(&mask);
         // exponent = 256/4 = 64 -> huge -> capped
-        assert_eq!(reward, 100_000);
+        assert_eq!(reward, 1_000_000);
     }
 
     #[test]

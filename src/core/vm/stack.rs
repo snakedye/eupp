@@ -64,7 +64,10 @@ impl<'a, T: Debug> Debug for Stack<'a, T> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StackIter<'a, T>(&'a Stack<'a, T>);
 
-impl<T> StackIter<'_, T> {
+impl<'a, T> StackIter<'a, T> {
+    pub fn new(stack: &'a Stack<T>) -> Self {
+        Self(stack)
+    }
     pub fn stack(&self) -> &Stack<T> {
         self.0
     }

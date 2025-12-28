@@ -1,14 +1,23 @@
 use super::calculate_reward;
-use super::vm::{ExecError, Vm, p2pk_script};
+use super::vm::{ExecError, Vm, check_sig_script, p2pk_script};
 use super::{Hash, PublicKey, Version, create_commitment, ledger::Ledger};
 use blake2::{Blake2s256, Digest};
 use std::error;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
+}
+
+impl fmt::Debug for Transaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Transaction")
+            .field("inputs", &self.inputs)
+            .field("outputs", &self.outputs)
+            .finish()
+    }
 }
 
 pub type TransactionHash = Hash;
@@ -57,25 +66,55 @@ impl fmt::Display for TransactionError {
 
 impl error::Error for TransactionError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Input {
     pub output_id: OutputId,
     pub signature: Vec<u8>,
     pub public_key: PublicKey,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+impl fmt::Debug for Input {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Input")
+            .field("output_id", &self.output_id)
+            .field("signature", &hex::encode(&self.signature))
+            .field("public_key", &hex::encode(&self.public_key))
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputId {
     pub tx_hash: TransactionHash,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl fmt::Debug for OutputId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutputId")
+            .field("tx_hash", &hex::encode(&self.tx_hash))
+            .field("index", &self.index)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Output {
     pub version: Version,
     pub amount: u32,
     pub data: Hash,
     pub commitment: Hash,
+}
+
+impl fmt::Debug for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Output")
+            .field("version", &self.version)
+            .field("amount", &self.amount)
+            .field("data", &hex::encode(&self.data))
+            .field("commitment", &hex::encode(&self.commitment))
+            .finish()
+    }
 }
 
 impl OutputId {
@@ -108,17 +147,17 @@ impl Transaction {
     /// Calculates the hash of the transaction.
     pub fn hash<D: Digest>(&self) -> TransactionHash {
         let mut hasher = D::new();
-        hasher.update(&self.inputs.len().to_le_bytes());
+        hasher.update(&self.inputs.len().to_be_bytes());
         for input in &self.inputs {
             hasher.update(&input.output_id.tx_hash);
-            hasher.update(&input.output_id.index.to_le_bytes());
+            hasher.update(&input.output_id.index.to_be_bytes());
             hasher.update(&input.signature);
             hasher.update(&input.public_key);
         }
-        hasher.update(&self.outputs.len().to_le_bytes());
+        hasher.update(&self.outputs.len().to_be_bytes());
         for output in &self.outputs {
             hasher.update(&[output.version as u8]);
-            hasher.update(&output.amount.to_le_bytes());
+            hasher.update(&output.amount.to_be_bytes());
             hasher.update(&output.data);
             hasher.update(&output.commitment);
         }
@@ -129,61 +168,59 @@ impl Transaction {
     /// Verifies the transaction against the ledger.
     pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
         let mut total_input_amount = 0_u32;
-        let is_coinbase = ledger.get_last_block_metadata().is_none();
+        let is_genesis = ledger.get_last_block_metadata().is_none();
         for (i, input) in self.inputs.iter().enumerate() {
+            let vm = Vm::new(ledger, &input, &self.outputs);
             // Lookup referenced utxo
             let utxo = ledger
                 .get_utxo(&input.output_id)
                 .ok_or(TransactionError::InvalidInput {
                     txid: input.output_id.tx_hash,
                 })?;
-
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
 
             // Coinbase (mint) specific validation: input index 0 is the lead/mint UTXO
             if i < 1 {
                 let mask = &utxo.commitment;
                 let max_reward = calculate_reward(mask);
+                let new_supply = self.outputs.get(0).map(|o| o.amount).unwrap_or_default();
                 // Check if the public key matches the mask of the commitment
                 if !super::matches_mask(mask, &input.public_key) {
                     return Err(TransactionError::CoinbaseValidation {
                         reason: "public key does not satisfy mint mask".into(),
                     });
                 // The new output must have at least the previous amount minus MAX_MINT_AMOUNT.
-                } else if self.outputs.get(0).map(|o| o.amount)
-                    < Some(utxo.amount.saturating_sub(max_reward))
-                {
+                } else if new_supply < utxo.amount.saturating_sub(max_reward) {
                     return Err(TransactionError::CoinbaseValidation {
                         reason: format!(
-                            "coinbase output too small: got {}, required >= {}",
-                            self.outputs.get(0).map(|o| o.amount).unwrap_or(0),
+                            "new supply too small: got {}, required >= {}",
+                            new_supply,
                             utxo.amount.saturating_sub(max_reward)
                         ),
                     });
                 }
-            // Regular transactions
-            } else if !utxo.verify(&input.public_key) {
-                // Regular UTXO verification: commitment must match provided public key
-                return Err(TransactionError::InvalidOutput(input.output_id));
-            }
 
-            let vm = Vm::new(ledger, &input, &self.outputs);
-            match utxo.version {
-                Version::V1 => {
-                    // V1 transactions use a simple P2PK script
-                    vm.run(&p2pk_script())
-                        .map_err(|err| TransactionError::Execution(err))?;
-                }
-                Version::V2 => {
-                    // V2 transactions can use a more complex script
-                    vm.run(&utxo.data)
-                        .map_err(|err| TransactionError::Execution(err))?;
+                // We also check the signature of the coinbase transaction
+                vm.run(&check_sig_script())
+                    .map_err(|err| TransactionError::Execution(err))?;
+            } else {
+                match utxo.version {
+                    Version::V1 => {
+                        // V1 transactions use a simple P2PK script
+                        vm.run(&p2pk_script())
+                            .map_err(|err| TransactionError::Execution(err))?;
+                    }
+                    Version::V2 => {
+                        // V2 transactions can use a more complex script
+                        vm.run(&utxo.data)
+                            .map_err(|err| TransactionError::Execution(err))?;
+                    }
                 }
             }
         }
 
         let total_output_amount = self.outputs.iter().map(|output| output.amount).sum();
-        if !is_coinbase && total_output_amount > total_input_amount {
+        if !is_genesis && total_output_amount > total_input_amount {
             return Err(TransactionError::InsufficientInputAmount {
                 total_input: total_input_amount,
                 total_output: total_output_amount,
@@ -226,7 +263,7 @@ where
     I: Iterator<Item = Output>,
 {
     hasher.update(&output_id.tx_hash);
-    hasher.update(&output_id.index.to_le_bytes());
+    hasher.update(&output_id.index.to_be_bytes());
     for Output {
         version,
         amount,
@@ -235,7 +272,7 @@ where
     } in outputs
     {
         hasher.update(&[version as u8]);
-        hasher.update(&amount.to_le_bytes());
+        hasher.update(&amount.to_be_bytes());
         hasher.update(&data);
         hasher.update(&commitment);
     }
@@ -291,10 +328,10 @@ mod tests {
         // Compute expected via manual hasher
         let mut hasher = Blake2s256::new();
         hasher.update(&txid);
-        hasher.update(&output_id.index.to_le_bytes());
+        hasher.update(&output_id.index.to_be_bytes());
         for o in &outputs {
             hasher.update(&[o.version as u8]);
-            hasher.update(&o.amount.to_le_bytes());
+            hasher.update(&o.amount.to_be_bytes());
             hasher.update(&o.data);
             hasher.update(&o.commitment);
         }
@@ -324,17 +361,17 @@ mod tests {
 
         // Manual hash
         let mut hasher = Blake2s256::new();
-        hasher.update(&tx.inputs.len().to_le_bytes());
+        hasher.update(&tx.inputs.len().to_be_bytes());
         for inp in &tx.inputs {
             hasher.update(&inp.output_id.tx_hash);
-            hasher.update(&inp.output_id.index.to_le_bytes());
+            hasher.update(&inp.output_id.index.to_be_bytes());
             hasher.update(&inp.signature);
             hasher.update(&inp.public_key);
         }
-        hasher.update(&tx.outputs.len().to_le_bytes());
+        hasher.update(&tx.outputs.len().to_be_bytes());
         for out in &tx.outputs {
             hasher.update(&[out.version as u8]);
-            hasher.update(&out.amount.to_le_bytes());
+            hasher.update(&out.amount.to_be_bytes());
             hasher.update(&out.data);
             hasher.update(&out.commitment);
         }
@@ -628,13 +665,8 @@ mod tests {
             tx_hash: funding_txid,
             index: 0,
         };
-        let new_outputs = vec![Output {
-            version: Version::V2,
-            amount: reward,
-            data,
-            commitment: mask,
-        }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
         let signature = signing_key.sign(&sighash).to_bytes().to_vec();
         let input = Input {

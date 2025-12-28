@@ -40,6 +40,8 @@ pub mod r#const {
     pub const OP_CHECKSIG: u8 = 0x30;
     pub const OP_HASH_B2: u8 = 0x31;
     pub const OP_EQUAL: u8 = 0x32;
+    /// Pops `n` items, hashes them using Blake2s256, and pushes the result.
+    pub const OP_MUL_HASH_B2: u8 = 0x36;
     pub const OP_GREATER: u8 = 0x33;
     pub const OP_ADD: u8 = 0x34;
     pub const OP_SUB: u8 = 0x35;
@@ -47,6 +49,7 @@ pub mod r#const {
     pub const OP_VERIFY: u8 = 0x40;
     pub const OP_RETURN: u8 = 0x41;
     pub const OP_IF: u8 = 0x42;
+    pub const OP_END_IF: u8 = 0x43;
 }
 
 // Re-export the constants so existing imports like `use crate::core::vm::op::OP_TRUE`
@@ -86,13 +89,11 @@ pub enum Op {
     /// Pushes the Commitment of the UTXO being spent.
     InComm,
     /// Pops index, pushes Amount of Output[index].
-    OutAmt,
+    OutAmt(u8),
     /// Pops index, pushes Data Hash of Output[index].
-    OutData,
+    OutData(u8),
     /// Pops index, pushes Commitment of Output[index].
-    OutComm,
-    /// Pushes the total fee (∑In − ∑Out) of the transaction.
-    // TxFee,
+    OutComm(u8),
     /// Pushes the current total supply of the currency onto the stack.
     Supply,
     /// Pushes the current block height onto the stack.
@@ -109,6 +110,8 @@ pub enum Op {
     HashB2,
     /// Pops two items, pushes 1 if equal, 0 otherwise.
     Equal,
+    /// Pops `n` items, hashes them using Blake2s256, and pushes the result.
+    MulHashB2(u8),
     /// Pops a, b. Pushes 1 if b > a.
     Greater,
     /// Pops a, b. Pushes a + b.
@@ -122,6 +125,8 @@ pub enum Op {
     Return,
     /// Executes subsequent code only if the top item is non-zero.
     If,
+    /// Mark the end of an if block.
+    EndIf,
 }
 
 /// Error returned when decoding an opcode byte into an `Op`.
@@ -159,10 +164,9 @@ impl core::convert::TryFrom<u8> for Op {
             OP_IN_AMT => Ok(Op::InAmt),
             OP_IN_DATA => Ok(Op::InData),
             OP_IN_COMM => Ok(Op::InComm),
-            OP_OUT_AMT => Ok(Op::OutAmt),
-            OP_OUT_DATA => Ok(Op::OutData),
-            OP_OUT_COMM => Ok(Op::OutComm),
-            // OP_TX_FEE => Ok(Op::TxFee),
+            OP_OUT_AMT => Ok(Op::OutAmt(0)), // placeholder; Scanner must read 1 byte after opcode
+            OP_OUT_DATA => Ok(Op::OutData(0)), // placeholder; Scanner must read 1 byte after opcode
+            OP_OUT_COMM => Ok(Op::OutComm(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_SUPPLY => Ok(Op::Supply),
             OP_HEIGHT => Ok(Op::Height),
 
@@ -177,8 +181,10 @@ impl core::convert::TryFrom<u8> for Op {
             OP_SUB => Ok(Op::Sub),
 
             OP_VERIFY => Ok(Op::Verify),
+            OP_MUL_HASH_B2 => Ok(Op::MulHashB2(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_RETURN => Ok(Op::Return),
             OP_IF => Ok(Op::If),
+            OP_END_IF => Ok(Op::EndIf),
 
             other => Err(OpDecodeError(other)),
         }
@@ -199,10 +205,9 @@ impl From<Op> for u8 {
             Op::InAmt => OP_IN_AMT,
             Op::InData => OP_IN_DATA,
             Op::InComm => OP_IN_COMM,
-            Op::OutAmt => OP_OUT_AMT,
-            Op::OutData => OP_OUT_DATA,
-            Op::OutComm => OP_OUT_COMM,
-            // Op::TxFee => OP_TX_FEE,
+            Op::OutAmt(_) => OP_OUT_AMT,
+            Op::OutData(_) => OP_OUT_DATA,
+            Op::OutComm(_) => OP_OUT_COMM,
             Op::Supply => OP_SUPPLY,
             Op::Height => OP_HEIGHT,
 
@@ -217,8 +222,10 @@ impl From<Op> for u8 {
             Op::Sub => OP_SUB,
 
             Op::Verify => OP_VERIFY,
+            Op::MulHashB2(_) => OP_MUL_HASH_B2,
             Op::Return => OP_RETURN,
             Op::If => OP_IF,
+            Op::EndIf => OP_END_IF,
         }
     }
 }
@@ -240,10 +247,9 @@ mod tests {
             Op::InAmt,
             Op::InData,
             Op::InComm,
-            Op::OutAmt,
-            Op::OutData,
-            Op::OutComm,
-            // Op::TxFee,
+            Op::OutAmt(0),
+            Op::OutData(0),
+            Op::OutComm(0),
             Op::Supply,
             Op::Height,
             Op::PushPk,
@@ -257,7 +263,9 @@ mod tests {
             Op::Verify,
             Op::Return,
             Op::If,
+            Op::EndIf,
             Op::PushByte(0),
+            Op::MulHashB2(0),
         ];
 
         for &op in &all {
@@ -291,15 +299,29 @@ mod tests {
     }
 
     #[test]
-    fn supply_and_height_bytes() {
+    fn supply_height_and_out_ops_bytes() {
         let s: u8 = Op::Supply.into();
         let h: u8 = Op::Height.into();
+        let out_amt: u8 = Op::OutAmt(42).into();
+        let out_data: u8 = Op::OutData(42).into();
+        let out_comm: u8 = Op::OutComm(42).into();
+
         assert_eq!(s, OP_SUPPLY);
+        assert_eq!(out_amt, OP_OUT_AMT);
+        assert_eq!(out_data, OP_OUT_DATA);
+        assert_eq!(out_comm, OP_OUT_COMM);
         assert_eq!(h, OP_HEIGHT);
 
         let ps = Op::try_from(s).unwrap();
         let ph = Op::try_from(h).unwrap();
+        let parsed_out_amt = Op::try_from(out_amt).unwrap();
+        let parsed_out_data = Op::try_from(out_data).unwrap();
+        let parsed_out_comm = Op::try_from(out_comm).unwrap();
+
         assert_eq!(ps, Op::Supply);
+        assert_eq!(parsed_out_amt, Op::OutAmt(0));
+        assert_eq!(parsed_out_data, Op::OutData(0));
+        assert_eq!(parsed_out_comm, Op::OutComm(0));
         assert_eq!(ph, Op::Height);
     }
 
@@ -309,4 +331,12 @@ mod tests {
         let err = Op::try_from(0x99_u8).unwrap_err();
         assert_eq!(err, OpDecodeError(0x99));
     }
+}
+
+#[test]
+fn mul_hash_b2_tryfrom_returns_placeholder() {
+    // TryFrom only inspects the opcode byte; it cannot read the following
+    // payload byte. We expect a placeholder MulHashB2(0).
+    let parsed = Op::try_from(OP_MUL_HASH_B2).expect("should parse mul_hash_b2 opcode");
+    assert_eq!(parsed, Op::MulHashB2(0));
 }

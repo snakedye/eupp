@@ -138,6 +138,7 @@ pub fn build_next_block<L: Ledger>(
     })?;
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let (signing_key, mining_tx) = build_mining_tx(prev_tx_hash, &lead_utxo, max_attempts)?;
+    println!("{:#?}", mining_tx);
 
     // Create a new block.
     let mut block =
