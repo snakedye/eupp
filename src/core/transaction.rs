@@ -1,5 +1,5 @@
 use super::vm::{ExecError, Vm, check_sig_script, p2pk_script};
-use super::{Hash, PublicKey, Version, create_commitment, ledger::Ledger};
+use super::{Hash, PublicKey, Version, commit, ledger::Ledger};
 use super::{Signature, VirtualSize, calculate_reward};
 use blake2::{Blake2s256, Digest};
 use std::error;
@@ -232,6 +232,9 @@ impl Transaction {
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
 
             // Coinbase (mint) specific validation: input index 0 is the lead/mint UTXO
+            //
+            // ERROR
+            // THIS VALIDATION SHOULD BE IN BLOCK BECAUSE THE TRANSACTION DOES NOT KNOW ITS INDEX
             if i < 1 {
                 let mask = &utxo.commitment;
                 let max_reward = calculate_reward(mask);
@@ -284,7 +287,7 @@ impl Transaction {
 
 impl Output {
     pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
-        let commitment = create_commitment::<Blake2s256>(public_key, data);
+        let commitment = commit::<Blake2s256>(public_key, data);
         Self {
             version: Version::V1,
             amount,
@@ -294,7 +297,7 @@ impl Output {
     }
 
     pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
-        let commitment = create_commitment::<Blake2s256>(public_key, script);
+        let commitment = commit::<Blake2s256>(public_key, script);
         Self {
             version: Version::V2,
             amount,
@@ -304,7 +307,7 @@ impl Output {
     }
 
     pub fn verify(&self, public_key: &[u8; 32]) -> bool {
-        create_commitment::<Blake2s256>(public_key, &self.data) == self.commitment
+        commit::<Blake2s256>(public_key, &self.data) == self.commitment
     }
 }
 

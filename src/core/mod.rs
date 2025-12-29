@@ -30,7 +30,7 @@ pub trait VirtualSize {
 
 // Helpers
 /// Create a 32-byte commitment from a public key and data using `D`.
-pub fn create_commitment<D: Digest>(pk: &PublicKey, data: &Hash) -> Hash {
+pub fn commit<D: Digest>(pk: &PublicKey, data: &Hash) -> Hash {
     let mut hasher = D::new();
     hasher.update(pk);
     hasher.update(&data);

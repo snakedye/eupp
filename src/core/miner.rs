@@ -146,7 +146,7 @@ pub fn build_next_block<L: Ledger>(
 mod tests {
     use super::*;
     use crate::core::{
-        create_commitment,
+        commit,
         transaction::{Output, Transaction},
     };
     use blake2::Blake2s256;
@@ -186,8 +186,7 @@ mod tests {
 
         // Miner reward commitment should be the commitment of the revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment =
-            create_commitment::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
+        let expected_commitment = commit::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
@@ -286,8 +285,7 @@ mod tests {
 
         // Miner reward commitment should match revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment =
-            create_commitment::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
+        let expected_commitment = commit::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
