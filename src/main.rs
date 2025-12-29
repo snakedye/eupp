@@ -21,21 +21,20 @@ fn main() {
     // The coinbase transaction contains the minting UTXO at output index 0.
     // We'll place a simple mask in the `commitment` field of the minting output.
     // A mask requiring ~2.5 bytes of zeros for a valid PoW solution.
-    let mask = [0_u8; 32];
-    let mut prev_tx_hash;
+    let mut mask = [0_u8; 32];
+    mask[0] = 0xFF;
+    mask[1] = 0x0F;
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
         outputs: vec![Output {
-            version: core::Version::V1,
+            version: core::transaction::Version::V0,
             amount: 100000,
             data: [0u8; 32],
             commitment: mask,
         }],
     };
-    prev_tx_hash = coinbase_tx.hash::<Blake2s256>();
-
-    let mut coinbase_block = Block::new(core::Version::V1, [0u8; 32]);
+    let mut coinbase_block = Block::new(0, [0u8; 32]);
     coinbase_block.transactions.push(coinbase_tx);
     let coinbase_block_hash = coinbase_block.header().hash::<Blake2s256>();
 
@@ -66,7 +65,7 @@ fn main() {
         );
 
         // Mine the next block. We use usize::MAX attempts to mine "forever" until a solution is found.
-        match miner::build_next_block(&ledger, &prev_tx_hash, usize::MAX) {
+        match miner::build_next_block(&ledger, usize::MAX) {
             Some((_signing_key, new_block)) => {
                 let new_block_hash = new_block.header().hash::<Blake2s256>();
                 println!(
@@ -75,7 +74,6 @@ fn main() {
                 );
 
                 // Verify the new block before adding
-                prev_tx_hash = new_block.transactions[0].hash::<Blake2s256>();
                 if let Err(e) = ledger.add_block(new_block) {
                     eprintln!("Failed to add new block: {:?}", e);
                     continue;

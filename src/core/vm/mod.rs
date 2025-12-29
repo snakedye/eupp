@@ -513,10 +513,10 @@ impl<'a, L: Ledger> Vm<'a, L> {
 mod tests {
     use super::*;
     use crate::core::{
-        Hash, Version,
+        Hash,
         block::{Block, BlockError},
         ledger::BlockMetadata,
-        transaction::{Input, Output, OutputId, TransactionHash},
+        transaction::{Input, Output, OutputId, TransactionHash, Version},
     };
     use ed25519_dalek::{Signer, SigningKey};
     use op::r#const::*;
@@ -783,6 +783,7 @@ mod tests {
             height: 50,
             available_supply: 100_000,
             locked_supply: 0,
+            lead_utxo: OutputId::new([0; 32], 0),
         });
         let input = default_input();
         let vm = create_vm(&ledger, &input, &[]);

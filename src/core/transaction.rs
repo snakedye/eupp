@@ -1,6 +1,6 @@
 use super::vm::{ExecError, Vm, check_sig_script, p2pk_script};
-use super::{Hash, PublicKey, Version, commit, ledger::Ledger};
-use super::{Signature, VirtualSize, calculate_reward};
+use super::{Hash, PublicKey, commit, ledger::Ledger};
+use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
 use std::error;
 use std::fmt;
@@ -24,6 +24,20 @@ pub struct Input {
     pub public_key: PublicKey,
 }
 
+/// Protocol version used for outputs in the codebase.
+///
+/// Adding a short doc comment makes the intent explicit and makes the type
+/// easier to discover when browsing the code or generated documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Version {
+    /// Exclusively for mining.
+    V0 = 0,
+    /// Initial protocol revision.
+    V1 = 1,
+    /// Second protocol revision.
+    V2 = 2,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Output {
     pub version: Version,
@@ -34,7 +48,7 @@ pub struct Output {
 
 pub type TransactionHash = Hash;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TransactionError {
     /// The referenced transaction was not found in the ledger.
     InvalidInput { txid: Hash },
@@ -49,7 +63,7 @@ pub enum TransactionError {
     InsufficientInputAmount { total_input: u32, total_output: u32 },
 
     /// Specific coinbase (mint) validation failed (mask/amount rules).
-    CoinbaseValidation { reason: String },
+    // CoinbaseValidation { reason: String },
 
     /// Number of inputs exceeds maximum allowed.
     TooManyInputs(usize),
@@ -76,7 +90,7 @@ impl fmt::Display for TransactionError {
                 "Insufficient input amount: inputs={} outputs={}",
                 total_input, total_output
             ),
-            CoinbaseValidation { reason } => write!(f, "Coinbase validation failed: {}", reason),
+            // CoinbaseValidation { reason } => write!(f, "Coinbase validation failed: {}", reason),
             TooManyInputs(max_allowed) => {
                 write!(f, "Too many inputs: maximum allowed is {}", max_allowed)
             }
@@ -235,41 +249,22 @@ impl Transaction {
             //
             // ERROR
             // THIS VALIDATION SHOULD BE IN BLOCK BECAUSE THE TRANSACTION DOES NOT KNOW ITS INDEX
-            if i < 1 {
-                let mask = &utxo.commitment;
-                let max_reward = calculate_reward(mask);
-                let new_supply = self.outputs.get(0).map(|o| o.amount).unwrap_or_default();
-                // Check if the public key matches the mask of the commitment
-                if !super::matches_mask(mask, &input.public_key) {
-                    return Err(TransactionError::CoinbaseValidation {
-                        reason: "public key does not satisfy mint mask".into(),
-                    });
-                // The new output must have at least the previous amount minus MAX_MINT_AMOUNT.
-                } else if new_supply < utxo.amount.saturating_sub(max_reward) {
-                    return Err(TransactionError::CoinbaseValidation {
-                        reason: format!(
-                            "new supply too small: got {}, required >= {}",
-                            new_supply,
-                            utxo.amount.saturating_sub(max_reward)
-                        ),
-                    });
-                }
 
-                // We also check the signature of the coinbase transaction
-                vm.run(&check_sig_script())
-                    .map_err(|err| TransactionError::Execution(err))?;
-            } else {
-                match utxo.version {
-                    Version::V1 => {
-                        // V1 transactions use a simple P2PK script
-                        vm.run(&p2pk_script())
-                            .map_err(|err| TransactionError::Execution(err))?;
-                    }
-                    Version::V2 => {
-                        // V2 transactions can use a more complex script
-                        vm.run(&utxo.data)
-                            .map_err(|err| TransactionError::Execution(err))?;
-                    }
+            match utxo.version {
+                Version::V0 => {
+                    // For mining transactions, only the signature is checked
+                    vm.run(&check_sig_script())
+                        .map_err(|err| TransactionError::Execution(err))?;
+                }
+                Version::V1 => {
+                    // V1 transactions use a simple P2PK script
+                    vm.run(&p2pk_script())
+                        .map_err(|err| TransactionError::Execution(err))?;
+                }
+                Version::V2 => {
+                    // V2 transactions can use a more complex script
+                    vm.run(&utxo.data)
+                        .map_err(|err| TransactionError::Execution(err))?;
                 }
             }
         }
@@ -341,6 +336,7 @@ mod tests {
     use super::*;
     use crate::core::{
         block::Block,
+        calculate_reward,
         ledger::{InMemoryLedger, Ledger},
     };
     use blake2::Blake2s256;
@@ -459,7 +455,7 @@ mod tests {
         let funding_txid = funding_tx.hash::<Blake2s256>();
 
         // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(Version::V1, [0u8; 32]);
+        let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
         ledger.add_block(block).unwrap();
 
@@ -530,7 +526,7 @@ mod tests {
         let funding_tx = Transaction {
             inputs: vec![],
             outputs: vec![Output {
-                version: Version::V1,
+                version: Version::V0,
                 amount: 100,
                 data,
                 commitment: mask,
@@ -539,7 +535,7 @@ mod tests {
         let funding_txid = funding_tx.hash::<Blake2s256>();
 
         // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
         ledger.add_block(block).unwrap();
 
@@ -585,7 +581,7 @@ mod tests {
         let funding_tx = Transaction {
             inputs: vec![],
             outputs: vec![Output {
-                version: Version::V1,
+                version: Version::V0,
                 amount: 2 * reward,
                 data,
                 commitment: mask,
@@ -594,7 +590,7 @@ mod tests {
         let funding_txid = funding_tx.hash::<Blake2s256>();
 
         // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
         ledger.add_block(block).unwrap();
 
@@ -604,7 +600,7 @@ mod tests {
             index: 0,
         };
         let new_outputs = vec![Output {
-            version: Version::V1,
+            version: Version::V0,
             amount: reward,
             data,
             commitment: mask,
@@ -629,69 +625,13 @@ mod tests {
             other => panic!("Expected Ok, got: {:?}", other),
         }
     }
-
-    #[test]
-    fn test_transaction_verify_invalid_coinbase() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
-
-        // Build funding (previous) transaction that creates a UTXO
-        let data = [12u8; 32];
-        // Here the commitment is a mask since it's a coinbase transaction
-        // A zero mask allows for any pubkey
-        let mask = [1u8; 32];
-        let reward = calculate_reward(&mask);
-
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
-                version: Version::V1,
-                amount: 2 * reward,
-                data,
-                commitment: mask,
-            }],
-        };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
-
-        // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
-
-        // Now build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
-            tx_hash: funding_txid,
-            index: 0,
-        };
-        let new_outputs = vec![Output {
-            version: Version::V1,
-            amount: 1,
-            data,
-            commitment: mask,
-        }];
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input {
-            output_id: utxo_id,
-            signature,
-            public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-        };
-
-        let spending_tx = Transaction {
-            inputs: vec![input],
-            outputs: new_outputs,
-        };
-
-        match spending_tx.verify(&ledger) {
-            Err(TransactionError::CoinbaseValidation { .. }) => {}
-            other => panic!("Expected CoinbaseValidation, got: {:?}", other),
-        }
-    }
     #[test]
     fn test_transaction_verify_v2() {
         // Create a ledger with one block containing a funding transaction
         let mut ledger = InMemoryLedger::new();
+        // Create a signing key for the funding transaction
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let pubkey = signing_key.verifying_key().to_bytes();
 
         // Build funding (previous) transaction that creates a UTXO
         let mut data = [0u8; 32];
@@ -701,33 +641,35 @@ mod tests {
 
         let funding_tx = Transaction {
             inputs: vec![],
-            outputs: vec![Output {
-                version: Version::V2,
-                amount: 2 * reward,
-                data,
-                commitment: mask,
-            }],
+            outputs: vec![
+                Output {
+                    version: Version::V0,
+                    amount: reward,
+                    data,
+                    commitment: mask,
+                },
+                Output::new_v2(reward, &pubkey, &data),
+            ],
         };
         let funding_txid = funding_tx.hash::<Blake2s256>();
 
         // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
         ledger.add_block(block).unwrap();
 
-        // Now build a spending transaction that consumes the funding UTXO
+        // Now build a spending transaction that consumes the second UTXO
         let utxo_id = OutputId {
             tx_hash: funding_txid,
-            index: 0,
+            index: 1,
         };
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
         let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
             signature,
-            public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
+            public_key: pubkey, // same public key used to construct commitment
         };
 
         let spending_tx = Transaction {
@@ -763,7 +705,7 @@ mod tests {
         let funding_txid = funding_tx.hash::<Blake2s256>();
 
         // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
         ledger.add_block(block).unwrap();
 
@@ -823,7 +765,7 @@ mod tests {
         let funding_txid = funding_tx.hash::<Blake2s256>();
 
         // Create a block containing the funding transaction and add to ledger
-        let mut block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
         ledger.add_block(block).unwrap();
 

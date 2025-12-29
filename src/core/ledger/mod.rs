@@ -24,6 +24,9 @@ pub struct BlockMetadata {
 
     /// The MAS Metric: Sum of all locked rewards from Genesis to this block.
     pub locked_supply: u32,
+
+    /// The output id of the lead utxo
+    pub lead_utxo: OutputId,
 }
 
 pub trait Ledger {

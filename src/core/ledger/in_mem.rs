@@ -93,6 +93,7 @@ impl Ledger for InMemoryLedger {
             hash: block.header().hash::<Blake2s256>(),
             prev_block_hash: block.prev_block_hash,
             available_supply: total_supply,
+            lead_utxo: OutputId::new(block.transactions[0].hash::<Blake2s256>(), 0),
             locked_supply,
             height,
         };

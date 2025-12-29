@@ -10,18 +10,6 @@ pub type PublicKey = [u8; 32];
 pub type Hash = [u8; 32];
 pub type Signature = [u8; 64];
 
-/// Protocol version used throughout the codebase.
-///
-/// Adding a short doc comment makes the intent explicit and makes the type
-/// easier to discover when browsing the code or generated documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Version {
-    /// Initial protocol revision.
-    V1 = 0,
-    /// Second protocol revision.
-    V2 = 1,
-}
-
 /// Trait for calculating the virtual size of a type.
 pub trait VirtualSize {
     /// Returns the virtual size of the type in bytes.
@@ -42,7 +30,7 @@ pub fn commit<D: Digest>(pk: &PublicKey, data: &Hash) -> Hash {
 /// Convention:
 /// - a 1-bit in `mask` indicates that the corresponding bit in `attempted` MUST be zero.
 /// - The attempt matches if all masked bits in `attempted` are zero.
-pub fn matches_mask(mask: &[u8; 32], attempted: &PublicKey) -> bool {
+pub fn matches_mask(mask: &[u8; 32], attempted: &Hash) -> bool {
     attempted
         .iter()
         .zip(mask.iter())
