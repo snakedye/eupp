@@ -55,28 +55,6 @@ pub enum ExecError {
     Unimplemented(Op), // fallback if something unexpected happens
 }
 
-/// Implement Display for ExecError to provide user-friendly error messages.
-impl fmt::Display for ExecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExecError::StackUnderflow => {
-                write!(f, "Stack underflow: not enough items on the stack")
-            }
-            ExecError::StackOverflow => {
-                write!(f, "Stack overflow: maximum stack size exceeded")
-            }
-            ExecError::VerifyFailed => write!(f, "Verification failed: condition not met"),
-            ExecError::TypeMismatch => {
-                write!(f, "Type mismatch: unexpected value type on the stack")
-            }
-            ExecError::FetchFailed => write!(f, "Fetch failed: unable to retrieve required data"),
-            ExecError::Unimplemented(op) => {
-                write!(f, "Opcode {:?} is not implemented yet", op)
-            }
-        }
-    }
-}
-
 /// VM runtime holding a reference to a Ledger.
 pub struct Vm<'a, L> {
     input: &'a Input,
@@ -117,6 +95,28 @@ impl<'a> From<&'a [u8]> for StackValue<'a> {
 impl<'a> From<u8> for StackValue<'a> {
     fn from(value: u8) -> Self {
         StackValue::U8(value)
+    }
+}
+
+/// Implement Display for ExecError to provide user-friendly error messages.
+impl fmt::Display for ExecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExecError::StackUnderflow => {
+                write!(f, "Stack underflow: not enough items on the stack")
+            }
+            ExecError::StackOverflow => {
+                write!(f, "Stack overflow: maximum stack size exceeded")
+            }
+            ExecError::VerifyFailed => write!(f, "Verification failed: condition not met"),
+            ExecError::TypeMismatch => {
+                write!(f, "Type mismatch: unexpected value type on the stack")
+            }
+            ExecError::FetchFailed => write!(f, "Fetch failed: unable to retrieve required data"),
+            ExecError::Unimplemented(op) => {
+                write!(f, "Opcode {:?} is not implemented yet", op)
+            }
+        }
     }
 }
 
@@ -1148,7 +1148,7 @@ mod tests {
         let mut code = vec![];
         code.push(OP_PUSH_SIG);
         for _ in 0..32 {
-            code.push(OP_PUSH_SIG);
+            code.push(OP_DUP);
             code.push(OP_CAT); // Concatenate with the previous stack value
         }
 
