@@ -225,17 +225,17 @@ impl Transaction {
     /// Verifies the transaction against the ledger.
     pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
         let mut total_input_amount = 0_u32;
-        let max_allowed = u8::MAX as usize;
+        const MAX_ALLOWED: usize = u8::MAX as usize;
         let is_genesis = ledger.get_last_block_metadata().is_none();
 
-        if self.inputs.len() > max_allowed {
-            return Err(TransactionError::TooManyInputs(max_allowed));
+        if self.inputs.len() > MAX_ALLOWED {
+            return Err(TransactionError::TooManyInputs(MAX_ALLOWED));
         }
-        if self.outputs.len() > max_allowed {
-            return Err(TransactionError::TooManyOutputs(max_allowed));
+        if self.outputs.len() > MAX_ALLOWED {
+            return Err(TransactionError::TooManyOutputs(MAX_ALLOWED));
         }
 
-        for (i, input) in self.inputs.iter().enumerate() {
+        for input in self.inputs.iter() {
             let vm = Vm::new(ledger, &input, &self.outputs);
             // Lookup referenced utxo
             let utxo = ledger
@@ -244,11 +244,6 @@ impl Transaction {
                     txid: input.output_id.tx_hash,
                 })?;
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
-
-            // Coinbase (mint) specific validation: input index 0 is the lead/mint UTXO
-            //
-            // ERROR
-            // THIS VALIDATION SHOULD BE IN BLOCK BECAUSE THE TRANSACTION DOES NOT KNOW ITS INDEX
 
             match utxo.version {
                 Version::V0 => {
