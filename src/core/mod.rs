@@ -17,12 +17,10 @@ pub trait VirtualSize {
 }
 
 // Helpers
-/// Create a 32-byte commitment from a public key and data using `D`.
-pub fn commit<D: Digest>(pk: &PublicKey, data: &Hash) -> Hash {
-    let mut hasher = D::new();
-    hasher.update(pk);
-    hasher.update(&data);
-    hasher.finalize().as_slice().try_into().unwrap()
+/// Create a 32-byte commitment from a public key.
+pub fn pubkey_hash<D: Digest>(pk: &PublicKey) -> Hash {
+    let hash = D::digest(pk);
+    hash.as_slice().try_into().unwrap()
 }
 
 /// Check whether an attempted public key satisfies the provided mask.

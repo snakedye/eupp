@@ -6,9 +6,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use crate::core::transaction::{Input, Output, OutputId, Transaction};
 
 use super::{
-    Hash, calculate_reward, commit,
+    Hash, calculate_reward,
     ledger::Ledger,
-    matches_mask,
+    matches_mask, pubkey_hash,
     transaction::{TransactionHash, sighash},
 };
 
@@ -35,7 +35,7 @@ pub fn build_mining_tx_deterministic(
         let signing_key = SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
         let pk_bytes = verifying_key.to_bytes();
-        let solution = commit::<Blake2s256>(&pk_bytes, prev_block_hash);
+        let solution = pubkey_hash::<Blake2s256>(&pk_bytes);
 
         // We'll use a nonce as the data hash for outputs (kept zero for now)
         let data_hash = [0u8; 32];
@@ -60,7 +60,7 @@ pub fn build_mining_tx_deterministic(
             let outputs = vec![new_mint_output, miner_reward_output];
 
             // Compute sighash
-            let sighash = sighash(Blake2s256::new(), &lead_utxo_id, outputs.iter().copied());
+            let sighash = sighash(Blake2s256::new(), &[lead_utxo_id], &outputs);
 
             // Sign
             let signature = signing_key.sign(sighash.as_ref());
@@ -134,7 +134,7 @@ pub fn build_next_block<L: Ledger>(
 mod tests {
     use super::*;
     use crate::core::{
-        commit,
+        pubkey_hash,
         transaction::{Output, Transaction, Version},
     };
     use blake2::Blake2s256;
@@ -181,15 +181,11 @@ mod tests {
 
         // Miner reward commitment should be the commitment of the revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = commit::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
+        let expected_commitment = pubkey_hash::<Blake2s256>(&input.public_key);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
-        let sighash = sighash(
-            Blake2s256::new(),
-            &input.output_id,
-            tx.outputs.iter().copied(),
-        );
+        let sighash = sighash(Blake2s256::new(), &[input.output_id], &tx.outputs);
         let vk = VerifyingKey::from_bytes(&input.public_key).expect("valid vk");
         let sig = Signature::from_slice(&input.signature).expect("valid signature");
         assert!(vk.verify_strict(&sighash, &sig).is_ok());
@@ -282,15 +278,11 @@ mod tests {
 
         // Miner reward commitment should match revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = commit::<Blake2s256>(&input.public_key, &tx.outputs[1].data);
+        let expected_commitment = pubkey_hash::<Blake2s256>(&input.public_key);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
-        let sighash = sighash(
-            Blake2s256::new(),
-            &input.output_id,
-            tx.outputs.iter().copied(),
-        );
+        let sighash = sighash(Blake2s256::new(), &[input.output_id], &tx.outputs);
         let vk = VerifyingKey::from_bytes(&input.public_key).expect("valid vk");
         let sig = Signature::from_slice(&input.signature).expect("valid signature");
         assert!(vk.verify_strict(&sighash, &sig).is_ok());

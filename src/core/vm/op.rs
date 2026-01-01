@@ -29,6 +29,11 @@ pub mod r#const {
     pub const OP_OUT_COMM: u8 = 0x15;
     // pub const OP_TX_FEE: u8 = 0x16;
 
+    /// Pushes the sighash for all inputs and outputs onto the stack.
+    pub const OP_SIGHASH_ALL: u8 = 0x60;
+    /// Pushes the sighash for only the outputs onto the stack.
+    pub const OP_SIGHASH_OUT: u8 = 0x61;
+
     /// Push current total supply onto the stack.
     pub const OP_SUPPLY: u8 = 0x50;
     /// Push current block height onto the stack.
@@ -131,6 +136,10 @@ pub enum Op {
     If,
     /// Mark the end of an if block.
     EndIf,
+    /// Pushes the sighash for all inputs and outputs onto the stack.
+    SighashAll,
+    /// Pushes the sighash for only the outputs onto the stack.
+    SighashOut,
 }
 
 /// Error returned when decoding an opcode byte into an `Op`.
@@ -188,7 +197,9 @@ impl core::convert::TryFrom<u8> for Op {
             OP_VERIFY => Ok(Op::Verify),
             OP_MUL_HASH_B2 => Ok(Op::MulHashB2(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_RETURN => Ok(Op::Return),
+            OP_SIGHASH_ALL => Ok(Op::SighashAll),
             OP_IF => Ok(Op::If),
+            OP_SIGHASH_OUT => Ok(Op::SighashOut),
             OP_END_IF => Ok(Op::EndIf),
 
             other => Err(OpDecodeError(other)),
@@ -231,7 +242,9 @@ impl From<Op> for u8 {
             Op::MulHashB2(_) => OP_MUL_HASH_B2,
             Op::Return => OP_RETURN,
             Op::If => OP_IF,
+            Op::SighashAll => OP_SIGHASH_ALL,
             Op::EndIf => OP_END_IF,
+            Op::SighashOut => OP_SIGHASH_OUT,
         }
     }
 }
@@ -273,6 +286,12 @@ mod tests {
             Op::EndIf,
             Op::PushByte(0),
             Op::MulHashB2(0),
+            Op::Verify,
+            Op::Return,
+            Op::If,
+            Op::EndIf,
+            Op::SighashAll,
+            Op::SighashOut,
         ];
 
         for &op in &all {

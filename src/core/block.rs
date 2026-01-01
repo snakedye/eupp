@@ -1,7 +1,7 @@
 use super::{
-    Hash, VirtualSize, calculate_reward, commit,
+    Hash, VirtualSize, calculate_reward,
     ledger::Ledger,
-    matches_mask,
+    matches_mask, pubkey_hash,
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
@@ -93,7 +93,7 @@ impl Block {
                 .unwrap();
             let lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
             let mask = &lead_utxo.commitment;
-            let solution = commit::<Blake2s256>(&input.public_key, &prev_block_hash);
+            let solution = pubkey_hash::<Blake2s256>(&input.public_key);
             if !matches_mask(&mask, &solution) {
                 return Err(BlockError::ChallengeError);
             }

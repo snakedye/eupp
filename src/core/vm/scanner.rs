@@ -112,7 +112,6 @@ impl<'a> Iterator for Scanner<'a> {
                     None
                 }
             },
-            OP_HEIGHT => Some(Op::Height),
             // For other single-byte opcodes rely on Op::try_from
             other => Op::try_from(other).ok(),
         }
@@ -160,6 +159,7 @@ mod tests {
             0x02,
             OP_OUT_COMM,
             0x03,
+            OP_SIGHASH_ALL,
         ];
 
         let collected: Vec<Op> = Scanner::new(&bytes).collect();
@@ -175,6 +175,7 @@ mod tests {
                 Op::OutAmt(1),
                 Op::OutData(2),
                 Op::OutComm(3),
+                Op::SighashAll,
             ]
         );
     }

@@ -1,5 +1,5 @@
 use super::vm::{ExecError, Vm, check_sig_script, p2pk_script};
-use super::{Hash, PublicKey, commit, ledger::Ledger};
+use super::{Hash, PublicKey, ledger::Ledger, pubkey_hash};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
 use std::error;
@@ -40,9 +40,13 @@ pub enum Version {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Output {
+    /// Protocol version used for the output.
     pub version: Version,
+    /// Amount of the output.
     pub amount: u32,
+    /// Data associated with the output.
     pub data: Hash,
+    /// The hash of the public key.
     pub commitment: Hash,
 }
 
@@ -208,7 +212,7 @@ impl Transaction {
         for input in &self.inputs {
             hasher.update(&input.output_id.tx_hash);
             hasher.update(&input.output_id.index.to_be_bytes());
-            hasher.update(&input.signature);
+            // hasher.update(&input.signature);
             hasher.update(&input.public_key);
         }
         hasher.update(&self.outputs.len().to_be_bytes());
@@ -235,8 +239,8 @@ impl Transaction {
             return Err(TransactionError::TooManyOutputs(MAX_ALLOWED));
         }
 
-        for input in self.inputs.iter() {
-            let vm = Vm::new(ledger, &input, &self.outputs);
+        for (i, input) in self.inputs.iter().enumerate() {
+            let vm = Vm::new(ledger, i, self);
             // Lookup referenced utxo
             let utxo = ledger
                 .get_utxo(&input.output_id)
@@ -276,8 +280,17 @@ impl Transaction {
 }
 
 impl Output {
+    pub fn new_v0(amount: u32, public_key: &PublicKey, mask: &Hash) -> Self {
+        let commitment = pubkey_hash::<Blake2s256>(public_key);
+        Self {
+            version: Version::V1,
+            amount,
+            data: *mask,
+            commitment,
+        }
+    }
     pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
-        let commitment = commit::<Blake2s256>(public_key, data);
+        let commitment = pubkey_hash::<Blake2s256>(public_key);
         Self {
             version: Version::V1,
             amount,
@@ -287,7 +300,7 @@ impl Output {
     }
 
     pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
-        let commitment = commit::<Blake2s256>(public_key, script);
+        let commitment = pubkey_hash::<Blake2s256>(public_key);
         Self {
             version: Version::V2,
             amount,
@@ -297,18 +310,25 @@ impl Output {
     }
 
     pub fn verify(&self, public_key: &[u8; 32]) -> bool {
-        commit::<Blake2s256>(public_key, &self.data) == self.commitment
+        pubkey_hash::<Blake2s256>(public_key) == self.commitment
     }
 }
 
 /// Create the sighash for a transaction input
-pub fn sighash<'a, D, I>(mut hasher: D, output_id: &'a OutputId, outputs: I) -> Hash
+pub fn sighash<'a, D>(
+    mut hasher: D,
+    inputs: impl IntoIterator<Item = &'a OutputId>,
+    outputs: impl IntoIterator<Item = &'a Output>,
+) -> Hash
 where
     D: Digest,
-    I: Iterator<Item = Output>,
 {
-    hasher.update(&output_id.tx_hash);
-    hasher.update(&output_id.index.to_be_bytes());
+    // hasher.update(&inputs.len().to_be_bytes());
+    for input in inputs {
+        hasher.update(&input.tx_hash);
+        hasher.update(&input.index.to_be_bytes());
+    }
+    // hasher.update(&outputs.len().to_be_bytes());
     for Output {
         version,
         amount,
@@ -316,7 +336,7 @@ where
         commitment,
     } in outputs
     {
-        hasher.update(&[version as u8]);
+        hasher.update(&[*version as u8]);
         hasher.update(&amount.to_be_bytes());
         hasher.update(&data);
         hasher.update(&commitment);
@@ -369,7 +389,7 @@ mod tests {
         let outputs = vec![out1, out2];
 
         // Compute sighash via function
-        let s1 = sighash(Blake2s256::new(), &output_id, outputs.iter().copied());
+        let s1 = sighash(Blake2s256::new(), &[output_id], &outputs);
 
         // Compute expected via manual hasher
         let mut hasher = Blake2s256::new();
@@ -411,7 +431,6 @@ mod tests {
         for inp in &tx.inputs {
             hasher.update(&inp.output_id.tx_hash);
             hasher.update(&inp.output_id.index.to_be_bytes());
-            hasher.update(&inp.signature);
             hasher.update(&inp.public_key);
         }
         hasher.update(&tx.outputs.len().to_be_bytes());
@@ -497,7 +516,7 @@ mod tests {
         let outputs = vec![Output::new_v1(10, &public_key, &[5u8; 32])];
 
         // Compute the sighash
-        let sighash = sighash(Blake2s256::new(), &output_id, outputs.iter().copied());
+        let sighash = sighash(Blake2s256::new(), &[output_id], &outputs);
 
         // Sign the sighash
         let signature = signing_key.sign(&sighash);
@@ -539,9 +558,9 @@ mod tests {
             tx_hash: funding_txid,
             index: 0,
         };
-        let new_outputs = vec![Output::new_v1(150, &mask, &data)]; // Any commitment will work with the mask chosen before
+        let new_outputs = vec![Output::new_v0(150, &mask, &data)]; // Any commitment will work with the mask chosen before
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
+        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
@@ -601,7 +620,7 @@ mod tests {
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
+        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
@@ -659,7 +678,7 @@ mod tests {
             index: 1,
         };
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
-        let sighash = sighash(Blake2s256::new(), &utxo_id, new_outputs.iter().copied());
+        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input {
             output_id: utxo_id,
@@ -713,7 +732,7 @@ mod tests {
                 index: i as u8,
             };
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-            let sighash = sighash(Blake2s256::new(), &utxo_id, [].iter().copied());
+            let sighash = sighash(Blake2s256::new(), &[utxo_id], &[]);
             let signature = signing_key.sign(&sighash).to_bytes();
             inputs.push(Input {
                 output_id: utxo_id,
