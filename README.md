@@ -8,13 +8,14 @@
 
 The protocol operates on a Modified UTXO architecture where the state is a collection of spendable outputs.
 
-### **2.1 Transaction Structure**
+### 2.1 Transaction Structure
 
-* **Capacity:** Each transaction supports a maximum of 256 inputs and 256 outputs.  
-* **Balance:** The sum of input amounts must be greater than or equal to the sum of output amounts.  
-* **Pruning:** Transactions with an amount of 0 are considered prunable from the active UTXO set to prevent state bloat.
+* **Capacity:** The protocol enforces a limit of 256 inputs and 256 outputs per transaction to ensure efficient processing and prevent excessive computational overhead.  
+* **Balance:** Transactions must satisfy the conservation rule, expressed as `sum(inputs) >= sum(outputs)` where **n** is the number of inputs and **m** is the number of outputs. 
+This ensures that no new value is created within the transaction, maintaining the integrity of the ledger.
+* **Pruning:** To optimize the state and reduce unnecessary data retention, outputs with a value of 0 are considered redundant and can be safely removed from the active UTXO set. This mechanism helps mitigate state bloat and ensures the scalability of the protocol over time.
 
-### **2.2 Output Structure**
+### 2.2 Output Structure
 
 Every UTXO consists of four distinct fields:
 
@@ -23,9 +24,7 @@ Every UTXO consists of four distinct fields:
 * **Data (32 bytes):** Contains contextual state or VM bytecode, which can be used for programmable spending conditions.  
 * **Commitment (32 bytes):** A cryptographic commitment that can serve as a locking mechanism or as part of the Proof of Work (PoW) mask.
 
-### **2.3 Input Structure**
-
-### **Input Structure**
+## 2.3 Input Structure
 
 Each transaction input references a specific UTXO and provides the necessary cryptographic proof to unlock it. The structure is defined as follows:
 
@@ -38,7 +37,7 @@ Each transaction input references a specific UTXO and provides the necessary cry
 
 The input structure ensures that only the rightful owner of a UTXO can spend it, while also supporting extensibility for programmable spending logic.
 
-**3. Programmability: The AUPP VM**
+## 3. Programmability: The AUPP VM
 
 AUPP supports two logic versions. While **v1** is a standard P2PK script where the spender reveals a $pk$ to match a hash commitment, **v2** introduces a programmable bytecode environment.
 
@@ -53,11 +52,11 @@ Key capabilities of the AUPP VM include:
 
 This programmable environment empowers developers to define custom transaction behaviors, enabling use cases such as multi-signature wallets, atomic swaps, and advanced financial instruments, all while maintaining the security and verifiability of the AUPP protocol.
 
-**4. Consensus: Chained Mask Proof of Work**
+## 4. Consensus: Chained Mask Proof of Work
 
 Consensus in AUPP is defined by the transaction graph itself rather than an external block header hash.
 
-### **4.1 The Mask Mechanism**
+### 4.1 The Mask Mechanism
 
 1. **Lead UTXO:** The output at index 0 of the previous block defines the next challenge.  
 2. **The Mask:** The commitment of this Lead UTXO acts as a bitmask for the next miner.  
@@ -65,7 +64,7 @@ Consensus in AUPP is defined by the transaction graph itself rather than an exte
 
 To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
 
-### **4.2 Difficulty-Based Rewards**
+### 4.2 Difficulty-Based Rewards
 
 The difficulty (`D`) is determined by the number of 1-bits in the mask. The reward grows exponentially to incentivize solving harder masks:
 
@@ -73,7 +72,7 @@ The difficulty (`D`) is determined by the number of 1-bits in the mask. The rewa
 R(D) = min(1000000, 2^(floor(D/4)))
 ```
 
-**5. Security and Economic Properties**
+## 5. Security and Economic Properties
 
 * **Strict Linearity:** Since only one miner can spend the Lead UTXO of the previous block, the chain has a built-in mechanism to prevent branching, as the "right" to mine is a consumable resource in the UTXO set.  
 * **Covenant Support:** Through forward visibility (v2), developers can create UTXOs that can only be spent to specific addresses or under specific economic conditions (e.g., inflation caps or cold-storage vaults).
