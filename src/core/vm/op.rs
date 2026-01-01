@@ -27,7 +27,6 @@ pub mod r#const {
     pub const OP_OUT_AMT: u8 = 0x13;
     pub const OP_OUT_DATA: u8 = 0x14;
     pub const OP_OUT_COMM: u8 = 0x15;
-    // pub const OP_TX_FEE: u8 = 0x16;
 
     /// Pushes the sighash for all inputs and outputs onto the stack.
     pub const OP_SIGHASH_ALL: u8 = 0x60;
@@ -35,14 +34,14 @@ pub mod r#const {
     pub const OP_SIGHASH_OUT: u8 = 0x61;
 
     /// Push current total supply onto the stack.
-    pub const OP_SUPPLY: u8 = 0x50;
-
+    pub const OP_PUSH_SUPPLY: u8 = 0x50;
     /// Push current block height onto the stack.
-    pub const OP_HEIGHT: u8 = 0x51;
+    pub const OP_PUSH_HEIGHT: u8 = 0x51;
+    /// Pushes the block height of the UTXO onto the stack.
+    pub const OP_SELF_HEIGHT: u8 = 0x52;
 
     pub const OP_PUSH_PK: u8 = 0x20;
     pub const OP_PUSH_SIG: u8 = 0x21;
-    /// Pushes the witness data onto the stack.
     pub const OP_PUSH_WITNESS: u8 = 0x22;
 
     pub const OP_CHECKSIG: u8 = 0x30;
@@ -108,6 +107,7 @@ pub enum Op {
     /// Pushes the current total supply of the currency onto the stack.
     Supply,
     /// Pushes the current block height onto the stack.
+    SelfHeight,
     Height,
 
     /// Pushes the 32-byte Public Key from the input.
@@ -192,8 +192,9 @@ impl core::convert::TryFrom<u8> for Op {
             OP_OUT_AMT => Ok(Op::OutAmt(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_OUT_DATA => Ok(Op::OutData(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_OUT_COMM => Ok(Op::OutComm(0)), // placeholder; Scanner must read 1 byte after opcode
-            OP_SUPPLY => Ok(Op::Supply),
-            OP_HEIGHT => Ok(Op::Height),
+            OP_PUSH_SUPPLY => Ok(Op::Supply),
+            OP_PUSH_HEIGHT => Ok(Op::Height),
+            OP_SELF_HEIGHT => Ok(Op::SelfHeight),
 
             OP_PUSH_PK => Ok(Op::PushPk),
             OP_PUSH_SIG => Ok(Op::PushSig),
@@ -240,8 +241,9 @@ impl From<Op> for u8 {
             Op::OutAmt(_) => OP_OUT_AMT,
             Op::OutData(_) => OP_OUT_DATA,
             Op::OutComm(_) => OP_OUT_COMM,
-            Op::Supply => OP_SUPPLY,
-            Op::Height => OP_HEIGHT,
+            Op::Supply => OP_PUSH_SUPPLY,
+            Op::Height => OP_PUSH_HEIGHT,
+            Op::SelfHeight => OP_SELF_HEIGHT,
 
             Op::PushPk => OP_PUSH_PK,
             Op::PushSig => OP_PUSH_SIG,
@@ -316,6 +318,7 @@ mod tests {
             Op::Split(0),
             Op::ReadU32,
             Op::ReadByte,
+            Op::SelfHeight,
         ];
 
         for &op in &all {
@@ -356,11 +359,11 @@ mod tests {
         let out_data: u8 = Op::OutData(42).into();
         let out_comm: u8 = Op::OutComm(42).into();
 
-        assert_eq!(s, OP_SUPPLY);
+        assert_eq!(s, OP_PUSH_SUPPLY);
         assert_eq!(out_amt, OP_OUT_AMT);
         assert_eq!(out_data, OP_OUT_DATA);
         assert_eq!(out_comm, OP_OUT_COMM);
-        assert_eq!(h, OP_HEIGHT);
+        assert_eq!(h, OP_PUSH_HEIGHT);
 
         let ps = Op::try_from(s).unwrap();
         let ph = Op::try_from(h).unwrap();

@@ -12,8 +12,8 @@ corresponding `Op` by using `Op::try_from`.
 */
 
 use super::op::{
-    OP_MUL_HASH_B2, OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_U32, OP_SPLIT,
-    OP_SUPPLY, Op,
+    OP_MUL_HASH_B2, OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_SUPPLY,
+    OP_PUSH_U32, OP_SPLIT, Op,
 };
 
 /// An iterator that reads opcodes (and their payloads) from a byte slice.
@@ -90,7 +90,7 @@ impl<'a> Iterator for Scanner<'a> {
                     None
                 }
             },
-            OP_SUPPLY => Some(Op::Supply),
+            OP_PUSH_SUPPLY => Some(Op::Supply),
             OP_OUT_AMT => match self.read_u8() {
                 Some(v) => Some(Op::OutAmt(v)),
                 None => {
@@ -157,8 +157,8 @@ mod tests {
             0,
             0,
             0,
-            OP_SUPPLY,
-            OP_HEIGHT,
+            OP_PUSH_SUPPLY,
+            OP_PUSH_HEIGHT,
             OP_FALSE,
             OP_OUT_AMT,
             0x01,

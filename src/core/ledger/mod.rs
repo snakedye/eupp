@@ -40,6 +40,9 @@ pub trait Ledger {
     /// Fetches an unspent transaction output (UTXO) by its identifier.
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
 
+    /// Fetches the block hash of a UTXO by its identifier.
+    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
+
     /// Retrieves metadata for the most recently added block in the ledger.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
 }

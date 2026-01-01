@@ -10,7 +10,7 @@ use crate::core::{
 
 #[derive(Clone)]
 pub struct UtxoEntry {
-    pub tx_hash: Hash,
+    pub block_hash: Hash,
     pub output: Output,
 }
 
@@ -39,6 +39,7 @@ impl InMemoryLedger {
     }
 
     fn apply_block_to_utxo_set(&mut self, block: &Block) -> Result<(), BlockError> {
+        let block_hash = block.header().hash::<Blake2s256>();
         for tx in &block.transactions {
             // Remove spent UTXOs
             for input in &tx.inputs {
@@ -55,7 +56,7 @@ impl InMemoryLedger {
                 self.utxo_set.insert(
                     OutputId::new(tx_id, i as u8),
                     UtxoEntry {
-                        tx_hash: tx_id,
+                        block_hash,
                         output: output.clone(),
                     },
                 );
@@ -139,6 +140,10 @@ impl Ledger for InMemoryLedger {
         self.utxo_set
             .get(output_id)
             .map(|entry| entry.output.clone())
+    }
+
+    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
+        self.utxo_set.get(output_id).map(|entry| entry.block_hash)
     }
 
     fn get_last_block_metadata(&self) -> Option<BlockMetadata> {

@@ -362,6 +362,14 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         .map_or(0, |meta| meta.height);
                     return self.exec(scanner, stack.push(height.into()));
                 }
+                Op::SelfHeight => {
+                    let height = self
+                        .ledger
+                        .get_utxo_block_hash(&self.get_input().output_id)
+                        .and_then(|hash| self.ledger.get_block_metadata(&hash))
+                        .map_or(0, |meta| meta.height);
+                    return self.exec(scanner, stack.push(height.into()));
+                }
 
                 Op::PushPk => {
                     return self.exec(
@@ -584,8 +592,6 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     // Pops top item. If 0 -> entire transaction (script) invalid.
                     match stack.pop() {
                         Some((StackValue::U32(0), _)) | Some((StackValue::U8(0), _)) => {
-                            println!("Stack Trace:");
-                            println!("{:?}", stack);
                             return Err(ExecError::VerifyFailed);
                         }
                         Some((_, parent)) => return self.exec(scanner, *parent),
@@ -645,11 +651,15 @@ mod tests {
         }
 
         fn get_block_metadata(&self, _hash: &Hash) -> Option<BlockMetadata> {
-            unimplemented!()
+            self.block_meta.clone()
         }
 
         fn get_utxo(&self, id: &OutputId) -> Option<Output> {
             self.utxos.get(id).copied()
+        }
+
+        fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
+            self.block_meta.as_ref().map(|meta| meta.hash)
         }
 
         fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
@@ -887,10 +897,11 @@ mod tests {
         let transaction = default_transaction();
         let vm = create_vm(&ledger, 0, &transaction);
 
-        let code = [OP_SUPPLY];
+        let code = [OP_PUSH_SUPPLY];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100_000)));
-
-        let code = [OP_HEIGHT];
+        let code = [OP_SELF_HEIGHT];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(50)));
+        let code = [OP_PUSH_HEIGHT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(50)));
     }
 
@@ -900,10 +911,11 @@ mod tests {
         let transaction = default_transaction();
         let vm = create_vm(&ledger, 0, &transaction);
 
-        let code = [OP_SUPPLY];
+        let code = [OP_PUSH_SUPPLY];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
-
-        let code = [OP_HEIGHT];
+        let code = [OP_SELF_HEIGHT];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
+        let code = [OP_PUSH_HEIGHT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
