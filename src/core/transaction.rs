@@ -19,9 +19,13 @@ pub struct OutputId {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Input {
+    /// The id of the output being spent.
     pub output_id: OutputId,
-    pub signature: Signature,
+    /// The public key used to verify the signature.
     pub public_key: PublicKey,
+    /// The signature signed by the private key linked to the public key.
+    pub signature: Signature,
+    /// Witness data for the input.
     pub witness: Vec<u8>,
 }
 

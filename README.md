@@ -18,26 +18,40 @@ The protocol operates on a Modified UTXO architecture where the state is a colle
 
 Every UTXO consists of four distinct fields:
 
-* **Version (1 byte):** Defines the spending logic (v1 or v2).  
-* **Amount (Integer):** The stored value.  
-* **Data (32 bytes):** Contextual state or VM bytecode.  
-* **Commitment (32 bytes):** Used for cryptographic locking or as a PoW mask.
+* **Version (1 byte):** Specifies the spending logic, with supported versions being V0, V1, or V2.  
+* **Amount (u64):** Represents the stored value in the output.  
+* **Data (32 bytes):** Contains contextual state or VM bytecode, which can be used for programmable spending conditions.  
+* **Commitment (32 bytes):** A cryptographic commitment that can serve as a locking mechanism or as part of the Proof of Work (PoW) mask.
 
 ### **2.3 Input Structure**
 
-To spend a UTXO, an input must provide a reference (tx\_id, output\_id) along with a public key ($pk$) and a signature ($sig$). The signature covers the spending intent:
+### **Input Structure**
 
-$$sig = \text{sign}(sk, \text{Hash}(tx\_id \\\parallel output\_id \\\parallel all\_new\_outputs))$$
+Each transaction input references a specific UTXO and provides the necessary cryptographic proof to unlock it. The structure is defined as follows:
 
-**3\. Programmability: The AUPP VM**
+* **Output ID:** A reference to the UTXO being spent, consisting of:
+  * **Transaction Hash (32 bytes):** The hash of the transaction containing the UTXO.
+  * **Index (4 bytes):** The position of the UTXO in the transaction's output list.
+* **Public Key (32 bytes):** The Ed25519 public key corresponding to the private key used for signing.
+* **Signature (64 bytes):** A cryptographic signature proving ownership of the referenced UTXO.
+* **Witness (Variable):** Optional data used for advanced spending conditions or VM execution.
+
+The input structure ensures that only the rightful owner of a UTXO can spend it, while also supporting extensibility for programmable spending logic.
+
+**3. Programmability: The AUPP VM**
 
 AUPP supports two logic versions. While **v1** is a standard P2PK script where the spender reveals a $pk$ to match a hash commitment, **v2** introduces a programmable bytecode environment.
 
-The VM is a stack-based machine processing byte arrays. It features unique opcodes for **Introspection** and **State Awareness**:
+The VM is a stack-based machine designed to process byte arrays and execute scripts that define spending conditions. It operates on a Modified UTXO model, enabling advanced programmability through its ability to evaluate custom logic embedded in transaction outputs. The VM supports a wide range of operations, including cryptographic verification, arithmetic, and data manipulation, allowing developers to implement complex spending rules.
 
-* **Forward Visibility:** Opcodes like OP_OUT_AMT, OP_OUT_DATA, and OP_OUT_COMM allow a script to inspect the outputs of the transaction currently spending it.  
-* **Input Context:** OP_PUSH_PK and OP_PUSH_SIG allow the script to access the specific credentials provided in the input.  
-* **Global State:** OP_HEIGHT and OP_SUPPLY provide the script with the current block height and circulating supply.
+Key capabilities of the AUPP VM include:
+
+- **Stack-Based Execution:** The VM uses a stack to manage data and intermediate results, ensuring efficient and deterministic script execution.
+- **Forward-Looking Introspection:** Scripts can access transaction-level metadata, such as input amounts, output commitments, and block height, enabling dynamic and context-aware logic.
+- **Programmable Covenants:** Developers can create UTXOs with conditions that restrict how they can be spent, such as requiring specific outputs or enforcing time locks.
+- **Extensibility:** The VM's design allows for the addition of new opcodes and features, ensuring adaptability to future use cases.
+
+This programmable environment empowers developers to define custom transaction behaviors, enabling use cases such as multi-signature wallets, atomic swaps, and advanced financial instruments, all while maintaining the security and verifiability of the AUPP protocol.
 
 **4. Consensus: Chained Mask Proof of Work**
 
@@ -47,16 +61,17 @@ Consensus in AUPP is defined by the transaction graph itself rather than an exte
 
 1. **Lead UTXO:** The output at index 0 of the previous block defines the next challenge.  
 2. **The Mask:** The commitment of this Lead UTXO acts as a bitmask for the next miner.  
-3. Mining Condition: A miner must find an Ed25519 public key ($pk$) such that:
-$$(\text{mask} \land \text{pk}) = 0$$
+3. **Mining Condition:** A miner must find an Ed25519 public key (`pk`) such that: `Mask & pk == 0`
 
 To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
 
 ### **4.2 Difficulty-Based Rewards**
 
-The difficulty ($D$) is determined by the number of 1-bits in the mask. The reward grows exponentially to incentivize solving harder masks:
+The difficulty (`D`) is determined by the number of 1-bits in the mask. The reward grows exponentially to incentivize solving harder masks:
 
-$$R(D) = \min(1000000, 2^{\lfloor D/4 \rfloor})$$
+```
+R(D) = min(1000000, 2^(floor(D/4)))
+```
 
 **5. Security and Economic Properties**
 
