@@ -12,7 +12,7 @@ corresponding `Op` by using `Op::try_from`.
 */
 
 use super::op::{
-    OP_HEIGHT, OP_MUL_HASH_B2, OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_U32,
+    OP_MUL_HASH_B2, OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_U32, OP_SPLIT,
     OP_SUPPLY, Op,
 };
 
@@ -112,6 +112,13 @@ impl<'a> Iterator for Scanner<'a> {
                     None
                 }
             },
+            OP_SPLIT => match self.read_u8() {
+                Some(v) => Some(Op::Split(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
             // For other single-byte opcodes rely on Op::try_from
             other => Op::try_from(other).ok(),
         }
@@ -160,6 +167,8 @@ mod tests {
             OP_OUT_COMM,
             0x03,
             OP_SIGHASH_ALL,
+            OP_SPLIT,
+            1,
         ];
 
         let collected: Vec<Op> = Scanner::new(&bytes).collect();
@@ -176,6 +185,7 @@ mod tests {
                 Op::OutData(2),
                 Op::OutComm(3),
                 Op::SighashAll,
+                Op::Split(1)
             ]
         );
     }

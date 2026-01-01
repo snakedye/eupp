@@ -194,11 +194,9 @@ mod tests {
     fn mining_transaction(new_supply: u32, tx_hash: Hash, public_key: PublicKey) -> Transaction {
         let output_id = OutputId::new(tx_hash, 0);
         let mut transaction = Transaction::new(vec![], vec![]);
-        transaction.inputs.push(Input {
-            output_id,
-            public_key,
-            signature: [0; 64],
-        });
+        transaction
+            .inputs
+            .push(Input::new(output_id, public_key, [0; 64]));
         transaction.outputs.push(Output {
             version: crate::core::transaction::Version::V0,
             amount: new_supply,

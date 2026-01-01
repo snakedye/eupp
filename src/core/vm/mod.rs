@@ -29,12 +29,12 @@ pub const fn p2pk_script() -> &'static [u8] {
         OP_CHECKSIG,
         OP_VERIFY,
         // // --- Corrected Part 2 ---
-        OP_IN_COMM, // Push the original commitment from the UTXO
-        OP_PUSH_PK, // Push the public key
-        OP_HASH_B2, // Hash the pubkey (public_key)
-        OP_EQUAL,   // Compare: HASH(public_key, data) == original_commitment
-        OP_VERIFY,  // Fail if they are not equal
-        OP_RETURN,  // Succeed
+        OP_SELF_COMM, // Push the original commitment from the UTXO
+        OP_PUSH_PK,   // Push the public key
+        OP_HASH_B2,   // Hash the pubkey (public_key)
+        OP_EQUAL,     // Compare: HASH(public_key, data) == original_commitment
+        OP_VERIFY,    // Fail if they are not equal
+        OP_RETURN,    // Succeed
     ]
 }
 
@@ -157,6 +157,40 @@ impl<'a> StackValue<'a> {
             }
         }
     }
+
+    fn copy_from_self(&self, slice: &mut [u8]) -> usize {
+        match self {
+            StackValue::U8(value) => {
+                if slice.len() >= 1 {
+                    slice[0] = *value;
+                    1
+                } else {
+                    0
+                }
+            }
+            StackValue::Bytes(bytes) => {
+                let len = bytes.len().min(slice.len());
+                slice[..len].copy_from_slice(&bytes[..len]);
+                len
+            }
+            StackValue::U32(int) => {
+                let bytes = int.to_be_bytes();
+                let len = bytes.len().min(slice.len());
+                slice[..len].copy_from_slice(&bytes[..len]);
+                len
+            }
+            StackValue::Stream { iter, len } => {
+                let mut written = 0;
+                for value in iter.take(*len) {
+                    if written >= slice.len() {
+                        break;
+                    }
+                    written += value.copy_from_self(&mut slice[written..]);
+                }
+                written
+            }
+        }
+    }
 }
 
 impl Default for OwnedStackValue {
@@ -251,22 +285,48 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 Op::PushU32(n) => return self.exec(scanner, stack.push(n.into())),
                 Op::PushByte(b) => return self.exec(scanner, stack.push(b.into())),
 
+                Op::ReadByte => match stack.pop() {
+                    Some((value, parent)) => {
+                        let mut buffer = [0u8; 1];
+                        let bytes_written = value.copy_from_self(&mut buffer);
+                        if bytes_written > 0 {
+                            self.exec(scanner, parent.push(buffer[0].into()))
+                        } else {
+                            Err(ExecError::StackUnderflow)
+                        }
+                    }
+                    None => Err(ExecError::StackUnderflow),
+                },
+                Op::ReadU32 => match stack.pop() {
+                    Some((value, parent)) => {
+                        let mut buffer = [0u8; 4];
+                        let bytes_written = value.copy_from_self(&mut buffer);
+                        if bytes_written < 4 {
+                            Err(ExecError::StackUnderflow)
+                        } else {
+                            let value = u32::from_be_bytes(buffer);
+                            self.exec(scanner, parent.push(value.into()))
+                        }
+                    }
+                    None => Err(ExecError::StackUnderflow),
+                },
+
                 // Ledger / transaction related (placeholders or small integrations)
-                Op::InAmt => {
+                Op::SelfAmt => {
                     let utxo = self
                         .ledger
                         .get_utxo(&self.get_input().output_id)
                         .ok_or(ExecError::FetchFailed)?;
                     return self.exec(scanner, stack.push(utxo.amount.into()));
                 }
-                Op::InData => {
+                Op::SelfData => {
                     let utxo = self
                         .ledger
                         .get_utxo(&self.get_input().output_id)
                         .ok_or(ExecError::FetchFailed)?;
                     return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.data)));
                 }
-                Op::InComm => {
+                Op::SelfComm => {
                     let utxo = self
                         .ledger
                         .get_utxo(&self.get_input().output_id)
@@ -313,6 +373,12 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     return self.exec(
                         scanner,
                         stack.push(self.get_input().signature.as_slice().into()),
+                    );
+                }
+                Op::PushWitness => {
+                    return self.exec(
+                        scanner,
+                        stack.push(self.get_input().witness.as_slice().into()),
                     );
                 }
                 Op::SighashAll => {
@@ -441,6 +507,26 @@ impl<'a, L: Ledger> Vm<'a, L> {
                         }
                     }
                     Err(ExecError::StackUnderflow)
+                }
+                Op::Split(index) => {
+                    if let Some((a, parent)) = stack.pop() {
+                        match a {
+                            StackValue::Bytes(bytes) => {
+                                let (left, right) = bytes.split_at(index as usize);
+                                return self
+                                    .exec(scanner, parent.push(left.into()).push(right.into()));
+                            }
+                            StackValue::Stream { .. } => {
+                                let bytes = a.to_bytes();
+                                let (left, right) = bytes.split_at(index as usize);
+                                return self
+                                    .exec(scanner, parent.push(left.into()).push(right.into()));
+                            }
+                            _ => Err(ExecError::TypeMismatch),
+                        }
+                    } else {
+                        Err(ExecError::StackUnderflow)
+                    }
                 }
                 Op::Add => {
                     // Pops a,b pushes b+a
@@ -573,11 +659,7 @@ mod tests {
 
     fn default_transaction() -> Transaction {
         Transaction {
-            inputs: vec![Input {
-                output_id: OutputId::new([0; 32], 0),
-                signature: [0; 64],
-                public_key: [0; 32],
-            }],
+            inputs: vec![Input::new(OutputId::new([0; 32], 0), [0; 32], [0; 64])],
             outputs: vec![],
         }
     }
@@ -661,11 +743,7 @@ mod tests {
     #[test]
     fn test_op_in_amt() {
         let output_id = OutputId::new(TransactionHash::default(), 0);
-        let input = Input {
-            output_id,
-            signature: [0; 64],
-            public_key: [0; 32],
-        };
+        let input = Input::new(output_id, [0; 32], [0; 64]);
         let utxo = Output {
             version: Version::V1,
             amount: 100,
@@ -677,7 +755,7 @@ mod tests {
 
         let transaction = Transaction::new(vec![input], vec![]);
         let vm = create_vm(&ledger, 0, &transaction);
-        let code = [OP_IN_AMT];
+        let code = [OP_SELF_AMT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100)));
     }
 
@@ -693,17 +771,13 @@ mod tests {
             commitment: [0; 32],
             data,
         };
-        let input = Input {
-            output_id,
-            signature: [0; 64],
-            public_key: [0; 32],
-        };
+        let input = Input::new(output_id, [0; 32], [0; 64]);
         let mut ledger = MockLedger::default();
         ledger.utxos.insert(output_id, utxo);
 
         let transaction = Transaction::new(vec![input], vec![]);
         let vm = create_vm(&ledger, 0, &transaction);
-        let code = [OP_IN_DATA, OP_DUP, OP_EQUAL];
+        let code = [OP_SELF_DATA, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
     }
 
@@ -719,21 +793,17 @@ mod tests {
             commitment,
             data: [0; 32],
         };
-        let input = Input {
-            output_id,
-            signature: [0; 64],
-            public_key: [0; 32],
-        };
+        let input = Input::new(output_id, [0; 32], [0; 64]);
         let mut ledger = MockLedger::default();
         ledger.utxos.insert(output_id, output);
 
         let new_outputs = vec![output];
         let transaction = Transaction::new(vec![input], new_outputs);
         let vm = create_vm(&ledger, 0, &transaction);
-        let code = [OP_IN_COMM, OP_DUP, OP_EQUAL];
+        let code = [OP_SELF_COMM, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
 
-        let code_vs_data = [OP_IN_COMM, OP_IN_DATA, OP_EQUAL];
+        let code_vs_data = [OP_SELF_COMM, OP_SELF_DATA, OP_EQUAL];
         assert_eq!(vm.run(&code_vs_data), Ok(OwnedStackValue::U8(0)));
     }
 
@@ -841,11 +911,7 @@ mod tests {
     fn test_op_push_pk() {
         let mut public_key = [0u8; 32];
         public_key[10] = 10;
-        let input = Input {
-            output_id: OutputId::new([0; 32], 0),
-            signature: [0; 64],
-            public_key,
-        };
+        let input = Input::new(OutputId::new([0; 32], 0), public_key, [0; 64]);
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -861,11 +927,7 @@ mod tests {
     fn test_op_push_sig() {
         let mut signature = [0_u8; 64];
         signature[10] = 10;
-        let input = Input {
-            output_id: OutputId::new([0; 32], 0),
-            signature,
-            public_key: [0; 32],
-        };
+        let input = Input::new(OutputId::new([0; 32], 0), [0; 32], signature);
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -887,11 +949,7 @@ mod tests {
 
         let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
         let signature = signing_key.sign(&msg);
-        let input = Input {
-            output_id,
-            signature: signature.to_bytes(),
-            public_key: verifying_key.to_bytes(),
-        };
+        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -914,11 +972,7 @@ mod tests {
 
         let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
         let signature = other_signing_key.sign(&msg); // Signed with wrong key
-        let input = Input {
-            output_id,
-            signature: signature.to_bytes(),
-            public_key: verifying_key.to_bytes(),
-        };
+        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -942,11 +996,7 @@ mod tests {
             commitment,
             data,
         };
-        let input = Input {
-            output_id,
-            signature: [0; 64],
-            public_key: [0; 32],
-        };
+        let input = Input::new(output_id, [0; 32], [0; 64]);
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -955,7 +1005,7 @@ mod tests {
         ledger.utxos.insert(output_id, output);
         let vm = create_vm(&ledger, 0, &transaction);
 
-        let code = [OP_IN_DATA, OP_HASH_B2, OP_IN_COMM, OP_EQUAL];
+        let code = [OP_SELF_DATA, OP_HASH_B2, OP_SELF_COMM, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
     }
 
@@ -1097,11 +1147,7 @@ mod tests {
         let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
 
         let signature = signing_key.sign(&msg);
-        let input = Input {
-            output_id,
-            signature: signature.to_bytes(),
-            public_key: verifying_key.to_bytes(),
-        };
+        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -1126,11 +1172,7 @@ mod tests {
         let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
         let signature = other_signing_key.sign(&msg);
 
-        let input = Input {
-            output_id,
-            signature: signature.to_bytes(),
-            public_key: verifying_key.to_bytes(),
-        };
+        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -1202,5 +1244,65 @@ mod tests {
 
         // Expect a stack overflow error due to excessive concatenation
         assert_eq!(vm.run(&code), Err(ExecError::StackOverflow));
+    }
+
+    #[test]
+    fn test_op_push_witness() {
+        let ledger = MockLedger::default();
+        let mut transaction = default_transaction();
+        let witness_data = [0x01, 0x02, 0x03, 0x04];
+        transaction.inputs[0].witness = witness_data.to_vec();
+        let vm = create_vm(&ledger, 0, &transaction);
+
+        let result = vm.run(&[OP_PUSH_WITNESS]);
+        assert_eq!(result, Ok(OwnedStackValue::Bytes(witness_data.to_vec())));
+    }
+
+    #[test]
+    fn test_op_split() {
+        let ledger = MockLedger::default();
+        let mut transaction = default_transaction();
+        let witness_data = [0x01, 0x02, 0x03, 0x04];
+        transaction.inputs[0].witness = witness_data.to_vec();
+        let vm = create_vm(&ledger, 0, &transaction);
+
+        let result = vm.run(&[OP_PUSH_WITNESS, OP_SPLIT, 2]);
+        assert_eq!(result, Ok(OwnedStackValue::Bytes(vec![0x03, 0x04])));
+    }
+    #[test]
+    fn test_op_read_u32() {
+        let ledger = MockLedger::default();
+        let transaction = default_transaction();
+        let vm = create_vm(&ledger, 0, &transaction);
+
+        let data = 12345678u32.to_le_bytes();
+        let code = [
+            OP_PUSH_BYTE,
+            data[0],
+            OP_PUSH_BYTE,
+            data[1],
+            OP_PUSH_BYTE,
+            data[2],
+            OP_PUSH_BYTE,
+            data[3],
+            OP_CAT,
+            OP_CAT,
+            OP_CAT, // Combine bytes into a single slice
+            OP_READ_U32,
+        ];
+
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(12345678)));
+    }
+
+    #[test]
+    fn test_op_read_byte() {
+        let ledger = MockLedger::default();
+        let transaction = default_transaction();
+        let vm = create_vm(&ledger, 0, &transaction);
+
+        let data = [0xAB];
+        let code = [OP_PUSH_BYTE, data[0], OP_READ_BYTE];
+
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(0xAB)));
     }
 }

@@ -22,6 +22,7 @@ pub struct Input {
     pub output_id: OutputId,
     pub signature: Signature,
     pub public_key: PublicKey,
+    pub witness: Vec<u8>,
 }
 
 /// Protocol version used for outputs in the codebase.
@@ -122,6 +123,30 @@ impl fmt::Debug for Input {
             .field("signature", &hex::encode(&self.signature))
             .field("public_key", &hex::encode(&self.public_key))
             .finish()
+    }
+}
+
+impl Input {
+    pub fn new(output_id: OutputId, public_key: PublicKey, signature: Signature) -> Self {
+        Self {
+            output_id,
+            signature,
+            public_key,
+            witness: vec![],
+        }
+    }
+    pub fn new_with_witness(
+        output_id: OutputId,
+        public_key: PublicKey,
+        signature: Signature,
+        witness: Vec<u8>,
+    ) -> Self {
+        Self {
+            output_id,
+            signature,
+            public_key,
+            witness,
+        }
     }
 }
 
@@ -409,14 +434,14 @@ mod tests {
     #[test]
     fn test_transaction_hash() {
         // Build a transaction with one input and one output
-        let input = Input {
-            output_id: OutputId {
+        let input = Input::new(
+            OutputId {
                 tx_hash: [1u8; 32],
                 index: 0,
             },
-            signature: [0; 64],
-            public_key: [2u8; 32],
-        };
+            [2u8; 32],
+            [0; 64],
+        );
         let output = Output::new_v1(10, &[0; 32], &[3u8; 32]);
         let tx = Transaction {
             inputs: vec![input.clone()],
@@ -474,14 +499,14 @@ mod tests {
         ledger.add_block(block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
-        let input = Input {
-            output_id: OutputId {
+        let input = Input::new(
+            OutputId {
                 tx_hash: funding_txid,
                 index: 0,
             },
-            signature: [0; 64],
-            public_key: [11u8; 32], // we use a random public key
-        };
+            [11u8; 32], // we use a random public key
+            [0; 64],
+        );
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -562,11 +587,11 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input {
-            output_id: utxo_id,
+        let input = Input::new(
+            utxo_id,
+            signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
             signature,
-            public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-        };
+        );
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -622,11 +647,11 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input {
-            output_id: utxo_id,
+        let input = Input::new(
+            utxo_id,
+            signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
             signature,
-            public_key: signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-        };
+        );
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -680,11 +705,10 @@ mod tests {
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
         let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input {
-            output_id: utxo_id,
+        let input = Input::new(
+            utxo_id, pubkey, // same public key used to construct commitment
             signature,
-            public_key: pubkey, // same public key used to construct commitment
-        };
+        );
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -734,11 +758,11 @@ mod tests {
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
             let sighash = sighash(Blake2s256::new(), &[utxo_id], &[]);
             let signature = signing_key.sign(&sighash).to_bytes();
-            inputs.push(Input {
-                output_id: utxo_id,
+            inputs.push(Input::new(
+                utxo_id,
+                signing_key.verifying_key().to_bytes(),
                 signature,
-                public_key: signing_key.verifying_key().to_bytes(),
-            });
+            ));
         }
 
         let spending_tx = Transaction {
@@ -795,14 +819,14 @@ mod tests {
             .collect();
 
         let spending_tx = Transaction {
-            inputs: vec![Input {
-                output_id: OutputId {
+            inputs: vec![Input::new(
+                OutputId {
                     tx_hash: funding_txid,
                     index: 0,
                 },
-                signature: [0; 64],
-                public_key: [11u8; 32],
-            }],
+                [11u8; 32],
+                [0; 64],
+            )],
             outputs,
         };
 

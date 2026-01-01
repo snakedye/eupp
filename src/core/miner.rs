@@ -66,11 +66,7 @@ pub fn build_mining_tx_deterministic(
             let signature = signing_key.sign(sighash.as_ref());
 
             // Build input revealing pk and signature
-            let input = Input {
-                output_id: lead_utxo_id,
-                signature: signature.to_bytes(),
-                public_key: pk_bytes,
-            };
+            let input = Input::new(lead_utxo_id, pk_bytes, signature.to_bytes());
 
             let tx = Transaction {
                 inputs: vec![input],

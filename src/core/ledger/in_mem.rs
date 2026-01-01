@@ -8,6 +8,12 @@ use crate::core::{
     transaction::{Output, OutputId, TransactionError},
 };
 
+#[derive(Clone)]
+pub struct UtxoEntry {
+    pub tx_hash: Hash,
+    pub output: Output,
+}
+
 use super::{BlockMetadata, Ledger};
 
 pub struct InMemoryLedger {
@@ -15,7 +21,7 @@ pub struct InMemoryLedger {
     pub block_index: HashMap<Hash, BlockMetadata>,
 
     // The complete set of unspent transaction outputs (UTXOs)
-    pub utxo_set: BTreeMap<OutputId, Output>,
+    pub utxo_set: BTreeMap<OutputId, UtxoEntry>,
 
     /// Points to the block with the Maximum Accumulated Supply (MAS)
     ///
@@ -46,8 +52,13 @@ impl InMemoryLedger {
             // Add new UTXOs
             let tx_id = tx.hash::<Blake2s256>();
             for (i, output) in tx.outputs.iter().enumerate() {
-                self.utxo_set
-                    .insert(OutputId::new(tx_id, i as u8), output.clone());
+                self.utxo_set.insert(
+                    OutputId::new(tx_id, i as u8),
+                    UtxoEntry {
+                        tx_hash: tx_id,
+                        output: output.clone(),
+                    },
+                );
             }
         }
         Ok(())
@@ -125,7 +136,9 @@ impl Ledger for InMemoryLedger {
     }
 
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
-        self.utxo_set.get(output_id).copied()
+        self.utxo_set
+            .get(output_id)
+            .map(|entry| entry.output.clone())
     }
 
     fn get_last_block_metadata(&self) -> Option<BlockMetadata> {

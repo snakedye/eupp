@@ -21,9 +21,9 @@ pub mod r#const {
     /// Push a single byte onto the stack.
     pub const OP_PUSH_BYTE: u8 = 0x07;
 
-    pub const OP_IN_AMT: u8 = 0x10;
-    pub const OP_IN_DATA: u8 = 0x11;
-    pub const OP_IN_COMM: u8 = 0x12;
+    pub const OP_SELF_AMT: u8 = 0x10;
+    pub const OP_SELF_DATA: u8 = 0x11;
+    pub const OP_SELF_COMM: u8 = 0x12;
     pub const OP_OUT_AMT: u8 = 0x13;
     pub const OP_OUT_DATA: u8 = 0x14;
     pub const OP_OUT_COMM: u8 = 0x15;
@@ -36,11 +36,14 @@ pub mod r#const {
 
     /// Push current total supply onto the stack.
     pub const OP_SUPPLY: u8 = 0x50;
+
     /// Push current block height onto the stack.
     pub const OP_HEIGHT: u8 = 0x51;
 
     pub const OP_PUSH_PK: u8 = 0x20;
     pub const OP_PUSH_SIG: u8 = 0x21;
+    /// Pushes the witness data onto the stack.
+    pub const OP_PUSH_WITNESS: u8 = 0x22;
 
     pub const OP_CHECKSIG: u8 = 0x30;
     pub const OP_HASH_B2: u8 = 0x31;
@@ -52,6 +55,12 @@ pub mod r#const {
     pub const OP_CAT: u8 = 0x37;
     pub const OP_ADD: u8 = 0x34;
     pub const OP_SUB: u8 = 0x35;
+    /// Splits a slice into two at a given index (u8).
+    pub const OP_SPLIT: u8 = 0x38;
+    /// Reads a byte slice from the stack and casts it into a u32.
+    pub const OP_READ_U32: u8 = 0x39;
+    /// Reads a byte slice from the stack and casts it into a single byte.
+    pub const OP_READ_BYTE: u8 = 0x3A;
 
     pub const OP_VERIFY: u8 = 0x40;
     pub const OP_RETURN: u8 = 0x41;
@@ -78,11 +87,6 @@ pub enum Op {
     /// Pushes a 32-bit unsigned integer (u32) onto the stack.
     ///
     /// Encoding: `[OP_PUSH_U32][u32 le bytes...]`.
-    ///
-    /// Note: `TryFrom<u8>` can only inspect the opcode byte, so when it sees
-    /// `OP_PUSH_U32` it returns `Op::Push(0)` as a placeholder. The VM
-    /// parser/executor (or the `Scanner`) must read the following 4 bytes and
-    /// construct the real `Op::Push(value)` before execution.
     PushU32(u32),
     /// Pushes a single byte onto the stack.
     ///
@@ -90,11 +94,11 @@ pub enum Op {
     PushByte(u8),
 
     /// Pushes the Amount of the UTXO being spent.
-    InAmt,
+    SelfAmt,
     /// Pushes the Data Hash of the UTXO being spent.
-    InData,
+    SelfData,
     /// Pushes the Commitment of the UTXO being spent.
-    InComm,
+    SelfComm,
     /// Pops index, pushes Amount of Output[index].
     OutAmt(u8),
     /// Pops index, pushes Data Hash of Output[index].
@@ -140,6 +144,14 @@ pub enum Op {
     SighashAll,
     /// Pushes the sighash for only the outputs onto the stack.
     SighashOut,
+    /// Pushes the witness data onto the stack.
+    PushWitness,
+    /// Splits a slice into two at a given index (u8).
+    Split(u8),
+    /// Reads a byte slice from the stack and casts it into a u32.
+    ReadU32,
+    /// Reads a byte slice from the stack and casts it into a single byte.
+    ReadByte,
 }
 
 /// Error returned when decoding an opcode byte into an `Op`.
@@ -174,9 +186,9 @@ impl core::convert::TryFrom<u8> for Op {
             OP_PUSH_U32 => Ok(Op::PushU32(0)), // placeholder; Scanner must read 4 bytes after opcode
             OP_PUSH_BYTE => Ok(Op::PushByte(0)), // placeholder; Scanner must read 1 byte after opcode
 
-            OP_IN_AMT => Ok(Op::InAmt),
-            OP_IN_DATA => Ok(Op::InData),
-            OP_IN_COMM => Ok(Op::InComm),
+            OP_SELF_AMT => Ok(Op::SelfAmt),
+            OP_SELF_DATA => Ok(Op::SelfData),
+            OP_SELF_COMM => Ok(Op::SelfComm),
             OP_OUT_AMT => Ok(Op::OutAmt(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_OUT_DATA => Ok(Op::OutData(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_OUT_COMM => Ok(Op::OutComm(0)), // placeholder; Scanner must read 1 byte after opcode
@@ -200,7 +212,11 @@ impl core::convert::TryFrom<u8> for Op {
             OP_SIGHASH_ALL => Ok(Op::SighashAll),
             OP_IF => Ok(Op::If),
             OP_SIGHASH_OUT => Ok(Op::SighashOut),
+            OP_PUSH_WITNESS => Ok(Op::PushWitness),
             OP_END_IF => Ok(Op::EndIf),
+            OP_SPLIT => Ok(Op::Split(0)),
+            OP_READ_U32 => Ok(Op::ReadU32),
+            OP_READ_BYTE => Ok(Op::ReadByte),
 
             other => Err(OpDecodeError(other)),
         }
@@ -218,9 +234,9 @@ impl From<Op> for u8 {
             Op::PushU32(_) => OP_PUSH_U32,
             Op::PushByte(_) => OP_PUSH_BYTE,
 
-            Op::InAmt => OP_IN_AMT,
-            Op::InData => OP_IN_DATA,
-            Op::InComm => OP_IN_COMM,
+            Op::SelfAmt => OP_SELF_AMT,
+            Op::SelfData => OP_SELF_DATA,
+            Op::SelfComm => OP_SELF_COMM,
             Op::OutAmt(_) => OP_OUT_AMT,
             Op::OutData(_) => OP_OUT_DATA,
             Op::OutComm(_) => OP_OUT_COMM,
@@ -245,6 +261,10 @@ impl From<Op> for u8 {
             Op::SighashAll => OP_SIGHASH_ALL,
             Op::EndIf => OP_END_IF,
             Op::SighashOut => OP_SIGHASH_OUT,
+            Op::PushWitness => OP_PUSH_WITNESS,
+            Op::Split(_) => OP_SPLIT,
+            Op::ReadU32 => OP_READ_U32,
+            Op::ReadByte => OP_READ_BYTE,
         }
     }
 }
@@ -263,9 +283,9 @@ mod tests {
             Op::Drop,
             Op::Swap,
             Op::PushU32(0),
-            Op::InAmt,
-            Op::InData,
-            Op::InComm,
+            Op::SelfAmt,
+            Op::SelfData,
+            Op::SelfComm,
             Op::OutAmt(0),
             Op::OutData(0),
             Op::OutComm(0),
@@ -292,6 +312,10 @@ mod tests {
             Op::EndIf,
             Op::SighashAll,
             Op::SighashOut,
+            Op::PushWitness,
+            Op::Split(0),
+            Op::ReadU32,
+            Op::ReadByte,
         ];
 
         for &op in &all {
