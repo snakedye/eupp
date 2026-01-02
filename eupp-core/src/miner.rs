@@ -187,7 +187,7 @@ mod tests {
 
         // Miner reward commitment should be the commitment of the revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = pubkey_hash::<Blake2s256>(&input.public_key);
+        let expected_commitment = pubkey_hash(&input.public_key, None);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
@@ -282,7 +282,7 @@ mod tests {
 
         // Miner reward commitment should match revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = pubkey_hash::<Blake2s256>(&input.public_key);
+        let expected_commitment = pubkey_hash(&input.public_key, None);
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key

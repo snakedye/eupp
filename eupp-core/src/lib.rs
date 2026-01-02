@@ -18,9 +18,13 @@ pub trait VirtualSize {
 
 // Helpers
 /// Create a 32-byte commitment from a public key.
-pub fn pubkey_hash<D: Digest>(pk: &PublicKey) -> Hash {
-    let hash = D::digest(pk);
-    hash.as_slice().try_into().unwrap()
+pub fn pubkey_hash(pk: &PublicKey, data: Option<&[u8]>) -> Hash {
+    let mut hasher = blake2::Blake2s256::new();
+    hasher.update(pk);
+    if let Some(data) = data {
+        hasher.update(data);
+    }
+    hasher.finalize().into()
 }
 
 /// Check whether an attempted public key satisfies the provided mask.
