@@ -1,5 +1,3 @@
-use blake2::Blake2s256;
-
 use eupp_core::{
     block::Block,
     ledger::{InMemoryLedger, Ledger},
@@ -33,7 +31,7 @@ fn main() {
     };
     let mut coinbase_block = Block::new(0, [0u8; 32]);
     coinbase_block.transactions.push(coinbase_tx);
-    let coinbase_block_hash = coinbase_block.header().hash::<Blake2s256>();
+    let coinbase_block_hash = coinbase_block.header().hash();
 
     // Add genesis/coinbase block to ledger
     if let Err(e) = ledger.add_block(coinbase_block) {
@@ -64,7 +62,7 @@ fn main() {
         // Mine the next block. We use usize::MAX attempts to mine "forever" until a solution is found.
         match miner::build_next_block(&ledger, usize::MAX) {
             Some((_signing_key, new_block)) => {
-                let new_block_hash = new_block.header().hash::<Blake2s256>();
+                let new_block_hash = new_block.header().hash();
                 println!(
                     "Found a potential block! Hash: {}",
                     hex::encode(new_block_hash)

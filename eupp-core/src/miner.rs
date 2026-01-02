@@ -70,7 +70,7 @@ pub(self) fn build_mining_tx_deterministic(
             let outputs = vec![new_mint_output, miner_reward_output];
 
             // Compute sighash
-            let sighash = sighash(Blake2s256::new(), &[lead_utxo_id], &outputs);
+            let sighash = sighash(&[lead_utxo_id], &outputs);
 
             // Sign
             let signature = signing_key.sign(sighash.as_ref());
@@ -162,7 +162,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
-        let prev_tx_hash = funding_tx.hash::<Blake2s256>();
+        let prev_tx_hash = funding_tx.hash();
         let prev_block_hash = [0u8; 32];
         // let mut prev_block = Block::new(crate::Version::V1, [0u8; 32]);
         // prev_block.transactions.push(funding_tx);
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
-        let sighash = sighash(Blake2s256::new(), &[input.output_id], &tx.outputs);
+        let sighash = sighash(&[input.output_id], &tx.outputs);
         let vk = VerifyingKey::from_bytes(&input.public_key).expect("valid vk");
         let sig = Signature::from_slice(&input.signature).expect("valid signature");
         assert!(vk.verify_strict(&sighash, &sig).is_ok());
@@ -210,7 +210,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
-        let prev_tx_hash = funding_tx.hash::<Blake2s256>();
+        let prev_tx_hash = funding_tx.hash();
         let prev_block_hash = [0u8; 32];
 
         let tx_opt = build_mining_tx_deterministic(
@@ -246,7 +246,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
-        let prev_tx_hash = funding_tx.hash::<Blake2s256>();
+        let prev_tx_hash = funding_tx.hash();
         let prev_block_hash = [0u8; 32];
 
         // Allow a generous number of attempts but we expect to find a solution far fewer.
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(tx.outputs[1].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
-        let sighash = sighash(Blake2s256::new(), &[input.output_id], &tx.outputs);
+        let sighash = sighash(&[input.output_id], &tx.outputs);
         let vk = VerifyingKey::from_bytes(&input.public_key).expect("valid vk");
         let sig = Signature::from_slice(&input.signature).expect("valid signature");
         assert!(vk.verify_strict(&sighash, &sig).is_ok());

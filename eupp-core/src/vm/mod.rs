@@ -404,14 +404,13 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 }
                 Op::SighashAll => {
                     let sighash = sighash(
-                        blake2::Blake2s256::new(),
                         self.transaction.inputs.iter().map(|input| &input.output_id),
                         &self.transaction.outputs,
                     );
                     return self.exec(scanner, stack.push(sighash.as_slice().into()));
                 }
                 Op::SighashOut => {
-                    let sighash = sighash(blake2::Blake2s256::new(), [], &self.transaction.outputs);
+                    let sighash = sighash([], &self.transaction.outputs);
                     return self.exec(scanner, stack.push(sighash.as_slice().into()));
                 }
 
@@ -956,7 +955,7 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
+        let msg = sighash(&[output_id], []);
         let signature = signing_key.sign(&msg);
         let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
         let transaction = Transaction {
@@ -979,7 +978,7 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
+        let msg = sighash(&[output_id], []);
         let signature = other_signing_key.sign(&msg); // Signed with wrong key
         let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
         let transaction = Transaction {
@@ -1153,7 +1152,7 @@ mod tests {
             output_id,
             Output::new_v1(100, &verifying_key.to_bytes(), &[0; 32]),
         );
-        let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
+        let msg = sighash(&[output_id], []);
 
         let signature = signing_key.sign(&msg);
         let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
@@ -1178,7 +1177,7 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let msg = sighash(blake2::Blake2s256::new(), &[output_id], []);
+        let msg = sighash(&[output_id], []);
         let signature = other_signing_key.sign(&msg);
 
         let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());

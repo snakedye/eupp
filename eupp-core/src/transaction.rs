@@ -230,8 +230,8 @@ impl Transaction {
     }
 
     /// Calculates the hash of the transaction.
-    pub fn hash<D: Digest>(&self) -> TransactionHash {
-        let mut hasher = D::new();
+    pub fn hash(&self) -> TransactionHash {
+        let mut hasher = Blake2s256::new();
         hasher.update(&self.inputs.len().to_be_bytes());
         for input in &self.inputs {
             hasher.update(&input.output_id.tx_hash);
@@ -247,7 +247,7 @@ impl Transaction {
             hasher.update(&output.commitment);
         }
 
-        hasher.finalize().as_ref().try_into().unwrap()
+        hasher.finalize().into()
     }
 
     /// Verifies the transaction against the ledger.
@@ -377,14 +377,11 @@ impl Output {
 }
 
 /// Create the sighash for a transaction input
-pub fn sighash<'a, D>(
-    mut hasher: D,
+pub fn sighash<'a>(
     inputs: impl IntoIterator<Item = &'a OutputId>,
     outputs: impl IntoIterator<Item = &'a Output>,
-) -> Hash
-where
-    D: Digest,
-{
+) -> Hash {
+    let mut hasher = Blake2s256::new();
     // hasher.update(&inputs.len().to_be_bytes());
     for input in inputs {
         hasher.update(&input.tx_hash);
@@ -403,7 +400,7 @@ where
         hasher.update(&data);
         hasher.update(&commitment);
     }
-    hasher.finalize().as_slice().try_into().unwrap()
+    hasher.finalize().into()
 }
 
 #[cfg(test)]
@@ -451,7 +448,7 @@ mod tests {
         let outputs = vec![out1, out2];
 
         // Compute sighash via function
-        let s1 = sighash(Blake2s256::new(), &[output_id], &outputs);
+        let s1 = sighash(&[output_id], &outputs);
 
         // Compute expected via manual hasher
         let mut hasher = Blake2s256::new();
@@ -485,7 +482,7 @@ mod tests {
             outputs: vec![output.clone()],
         };
 
-        let tx_hash = tx.hash::<Blake2s256>();
+        let tx_hash = tx.hash();
 
         // Manual hash
         let mut hasher = Blake2s256::new();
@@ -528,7 +525,7 @@ mod tests {
                 commitment: mask,
             }],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -578,7 +575,7 @@ mod tests {
         let outputs = vec![Output::new_v1(10, &public_key, &[5u8; 32])];
 
         // Compute the sighash
-        let sighash = sighash(Blake2s256::new(), &[output_id], &outputs);
+        let sighash = sighash(&[output_id], &outputs);
 
         // Sign the sighash
         let signature = signing_key.sign(&sighash);
@@ -608,7 +605,7 @@ mod tests {
                 commitment: mask,
             }],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -622,7 +619,7 @@ mod tests {
         };
         let new_outputs = vec![Output::new_v0(150, &mask, &data)]; // Any commitment will work with the mask chosen before
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input::new(
             utxo_id,
@@ -663,7 +660,7 @@ mod tests {
                 commitment: mask,
             }],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -682,7 +679,7 @@ mod tests {
             commitment: mask,
         }];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input::new(
             utxo_id,
@@ -727,7 +724,7 @@ mod tests {
                 Output::new_v2(reward, &pubkey, &data),
             ],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -740,7 +737,7 @@ mod tests {
             index: 1,
         };
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
-        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
         let input = Input::new(
             utxo_id, pubkey, // same public key used to construct commitment
@@ -777,7 +774,7 @@ mod tests {
                 commitment: mask,
             }],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -793,7 +790,7 @@ mod tests {
                 index: i as u8,
             };
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-            let sighash = sighash(Blake2s256::new(), &[utxo_id], &[]);
+            let sighash = sighash(&[utxo_id], &[]);
             let signature = signing_key.sign(&sighash).to_bytes();
             inputs.push(Input::new(
                 utxo_id,
@@ -837,7 +834,7 @@ mod tests {
                 commitment: mask,
             }],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Create a block containing the funding transaction and add to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -899,7 +896,7 @@ mod tests {
                 commitment,
             }],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Add funding block to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -914,7 +911,7 @@ mod tests {
         let new_outputs = vec![Output::new_v1(reward, &[0u8; 32], &[0u8; 32])];
 
         // sighash for spending tx (what the signature must sign)
-        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
 
         // Use the witness and place it on the input; but since utxo.data != hash(witness)
@@ -948,7 +945,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![Output::new_v3(reward, &pubkey, &witness)],
         };
-        let funding_txid = funding_tx.hash::<Blake2s256>();
+        let funding_txid = funding_tx.hash();
 
         // Add funding block to ledger
         let mut block = Block::new(0, [0u8; 32]);
@@ -963,7 +960,7 @@ mod tests {
         let new_outputs = vec![Output::new_v1(reward, &[0u8; 32], &[0u8; 32])];
 
         // sighash for spending tx (what the signature must sign)
-        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
 
         // Place the witness on the input; since utxo.data == hash(witness),
