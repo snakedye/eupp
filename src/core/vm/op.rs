@@ -20,6 +20,8 @@ pub mod r#const {
     pub const OP_PUSH_U32: u8 = 0x06;
     /// Push a single byte onto the stack.
     pub const OP_PUSH_BYTE: u8 = 0x07;
+    /// Push a byte array of length N onto the stack (N bytes follow the opcode).
+    pub const OP_PUSH_BYTES: u8 = 0x08;
 
     pub const OP_SELF_AMT: u8 = 0x10;
     pub const OP_SELF_DATA: u8 = 0x11;
@@ -47,8 +49,6 @@ pub mod r#const {
     pub const OP_CHECKSIG: u8 = 0x30;
     pub const OP_HASH_B2: u8 = 0x31;
     pub const OP_EQUAL: u8 = 0x32;
-    /// Pops `n` items, hashes them using Blake2s256, and pushes the result.
-    pub const OP_MUL_HASH_B2: u8 = 0x36;
     pub const OP_GREATER: u8 = 0x33;
     /// Concatenate the top two byte arrays on the stack.
     pub const OP_CAT: u8 = 0x37;
@@ -72,7 +72,7 @@ pub mod r#const {
 pub use r#const::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Op {
+pub enum Op<'a> {
     /// Pushes an empty array (0) onto the stack.
     False,
     /// Pushes a 1 onto the stack.
@@ -91,6 +91,8 @@ pub enum Op {
     ///
     /// Encoding: `[OP_PUSH_BYTE][u8 byte...]`.
     PushByte(u8),
+    /// Pushes a byte array of length N onto the stack.
+    PushBytes(&'a [u8]),
 
     /// Pushes the Amount of the UTXO being spent.
     SelfAmt,
@@ -121,8 +123,6 @@ pub enum Op {
     HashB2,
     /// Pops two items, pushes 1 if equal, 0 otherwise.
     Equal,
-    /// Pops `n` items, hashes them using Blake2s256, and pushes the result.
-    MulHashB2(u8),
     /// Pops a, b. Pushes 1 if b > a.
     Greater,
     /// Concatenates the top two byte arrays on the stack.
@@ -173,7 +173,7 @@ impl core::fmt::Display for OpDecodeError {
 
 impl std::error::Error for OpDecodeError {}
 
-impl core::convert::TryFrom<u8> for Op {
+impl core::convert::TryFrom<u8> for Op<'_> {
     type Error = OpDecodeError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
@@ -185,6 +185,7 @@ impl core::convert::TryFrom<u8> for Op {
             OP_SWAP => Ok(Op::Swap),
             OP_PUSH_U32 => Ok(Op::PushU32(0)), // placeholder; Scanner must read 4 bytes after opcode
             OP_PUSH_BYTE => Ok(Op::PushByte(0)), // placeholder; Scanner must read 1 byte after opcode
+            OP_PUSH_BYTES => Ok(Op::PushBytes(&[])), // placeholder; Scanner must read 1 byte after opcode
 
             OP_SELF_AMT => Ok(Op::SelfAmt),
             OP_SELF_DATA => Ok(Op::SelfData),
@@ -208,7 +209,6 @@ impl core::convert::TryFrom<u8> for Op {
             OP_SUB => Ok(Op::Sub),
 
             OP_VERIFY => Ok(Op::Verify),
-            OP_MUL_HASH_B2 => Ok(Op::MulHashB2(0)), // placeholder; Scanner must read 1 byte after opcode
             OP_RETURN => Ok(Op::Return),
             OP_SIGHASH_ALL => Ok(Op::SighashAll),
             OP_IF => Ok(Op::If),
@@ -224,7 +224,7 @@ impl core::convert::TryFrom<u8> for Op {
     }
 }
 
-impl From<Op> for u8 {
+impl From<Op<'_>> for u8 {
     fn from(op: Op) -> u8 {
         match op {
             Op::False => OP_FALSE,
@@ -234,6 +234,7 @@ impl From<Op> for u8 {
             Op::Swap => OP_SWAP,
             Op::PushU32(_) => OP_PUSH_U32,
             Op::PushByte(_) => OP_PUSH_BYTE,
+            Op::PushBytes(_) => OP_PUSH_BYTES,
 
             Op::SelfAmt => OP_SELF_AMT,
             Op::SelfData => OP_SELF_DATA,
@@ -257,7 +258,7 @@ impl From<Op> for u8 {
             Op::Sub => OP_SUB,
 
             Op::Verify => OP_VERIFY,
-            Op::MulHashB2(_) => OP_MUL_HASH_B2,
+            // Op::MulHashB2(_) => OP_MUL_HASH_B2,
             Op::Return => OP_RETURN,
             Op::If => OP_IF,
             Op::SighashAll => OP_SIGHASH_ALL,
@@ -307,7 +308,7 @@ mod tests {
             Op::If,
             Op::EndIf,
             Op::PushByte(0),
-            Op::MulHashB2(0),
+            // Op::MulHashB2(0),
             Op::Verify,
             Op::Return,
             Op::If,
@@ -384,12 +385,4 @@ mod tests {
         let err = Op::try_from(0x99_u8).unwrap_err();
         assert_eq!(err, OpDecodeError(0x99));
     }
-}
-
-#[test]
-fn mul_hash_b2_tryfrom_returns_placeholder() {
-    // TryFrom only inspects the opcode byte; it cannot read the following
-    // payload byte. We expect a placeholder MulHashB2(0).
-    let parsed = Op::try_from(OP_MUL_HASH_B2).expect("should parse mul_hash_b2 opcode");
-    assert_eq!(parsed, Op::MulHashB2(0));
 }

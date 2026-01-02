@@ -1,9 +1,12 @@
-use super::vm::{ExecError, Vm, check_sig_script, p2pk_script};
+use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
 use super::{Hash, PublicKey, ledger::Ledger, pubkey_hash};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
 use std::error;
 use std::fmt;
+
+const MAX_WITNESS_SIZE: usize = 1024;
+const MAX_ALLOWED: usize = u8::MAX as usize;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
@@ -41,6 +44,8 @@ pub enum Version {
     V1 = 1,
     /// Second protocol revision.
     V2 = 2,
+    /// Third protocol revision. Segwit support.
+    V3 = 3,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,8 +76,11 @@ pub enum TransactionError {
     /// Total outputs exceed total inputs.
     InsufficientInputAmount { total_input: u32, total_output: u32 },
 
-    /// Specific coinbase (mint) validation failed (mask/amount rules).
-    // CoinbaseValidation { reason: String },
+    /// Witness script validation failed.
+    InvalidWitnessScript,
+
+    /// Witness script is too large.
+    WitnessTooLarge,
 
     /// Number of inputs exceeds maximum allowed.
     TooManyInputs(usize),
@@ -99,7 +107,12 @@ impl fmt::Display for TransactionError {
                 "Insufficient input amount: inputs={} outputs={}",
                 total_input, total_output
             ),
-            // CoinbaseValidation { reason } => write!(f, "Coinbase validation failed: {}", reason),
+            InvalidWitnessScript => write!(f, "Witness script does not match the commitment"),
+            WitnessTooLarge => write!(
+                f,
+                "Witness script's length exceeds maximum allowed: {}",
+                MAX_WITNESS_SIZE
+            ),
             TooManyInputs(max_allowed) => {
                 write!(f, "Too many inputs: maximum allowed is {}", max_allowed)
             }
@@ -169,24 +182,6 @@ impl fmt::Debug for OutputId {
     }
 }
 
-impl VirtualSize for Output {
-    fn vsize(&self) -> usize {
-        let size = 1 + std::mem::size_of::<u64>() + self.data.len() + self.commitment.len();
-        if self.amount > 0 { size } else { size / 2 } // 0 amount outputs can be pruned after validation
-    }
-}
-
-impl fmt::Debug for Output {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Output")
-            .field("version", &self.version)
-            .field("amount", &self.amount)
-            .field("data", &hex::encode(&self.data))
-            .field("commitment", &hex::encode(&self.commitment))
-            .finish()
-    }
-}
-
 impl OutputId {
     pub fn new(tx_hash: TransactionHash, index: u8) -> Self {
         Self { tx_hash, index }
@@ -241,7 +236,7 @@ impl Transaction {
         for input in &self.inputs {
             hasher.update(&input.output_id.tx_hash);
             hasher.update(&input.output_id.index.to_be_bytes());
-            // hasher.update(&input.signature);
+            hasher.update(&input.witness);
             hasher.update(&input.public_key);
         }
         hasher.update(&self.outputs.len().to_be_bytes());
@@ -258,7 +253,6 @@ impl Transaction {
     /// Verifies the transaction against the ledger.
     pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
         let mut total_input_amount = 0_u32;
-        const MAX_ALLOWED: usize = u8::MAX as usize;
         let is_genesis = ledger.get_last_block_metadata().is_none();
 
         if self.inputs.len() > MAX_ALLOWED {
@@ -286,13 +280,23 @@ impl Transaction {
                 }
                 Version::V1 => {
                     // V1 transactions use a simple P2PK script
-                    vm.run(&p2pk_script())
+                    vm.run(&p2pkh())
                         .map_err(|err| TransactionError::Execution(err))?;
                 }
                 Version::V2 => {
                     // V2 transactions can use a more complex script
                     vm.run(&utxo.data)
                         .map_err(|err| TransactionError::Execution(err))?;
+                }
+                Version::V3 => {
+                    // V3 transactions support segwit
+                    if input.witness.len() > MAX_WITNESS_SIZE {
+                        return Err(TransactionError::WitnessTooLarge);
+                    }
+                    vm.run(&p2wsh())
+                        .map_err(|_| TransactionError::InvalidWitnessScript)?;
+                    vm.run(&input.witness)
+                        .map_err(TransactionError::Execution)?;
                 }
             }
         }
@@ -308,11 +312,29 @@ impl Transaction {
     }
 }
 
+impl VirtualSize for Output {
+    fn vsize(&self) -> usize {
+        let size = 1 + std::mem::size_of::<u64>() + self.data.len() + self.commitment.len();
+        if self.amount > 0 { size } else { size / 2 } // 0 amount outputs can be pruned after validation
+    }
+}
+
+impl fmt::Debug for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Output")
+            .field("version", &self.version)
+            .field("amount", &self.amount)
+            .field("data", &hex::encode(&self.data))
+            .field("commitment", &hex::encode(&self.commitment))
+            .finish()
+    }
+}
+
 impl Output {
     pub fn new_v0(amount: u32, public_key: &PublicKey, mask: &Hash) -> Self {
         let commitment = pubkey_hash::<Blake2s256>(public_key);
         Self {
-            version: Version::V1,
+            version: Version::V0,
             amount,
             data: *mask,
             commitment,
@@ -334,6 +356,17 @@ impl Output {
             version: Version::V2,
             amount,
             data: *script,
+            commitment,
+        }
+    }
+
+    pub fn new_v3(amount: u32, public_key: &PublicKey, witness_script: &[u8]) -> Self {
+        let commitment = pubkey_hash::<Blake2s256>(public_key);
+        let witness_commitment = Blake2s256::digest(witness_script);
+        Self {
+            version: Version::V3,
+            amount,
+            data: witness_commitment.try_into().unwrap(),
             commitment,
         }
     }
@@ -678,7 +711,7 @@ mod tests {
 
         // Build funding (previous) transaction that creates a UTXO
         let mut data = [0u8; 32];
-        data.as_mut_slice().write(&p2pk_script()).unwrap();
+        data.as_mut_slice().write(&p2pkh()).unwrap();
         let mask = [0u8; 32]; // A zero mask allows for any pubkey
         let reward = calculate_reward(&mask);
 
@@ -838,6 +871,113 @@ mod tests {
         match spending_tx.verify(&ledger) {
             Err(TransactionError::TooManyOutputs(max)) if max == max_allowed => {}
             other => panic!("Expected TooManyOutputs error, got: {:?}", other),
+        }
+    }
+    #[test]
+    fn test_transaction_verify_v3_invalid_witness_script() {
+        // Create a ledger with one block containing a funding transaction
+        let mut ledger = InMemoryLedger::new();
+        // Create a signing key for the funding transaction
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let pubkey = signing_key.verifying_key().to_bytes();
+
+        // Construct a witness (script) that will be run for V3
+        let witness = check_sig_script().to_vec();
+        // For this invalid test we intentionally set utxo.data to something else
+        let bad_data = [0u8; 32];
+
+        // commitment must match the pubkey used to spend
+        let commitment = pubkey_hash::<Blake2s256>(&pubkey);
+
+        let reward = 42; // arbitrary non-zero amount for test
+        let funding_tx = Transaction {
+            inputs: vec![],
+            outputs: vec![Output {
+                version: Version::V3,
+                amount: reward,
+                data: bad_data, // does NOT equal blake2s(witness)
+                commitment,
+            }],
+        };
+        let funding_txid = funding_tx.hash::<Blake2s256>();
+
+        // Add funding block to ledger
+        let mut block = Block::new(0, [0u8; 32]);
+        block.transactions.push(funding_tx);
+        ledger.add_block(block).unwrap();
+
+        // Build a spending transaction that consumes the funding UTXO
+        let utxo_id = OutputId {
+            tx_hash: funding_txid,
+            index: 0,
+        };
+        let new_outputs = vec![Output::new_v1(reward, &[0u8; 32], &[0u8; 32])];
+
+        // sighash for spending tx (what the signature must sign)
+        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let signature = signing_key.sign(&sighash).to_bytes();
+
+        // Use the witness and place it on the input; but since utxo.data != hash(witness)
+        // the verify() should return InvalidWitnessScript error before executing the witness.
+        let input = Input::new_with_witness(utxo_id, pubkey, signature, witness);
+
+        let spending_tx = Transaction {
+            inputs: vec![input],
+            outputs: new_outputs,
+        };
+
+        match spending_tx.verify(&ledger) {
+            Err(TransactionError::InvalidWitnessScript) => {}
+            other => panic!("Expected InvalidWitnessScript, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_transaction_verify_v3_valid_witness() {
+        // Create a ledger with one block containing a funding transaction
+        let mut ledger = InMemoryLedger::new();
+        // Create a signing key for the funding transaction
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let pubkey = signing_key.verifying_key().to_bytes();
+
+        // Construct a witness (script) that will be run for V3
+        let witness = check_sig_script().to_vec();
+
+        let reward = 42; // arbitrary non-zero amount for test
+        let funding_tx = Transaction {
+            inputs: vec![],
+            outputs: vec![Output::new_v3(reward, &pubkey, &witness)],
+        };
+        let funding_txid = funding_tx.hash::<Blake2s256>();
+
+        // Add funding block to ledger
+        let mut block = Block::new(0, [0u8; 32]);
+        block.transactions.push(funding_tx);
+        ledger.add_block(block).unwrap();
+
+        // Build a spending transaction that consumes the funding UTXO
+        let utxo_id = OutputId {
+            tx_hash: funding_txid,
+            index: 0,
+        };
+        let new_outputs = vec![Output::new_v1(reward, &[0u8; 32], &[0u8; 32])];
+
+        // sighash for spending tx (what the signature must sign)
+        let sighash = sighash(Blake2s256::new(), &[utxo_id], &new_outputs);
+        let signature = signing_key.sign(&sighash).to_bytes();
+
+        // Place the witness on the input; since utxo.data == hash(witness),
+        // the VM will run the witness which will verify the signature and succeed.
+        let input = Input::new_with_witness(utxo_id, pubkey, signature, witness);
+
+        let spending_tx = Transaction {
+            inputs: vec![input],
+            outputs: new_outputs,
+        };
+
+        match spending_tx.verify(&ledger) {
+            Ok(_) => {}
+            other => panic!("Expected Ok, got: {:?}", other),
         }
     }
 }

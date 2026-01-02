@@ -18,9 +18,8 @@ use super::transaction::{Input, Output, Transaction, sighash};
 
 const MAX_VALUE_SIZE: usize = 1024;
 
-/// Returns a standard pay-to-public-key script.
-/// This script expects a valid signature to be provided in the input.
-pub const fn p2pk_script() -> &'static [u8] {
+/// Returns a standard pay to public key hash script.
+pub const fn p2pkh() -> &'static [u8] {
     use op::r#const::*;
     &[
         OP_PUSH_SIG,
@@ -32,9 +31,22 @@ pub const fn p2pk_script() -> &'static [u8] {
         OP_SELF_COMM, // Push the original commitment from the UTXO
         OP_PUSH_PK,   // Push the public key
         OP_HASH_B2,   // Hash the pubkey (public_key)
-        OP_EQUAL,     // Compare: HASH(public_key, data) == original_commitment
+        OP_EQUAL,     // Compare: HASH(public_key) == original_commitment
         OP_VERIFY,    // Fail if they are not equal
         OP_RETURN,    // Succeed
+    ]
+}
+
+/// Returns a standard pay to witness script hash script.
+pub const fn p2wsh() -> &'static [u8] {
+    use op::r#const::*;
+    &[
+        OP_SELF_DATA,
+        OP_PUSH_WITNESS,
+        OP_HASH_B2,
+        OP_EQUAL,
+        OP_VERIFY,
+        OP_RETURN,
     ]
 }
 
@@ -57,7 +69,7 @@ pub enum ExecError {
     TypeMismatch,
     FetchFailed,
     StackOverflow,
-    Unimplemented(Op), // fallback if something unexpected happens
+    Unimplemented(u8), // fallback if something unexpected happens
 }
 
 /// VM runtime holding a reference to a Ledger.
@@ -244,7 +256,7 @@ impl<'a, L: Ledger> Vm<'a, L> {
         mut stack: VmStack,
     ) -> Result<OwnedStackValue, ExecError>
     where
-        I: Iterator<Item = Op>,
+        I: Iterator<Item = Op<'i>>,
     {
         if let Some(op) = scanner.next() {
             return match op {
@@ -284,6 +296,7 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 // Immediate pushes (scanner already produces `Op::Push(u32)` or `Op::PushByte`)
                 Op::PushU32(n) => return self.exec(scanner, stack.push(n.into())),
                 Op::PushByte(b) => return self.exec(scanner, stack.push(b.into())),
+                Op::PushBytes(bytes) => return self.exec(scanner, stack.push(bytes.into())),
 
                 Op::ReadByte => match stack.pop() {
                     Some((value, parent)) => {
@@ -445,21 +458,6 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     }
                     None => Err(ExecError::StackUnderflow),
                 },
-                Op::MulHashB2(n) => {
-                    let mut iter = stack.iter();
-                    let mut hasher = blake2::Blake2s256::new();
-                    for value in iter.by_ref().take(n as usize) {
-                        match value {
-                            StackValue::U8(data) => hasher.update(&[*data]),
-                            StackValue::Bytes(data) => hasher.update(data),
-                            StackValue::U32(data) => hasher.update(&data.to_be_bytes()),
-                            StackValue::Stream { .. } => hasher.update(&value.to_bytes()),
-                        }
-                    }
-                    let hash = hasher.finalize();
-                    let buf: [u8; 32] = hash.try_into().unwrap();
-                    return self.exec(scanner, iter.stack().push(StackValue::Bytes(&buf)));
-                }
 
                 // Comparisons / arithmetic
                 Op::Equal => match stack.pop() {
@@ -1166,7 +1164,7 @@ mod tests {
         };
 
         let vm = create_vm(&ledger, 0, &transaction);
-        let script = p2pk_script().to_vec();
+        let script = p2pkh().to_vec();
 
         assert_eq!(vm.run(&script), Ok(OwnedStackValue::U32(0)));
     }
@@ -1191,40 +1189,11 @@ mod tests {
         };
 
         let vm = create_vm(&ledger, 0, &transaction);
-        let script = p2pk_script();
+        let script = p2pkh();
 
         assert_eq!(vm.run(&script), Err(ExecError::VerifyFailed));
     }
 
-    #[test]
-    fn test_op_mul_hash_b2() {
-        let ledger = MockLedger::default();
-        let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
-
-        let code = [
-            OP_PUSH_BYTE,
-            1, // Push first item
-            OP_PUSH_BYTE,
-            2, // Push second item
-            OP_PUSH_BYTE,
-            3, // Push third item
-            OP_MUL_HASH_B2,
-            3, // Hash the top 3 items
-        ];
-
-        // Execute the VM and check the result
-        let mut hasher = blake2::Blake2s256::new();
-        hasher.update(&3_u8.to_be_bytes());
-        hasher.update(&2_u8.to_be_bytes());
-        hasher.update(&1_u8.to_be_bytes());
-        let expected_hash = hasher.finalize();
-
-        assert_eq!(
-            vm.run(&code),
-            Ok(OwnedStackValue::Bytes(expected_hash.to_vec()))
-        );
-    }
     #[test]
     fn test_op_cat() {
         let ledger = MockLedger::default();
