@@ -61,7 +61,7 @@ Consensus in EUPP is defined by the transaction graph itself rather than an exte
 
 1. **Lead UTXO:** The output at index 0 of the previous block defines the next challenge.  
 2. **The Mask:** The commitment of this Lead UTXO acts as a bitmask for the next miner.  
-3. **Mining Condition:** A miner must find an Ed25519 public key (`pk`) such that: `Mask & pk == 0`
+3. **Mining Condition:** A miner must find an Ed25519 public key (`pk`) such that: `Mask & hash(pk, prev_block_hash) == 0`
 
 To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
 
@@ -72,8 +72,3 @@ The difficulty (`D`) is determined by the number of 1-bits in the mask. The rewa
 ```
 R(D) = min(1000000, 2^(floor(D/4)))
 ```
-
-## 5. Security and Economic Properties
-
-* **Strict Linearity:** Since only one miner can spend the Lead UTXO of the previous block, the chain has a built-in mechanism to prevent branching, as the "right" to mine is a consumable resource in the UTXO set.  
-* **Covenant Support:** Through forward visibility (v2), developers can create UTXOs that can only be spent to specific addresses or under specific economic conditions (e.g., inflation caps or cold-storage vaults).
