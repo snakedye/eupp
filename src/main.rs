@@ -29,18 +29,18 @@ fn main() {
             commitment: mask,
         }],
     };
-    let mut coinbase_block = Block::new(0, [0u8; 32]);
-    coinbase_block.transactions.push(coinbase_tx);
-    let coinbase_block_hash = coinbase_block.header().hash();
+    let mut genesis_block = Block::new(0, [0u8; 32]);
+    genesis_block.transactions.push(coinbase_tx);
+    let genesis_block_hash = genesis_block.header().hash();
 
-    // Add genesis/coinbase block to ledger
-    if let Err(e) = ledger.add_block(coinbase_block) {
+    // Add genesis block to ledger
+    if let Err(e) = ledger.add_block(genesis_block) {
         eprintln!("Failed to add genesis block: {:?}", e);
         return;
     }
     eprintln!(
         "Added genesis block. Hash: {}",
-        hex::encode(&coinbase_block_hash)
+        hex::encode(&genesis_block_hash)
     );
 
     loop {
