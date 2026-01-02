@@ -1,6 +1,7 @@
 mod in_mem;
 
-pub use self::in_mem::InMemoryLedger;
+pub use in_mem::InMemoryLedger;
+
 use super::{
     Hash,
     block::{Block, BlockError},

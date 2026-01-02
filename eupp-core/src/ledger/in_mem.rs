@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use blake2::Blake2s256;
 
-use crate::core::{
+use crate::{
     Hash,
     block::{Block, BlockError},
     transaction::{Output, OutputId, TransactionError},
@@ -16,6 +16,7 @@ pub struct UtxoEntry {
 
 use super::{BlockMetadata, Ledger};
 
+/// Represents an in-memory implementation of a blockchain ledger.
 pub struct InMemoryLedger {
     /// Block metadata index
     pub block_index: HashMap<Hash, BlockMetadata>,

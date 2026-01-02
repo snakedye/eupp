@@ -1,10 +1,10 @@
-use sha2::Digest;
+use blake2::Digest;
 
 pub mod block;
 pub mod ledger;
 pub mod miner;
 pub mod transaction;
-mod vm;
+pub mod vm;
 
 pub type PublicKey = [u8; 32];
 pub type Hash = [u8; 32];

@@ -3,22 +3,32 @@ use rand::{TryRngCore, rngs::OsRng};
 
 use ed25519_dalek::{Signer, SigningKey};
 
-use crate::core::transaction::{Input, Output, OutputId, Transaction};
+use crate::{
+    PublicKey,
+    transaction::{Input, Output, OutputId, Transaction},
+};
 
 use super::{
     Hash, calculate_reward,
     ledger::Ledger,
-    matches_mask, pubkey_hash,
+    matches_mask,
     transaction::{TransactionHash, sighash},
 };
 
+pub fn mining_solution(pubkey: &PublicKey, prev_block_hash: &Hash) -> Hash {
+    let mut h = Blake2s256::new();
+    h.update(prev_block_hash);
+    h.update(pubkey);
+    h.finalize().into()
+}
+
 /// Deterministic mining: derive signing keys from a master seed + nonce.
-pub fn build_mining_tx_deterministic(
+pub(self) fn build_mining_tx_deterministic(
+    master_seed: [u8; 32],
     prev_block_hash: &Hash,
     prev_tx_hash: &TransactionHash,
     lead_utxo: &Output,
     max_attempts: usize,
-    master_seed: [u8; 32],
 ) -> Option<(SigningKey, Transaction)> {
     // Mask is stored in previous minting output's commitment
     let mask = lead_utxo.commitment;
@@ -35,7 +45,7 @@ pub fn build_mining_tx_deterministic(
         let signing_key = SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
         let pk_bytes = verifying_key.to_bytes();
-        let solution = pubkey_hash::<Blake2s256>(&pk_bytes);
+        let solution = mining_solution(&pk_bytes, prev_block_hash);
 
         // We'll use a nonce as the data hash for outputs (kept zero for now)
         let data_hash = [0u8; 32];
@@ -91,11 +101,11 @@ pub fn build_mining_tx(
     let mut seed_bytes = [0u8; 32];
     csprng.try_fill_bytes(&mut seed_bytes).ok()?;
     build_mining_tx_deterministic(
+        seed_bytes,
         prev_block_hash,
         prev_tx_hash,
         lead_utxo,
         max_attempts,
-        seed_bytes,
     )
 }
 
@@ -103,7 +113,7 @@ pub fn build_mining_tx(
 pub fn build_next_block<L: Ledger>(
     ledger: &L,
     max_attempts: usize,
-) -> Option<(SigningKey, crate::core::block::Block)> {
+) -> Option<(SigningKey, crate::block::Block)> {
     let prev_block = ledger.get_last_block_metadata()?;
     let prev_block_hash = prev_block.hash;
     let lead_utxo_id = prev_block.lead_utxo;
@@ -118,7 +128,7 @@ pub fn build_next_block<L: Ledger>(
     )?;
 
     // Create a new block.
-    let mut block = crate::core::block::Block::new(0, ledger.get_last_block_metadata()?.hash);
+    let mut block = crate::block::Block::new(0, ledger.get_last_block_metadata()?.hash);
 
     // Include the mining transaction as the first transaction in the block
     block.transactions.push(mining_tx);
@@ -129,7 +139,7 @@ pub fn build_next_block<L: Ledger>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
+    use crate::{
         pubkey_hash,
         transaction::{Output, Transaction, Version},
     };
@@ -154,16 +164,16 @@ mod tests {
         };
         let prev_tx_hash = funding_tx.hash::<Blake2s256>();
         let prev_block_hash = [0u8; 32];
-        // let mut prev_block = Block::new(crate::core::Version::V1, [0u8; 32]);
+        // let mut prev_block = Block::new(crate::Version::V1, [0u8; 32]);
         // prev_block.transactions.push(funding_tx);
 
         // We only need a single attempt because the mask accepts any pubkey.
         let result = build_mining_tx_deterministic(
+            [0u8; 32],
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
             1,
-            [0u8; 32],
         );
         assert!(
             result.is_some(),
@@ -204,11 +214,11 @@ mod tests {
         let prev_block_hash = [0u8; 32];
 
         let tx_opt = build_mining_tx_deterministic(
+            [0u8; 32],
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
             0,
-            [0u8; 32],
         );
         assert!(tx_opt.is_none(), "Expected None when max_attempts is zero");
     }
@@ -227,7 +237,7 @@ mod tests {
         mask[1] = 0xF0;
 
         let prev_mint_output = Output {
-            version: Version::V1,
+            version: Version::V0,
             amount: 100,
             data: [0u8; 32],
             commitment: mask,
@@ -238,20 +248,18 @@ mod tests {
         };
         let prev_tx_hash = funding_tx.hash::<Blake2s256>();
         let prev_block_hash = [0u8; 32];
-        // let mut prev_block = Block::new(crate::core::Version::V1, [0u8; 32]);
-        // prev_block.transactions.push(funding_tx);
 
         // Allow a generous number of attempts but we expect to find a solution far fewer.
-        let max_attempts = 200_000;
+        let max_attempts = 100_000;
         let master_seed = [0u8; 32];
 
         let start = Instant::now();
         let result = build_mining_tx_deterministic(
+            master_seed,
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
             max_attempts,
-            master_seed,
         );
         let elapsed = start.elapsed();
 

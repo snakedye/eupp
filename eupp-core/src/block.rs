@@ -1,7 +1,9 @@
+use crate::miner::mining_solution;
+
 use super::{
     Hash, VirtualSize, calculate_reward,
     ledger::Ledger,
-    matches_mask, pubkey_hash,
+    matches_mask,
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
@@ -93,7 +95,7 @@ impl Block {
                 .unwrap();
             let lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
             let mask = &lead_utxo.commitment;
-            let solution = pubkey_hash::<Blake2s256>(&input.public_key);
+            let solution = mining_solution(&input.public_key, &self.prev_block_hash);
             if !matches_mask(&mask, &solution) {
                 return Err(BlockError::ChallengeError);
             }
@@ -170,7 +172,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
+    use crate::{
         PublicKey,
         ledger::InMemoryLedger,
         transaction::{Input, OutputId},
@@ -182,7 +184,7 @@ mod tests {
         block.transactions.push(Transaction::new(
             vec![],
             vec![Output {
-                version: crate::core::transaction::Version::V0,
+                version: crate::transaction::Version::V0,
                 amount: calculate_reward(&mask),
                 data: [0; 32],
                 commitment: mask, // this is the mask challenge
@@ -198,7 +200,7 @@ mod tests {
             .inputs
             .push(Input::new(output_id, public_key, [0; 64]));
         transaction.outputs.push(Output {
-            version: crate::core::transaction::Version::V0,
+            version: crate::transaction::Version::V0,
             amount: new_supply,
             data: [0; 32],
             commitment: [0; 32], // this is the mask challenge
@@ -291,7 +293,7 @@ mod tests {
 
         let mut block = Block::new(1, genesis_block.header().hash::<Blake2s256>());
         let mut transaction = mining_transaction(1, first_tx_hash, [1; 32]);
-        transaction.outputs[0].version = crate::core::transaction::Version::V1; // Invalid version
+        transaction.outputs[0].version = crate::transaction::Version::V1; // Invalid version
         block.transactions.push(transaction);
 
         let result = block.verify(&ledger);

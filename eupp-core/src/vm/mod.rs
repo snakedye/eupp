@@ -2,15 +2,15 @@
 VM runtime implementing opcode execution.
 */
 
-mod op;
+pub mod op;
 mod scanner;
 mod stack;
 
-use crate::core::ledger::Ledger;
+use crate::ledger::Ledger;
+use blake2::Digest;
 use ed25519_dalek::Verifier;
 use op::Op;
 use scanner::Scanner;
-use sha2::Digest;
 use stack::{Stack, StackIter};
 use std::fmt;
 
@@ -625,7 +625,7 @@ impl<'a, L: Ledger> Vm<'a, L> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
+    use crate::{
         Hash,
         block::{Block, BlockError},
         ledger::BlockMetadata,
@@ -633,7 +633,6 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use op::r#const::*;
-    use sha2::Digest;
     use std::collections::HashMap;
 
     // A mock ledger for testing purposes.

@@ -1,14 +1,11 @@
-mod core;
+use blake2::Blake2s256;
 
-use core::ledger::InMemoryLedger;
-
-use crate::core::{
+use eupp_core::{
     block::Block,
-    ledger::Ledger,
+    ledger::{InMemoryLedger, Ledger},
     miner,
     transaction::{Output, Transaction},
 };
-use blake2::Blake2s256;
 
 fn main() {
     // Minimal startup log to avoid noisy stdout in library/runtime contexts.
@@ -28,7 +25,7 @@ fn main() {
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
         outputs: vec![Output {
-            version: core::transaction::Version::V0,
+            version: eupp_core::transaction::Version::V0,
             amount: 100000,
             data: [0u8; 32],
             commitment: mask,

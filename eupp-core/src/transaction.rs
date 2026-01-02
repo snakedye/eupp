@@ -83,9 +83,9 @@ pub enum TransactionError {
     WitnessTooLarge,
 
     /// Number of inputs exceeds maximum allowed.
-    TooManyInputs(usize),
+    TooManyInputs,
     /// Number of outputs exceeds maximum allowed.
-    TooManyOutputs(usize),
+    TooManyOutputs,
 }
 
 impl fmt::Display for TransactionError {
@@ -113,11 +113,11 @@ impl fmt::Display for TransactionError {
                 "Witness script's length exceeds maximum allowed: {}",
                 MAX_WITNESS_SIZE
             ),
-            TooManyInputs(max_allowed) => {
-                write!(f, "Too many inputs: maximum allowed is {}", max_allowed)
+            TooManyInputs => {
+                write!(f, "Too many inputs: maximum allowed is {}", MAX_ALLOWED)
             }
-            TooManyOutputs(max_allowed) => {
-                write!(f, "Too many outputs: maximum allowed is {}", max_allowed)
+            TooManyOutputs => {
+                write!(f, "Too many outputs: maximum allowed is {}", MAX_ALLOWED)
             }
         }
     }
@@ -256,10 +256,10 @@ impl Transaction {
         let is_genesis = ledger.get_last_block_metadata().is_none();
 
         if self.inputs.len() > MAX_ALLOWED {
-            return Err(TransactionError::TooManyInputs(MAX_ALLOWED));
+            return Err(TransactionError::TooManyInputs);
         }
         if self.outputs.len() > MAX_ALLOWED {
-            return Err(TransactionError::TooManyOutputs(MAX_ALLOWED));
+            return Err(TransactionError::TooManyOutputs);
         }
 
         for (i, input) in self.inputs.iter().enumerate() {
@@ -411,7 +411,7 @@ mod tests {
     use std::io::Write;
 
     use super::*;
-    use crate::core::{
+    use crate::{
         block::Block,
         calculate_reward,
         ledger::{InMemoryLedger, Ledger},
@@ -814,7 +814,7 @@ mod tests {
 
         // Now verification should fail due to too many inputs
         match spending_tx.verify(&ledger) {
-            Err(TransactionError::TooManyInputs(max)) if max == max_allowed => {}
+            Err(TransactionError::TooManyInputs) => {}
             other => panic!("Expected TooManyInputs error, got: {:?}", other),
         }
     }
@@ -869,7 +869,7 @@ mod tests {
 
         // Now verification should fail due to too many outputs
         match spending_tx.verify(&ledger) {
-            Err(TransactionError::TooManyOutputs(max)) if max == max_allowed => {}
+            Err(TransactionError::TooManyOutputs) => {}
             other => panic!("Expected TooManyOutputs error, got: {:?}", other),
         }
     }
