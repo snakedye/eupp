@@ -1,14 +1,9 @@
-mod core;
-
-use core::ledger::InMemoryLedger;
-
-use crate::core::{
+use eupp_core::{
     block::Block,
-    ledger::Ledger,
+    ledger::{InMemoryLedger, Ledger},
     miner,
     transaction::{Output, Transaction},
 };
-use blake2::Blake2s256;
 
 fn main() {
     // Minimal startup log to avoid noisy stdout in library/runtime contexts.
@@ -27,25 +22,20 @@ fn main() {
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
-        outputs: vec![Output {
-            version: core::transaction::Version::V0,
-            amount: 100000,
-            data: [0u8; 32],
-            commitment: mask,
-        }],
+        outputs: vec![Output::new_v0(100000, &[0; 32], &mask)],
     };
-    let mut coinbase_block = Block::new(0, [0u8; 32]);
-    coinbase_block.transactions.push(coinbase_tx);
-    let coinbase_block_hash = coinbase_block.header().hash::<Blake2s256>();
+    let mut genesis_block = Block::new(0, [0u8; 32]);
+    genesis_block.transactions.push(coinbase_tx);
+    let genesis_block_hash = genesis_block.header().hash();
 
-    // Add genesis/coinbase block to ledger
-    if let Err(e) = ledger.add_block(coinbase_block) {
+    // Add genesis block to ledger
+    if let Err(e) = ledger.add_block(genesis_block) {
         eprintln!("Failed to add genesis block: {:?}", e);
         return;
     }
     eprintln!(
         "Added genesis block. Hash: {}",
-        hex::encode(&coinbase_block_hash)
+        hex::encode(&genesis_block_hash)
     );
 
     loop {
@@ -67,7 +57,7 @@ fn main() {
         // Mine the next block. We use usize::MAX attempts to mine "forever" until a solution is found.
         match miner::build_next_block(&ledger, usize::MAX) {
             Some((_signing_key, new_block)) => {
-                let new_block_hash = new_block.header().hash::<Blake2s256>();
+                let new_block_hash = new_block.header().hash();
                 println!(
                     "Found a potential block! Hash: {}",
                     hex::encode(new_block_hash)

@@ -1,6 +1,7 @@
 mod in_mem;
 
-pub use self::in_mem::InMemoryLedger;
+pub use in_mem::InMemoryLedger;
+
 use super::{
     Hash,
     block::{Block, BlockError},
@@ -29,9 +30,9 @@ pub struct BlockMetadata {
     pub lead_utxo: OutputId,
 }
 
+/// A blockchain ledger.
 pub trait Ledger {
     /// Adds a new block to the ledger.
-    /// Returns an error if the block is invalid or cannot be added.
     fn add_block(&mut self, block: Block) -> Result<(), BlockError>;
 
     /// Retrieves metadata for a block identified by its hash.

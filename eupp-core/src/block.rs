@@ -1,7 +1,9 @@
+use crate::miner::mining_solution;
+
 use super::{
     Hash, VirtualSize, calculate_reward,
     ledger::Ledger,
-    matches_mask, pubkey_hash,
+    matches_mask,
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
@@ -40,16 +42,14 @@ impl VirtualSize for Block {
 
 impl BlockHeader {
     /// Returns the hash of the block header.
-    pub fn hash<T: Digest>(&self) -> Hash {
-        let mut buf = [0u8; 32];
-        let mut hasher = T::new();
+    pub fn hash(&self) -> Hash {
+        let mut hasher = Blake2s256::new();
 
-        Digest::update(&mut hasher, &[self.version as u8]);
-        Digest::update(&mut hasher, &self.prev_block_hash);
-        Digest::update(&mut hasher, &self.merkle_root);
+        hasher.update(&[self.version as u8]);
+        hasher.update(&self.prev_block_hash);
+        hasher.update(&self.merkle_root);
 
-        buf.as_mut().copy_from_slice(hasher.finalize().as_ref());
-        buf
+        hasher.finalize().into()
     }
 }
 
@@ -92,8 +92,8 @@ impl Block {
                 .and_then(|tx| tx.inputs.first())
                 .unwrap();
             let lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
-            let mask = &lead_utxo.commitment;
-            let solution = pubkey_hash::<Blake2s256>(&input.public_key);
+            let mask = &lead_utxo.data;
+            let solution = mining_solution(&input.public_key, &self.prev_block_hash);
             if !matches_mask(&mask, &solution) {
                 return Err(BlockError::ChallengeError);
             }
@@ -142,26 +142,23 @@ impl Block {
 
     /// Returns the merkle root of the transactions in the block.
     pub(crate) fn merkle_root(&self) -> TransactionHash {
-        merkle_root::<Blake2s256>(&self.transactions)
+        merkle_root(&self.transactions)
     }
 }
 
 // This is a non-standard implementation of the Merkle root algorithm.
-fn merkle_root<D>(transactions: &[Transaction]) -> TransactionHash
-where
-    D: Digest,
-{
+fn merkle_root(transactions: &[Transaction]) -> TransactionHash {
     let hash;
     match transactions.len() {
         0 => hash = [0; 32],
-        1 => hash = transactions[0].hash::<D>(),
+        1 => hash = transactions[0].hash(),
         _ => {
-            let mut hasher = D::new();
+            let mut hasher = Blake2s256::new();
             let (a, b) = transactions.split_at(transactions.len() / 2);
-            let (merkle_root_a, merkle_root_b) = (merkle_root::<D>(a), merkle_root::<D>(b));
+            let (merkle_root_a, merkle_root_b) = (merkle_root(a), merkle_root(b));
             hasher.update(&merkle_root_a);
             hasher.update(&merkle_root_b);
-            hash = hasher.finalize().as_slice().try_into().unwrap();
+            hash = hasher.finalize().into();
         }
     }
     hash
@@ -170,7 +167,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{
+    use crate::{
         PublicKey,
         ledger::InMemoryLedger,
         transaction::{Input, OutputId},
@@ -181,12 +178,11 @@ mod tests {
         let mut block = Block::new(0, prev_block_hash);
         block.transactions.push(Transaction::new(
             vec![],
-            vec![Output {
-                version: crate::core::transaction::Version::V0,
-                amount: calculate_reward(&mask),
-                data: [0; 32],
-                commitment: mask, // this is the mask challenge
-            }],
+            vec![Output::new_v0(
+                calculate_reward(&mask),
+                &[0; 32],
+                &mask, // this is the mask challenge
+            )],
         ));
         block
     }
@@ -198,7 +194,7 @@ mod tests {
             .inputs
             .push(Input::new(output_id, public_key, [0; 64]));
         transaction.outputs.push(Output {
-            version: crate::core::transaction::Version::V0,
+            version: crate::transaction::Version::V0,
             amount: new_supply,
             data: [0; 32],
             commitment: [0; 32], // this is the mask challenge
@@ -210,7 +206,7 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
         let genesis_block = genesis_block([0; 32]);
         let new_supply = genesis_block.transactions[0].outputs[0].amount;
-        let prev_tx_hash = genesis_block.transactions[0].hash::<Blake2s256>();
+        let prev_tx_hash = genesis_block.transactions[0].hash();
         let mining_transaction = mining_transaction(new_supply, prev_tx_hash, public_key);
         ledger.add_block(genesis_block.clone()).unwrap();
         (ledger, mining_transaction)
@@ -234,8 +230,8 @@ mod tests {
     fn test_block_with_invalid_challenge() {
         let mut ledger = InMemoryLedger::new();
         let genesis_block = genesis_block([1; 32]);
-        let genesis_block_hash = genesis_block.header().hash::<Blake2s256>();
-        let first_tx_hash = genesis_block.transactions[0].hash::<Blake2s256>();
+        let genesis_block_hash = genesis_block.header().hash();
+        let first_tx_hash = genesis_block.transactions[0].hash();
         ledger.add_block(genesis_block.clone()).unwrap();
 
         let mut block = Block::new(1, genesis_block_hash);
@@ -250,10 +246,10 @@ mod tests {
     fn test_block_with_valid_challenge() {
         let mut ledger = InMemoryLedger::new();
         let genesis_block = genesis_block([0; 32]);
-        let first_tx_hash = genesis_block.transactions[0].hash::<Blake2s256>();
+        let first_tx_hash = genesis_block.transactions[0].hash();
         ledger.add_block(genesis_block.clone()).unwrap();
 
-        let mut block = Block::new(1, genesis_block.header().hash::<Blake2s256>());
+        let mut block = Block::new(1, genesis_block.header().hash());
         let transaction = mining_transaction(1, first_tx_hash, [1; 32]);
         block.transactions.push(transaction);
 
@@ -268,10 +264,10 @@ mod tests {
     fn test_block_with_reward_above_max_reward() {
         let mut ledger = InMemoryLedger::new();
         let genesis_block = genesis_block([0; 32]);
-        let first_tx_hash = genesis_block.transactions[0].hash::<Blake2s256>();
+        let first_tx_hash = genesis_block.transactions[0].hash();
         ledger.add_block(genesis_block.clone()).unwrap();
 
-        let mut block = Block::new(1, genesis_block.header().hash::<Blake2s256>());
+        let mut block = Block::new(1, genesis_block.header().hash());
         let transaction = mining_transaction(2, first_tx_hash, [1; 32]);
         block.transactions.push(transaction);
 
@@ -286,12 +282,12 @@ mod tests {
     fn test_block_with_invalid_lead_utxo_version() {
         let mut ledger = InMemoryLedger::new();
         let genesis_block = genesis_block([0; 32]);
-        let first_tx_hash = genesis_block.transactions[0].hash::<Blake2s256>();
+        let first_tx_hash = genesis_block.transactions[0].hash();
         ledger.add_block(genesis_block.clone()).unwrap();
 
-        let mut block = Block::new(1, genesis_block.header().hash::<Blake2s256>());
+        let mut block = Block::new(1, genesis_block.header().hash());
         let mut transaction = mining_transaction(1, first_tx_hash, [1; 32]);
-        transaction.outputs[0].version = crate::core::transaction::Version::V1; // Invalid version
+        transaction.outputs[0].version = crate::transaction::Version::V1; // Invalid version
         block.transactions.push(transaction);
 
         let result = block.verify(&ledger);
@@ -305,7 +301,7 @@ mod tests {
     fn test_block_header_hash() {
         let block = genesis_block([0; 32]);
         let header = block.header();
-        let hash = header.hash::<Blake2s256>();
+        let hash = header.hash();
 
         // Ensure the hash is not empty and has the expected length
         assert_eq!(hash.len(), 32);
@@ -314,7 +310,7 @@ mod tests {
         // Verify that the hash changes if the header changes
         let mut modified_header = header.clone();
         modified_header.version = 89;
-        let modified_hash = modified_header.hash::<Blake2s256>();
+        let modified_hash = modified_header.hash();
         assert_ne!(hash, modified_hash);
     }
 }

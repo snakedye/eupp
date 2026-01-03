@@ -1,10 +1,10 @@
-use sha2::Digest;
+use blake2::Digest;
 
 pub mod block;
 pub mod ledger;
 pub mod miner;
 pub mod transaction;
-mod vm;
+pub mod vm;
 
 pub type PublicKey = [u8; 32];
 pub type Hash = [u8; 32];
@@ -16,11 +16,14 @@ pub trait VirtualSize {
     fn vsize(&self) -> usize;
 }
 
-// Helpers
 /// Create a 32-byte commitment from a public key.
-pub fn pubkey_hash<D: Digest>(pk: &PublicKey) -> Hash {
-    let hash = D::digest(pk);
-    hash.as_slice().try_into().unwrap()
+pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) -> Hash {
+    let mut hasher = blake2::Blake2s256::new();
+    hasher.update(pk);
+    for chunk in data {
+        hasher.update(chunk);
+    }
+    hasher.finalize().into()
 }
 
 /// Check whether an attempted public key satisfies the provided mask.
@@ -42,11 +45,6 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
 }
 
 /// Calculate block reward using a Capped Exponential Growth curve.
-///
-/// Reward policy (as requested):
-/// - Base reward = 1 (pure powers of two)
-/// - exponent = floor(difficulty / SCALE_FACTOR)
-/// - reward = min(HARD_CAP, 2^exponent)
 pub fn calculate_reward(mask: &[u8; 32]) -> u32 {
     const HARD_CAP: u32 = 1_000_000;
     const MIN_REWARD: u32 = 1;

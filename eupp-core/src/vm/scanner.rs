@@ -3,17 +3,11 @@
 `Scanner` is an iterator over a byte slice (`&[u8]`) that yields fully-decoded
 `Op` instances from `op.rs`. It consumes any payload bytes that follow opcodes
 that require them (e.g. `OP_PUSH_1`, `OP_PUSH_U32`).
-
-The scanner performs full decoding: when it encounters `OP_PUSH_1` it reads the
-next single byte and yields `Op::Push8(value)`. When it encounters
-`OP_PUSH_U32` it reads the next 4 bytes as a little-endian `u32` and yields
-`Op::Push(value)`. For single-byte opcodes the scanner maps the opcode to the
-corresponding `Op` by using `Op::try_from`.
 */
 
 use super::op::{
-    OP_MUL_HASH_B2, OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_SUPPLY,
-    OP_PUSH_U32, OP_SPLIT, Op,
+    OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_BYTES, OP_PUSH_SUPPLY, OP_PUSH_U32,
+    OP_SPLIT, Op,
 };
 
 /// An iterator that reads opcodes (and their payloads) from a byte slice.
@@ -57,7 +51,7 @@ impl<'a> Scanner<'a> {
 }
 
 impl<'a> Iterator for Scanner<'a> {
-    type Item = Op;
+    type Item = Op<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Read next byte (opcode)
@@ -78,13 +72,6 @@ impl<'a> Iterator for Scanner<'a> {
             },
             OP_PUSH_BYTE => match self.read_u8() {
                 Some(v) => Some(Op::PushByte(v)),
-                None => {
-                    self.idx = self.bytes.len();
-                    None
-                }
-            },
-            OP_MUL_HASH_B2 => match self.read_u8() {
-                Some(v) => Some(Op::MulHashB2(v)),
                 None => {
                     self.idx = self.bytes.len();
                     None
@@ -114,6 +101,22 @@ impl<'a> Iterator for Scanner<'a> {
             },
             OP_SPLIT => match self.read_u8() {
                 Some(v) => Some(Op::Split(v)),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
+            OP_PUSH_BYTES => match self.read_u8() {
+                Some(n) => {
+                    if self.idx + n as usize <= self.bytes.len() {
+                        let slice = &self.bytes[self.idx..self.idx + n as usize];
+                        self.idx += n as usize;
+                        Some(Op::PushBytes(slice))
+                    } else {
+                        self.idx = self.bytes.len();
+                        None
+                    }
+                }
                 None => {
                     self.idx = self.bytes.len();
                     None
@@ -169,6 +172,11 @@ mod tests {
             OP_SIGHASH_ALL,
             OP_SPLIT,
             1,
+            OP_PUSH_BYTES,
+            3,
+            0xAA,
+            0xBB,
+            0xCC,
         ];
 
         let collected: Vec<Op> = Scanner::new(&bytes).collect();
@@ -185,7 +193,8 @@ mod tests {
                 Op::OutData(2),
                 Op::OutComm(3),
                 Op::SighashAll,
-                Op::Split(1)
+                Op::Split(1),
+                Op::PushBytes(&[0xAA, 0xBB, 0xCC])
             ]
         );
     }

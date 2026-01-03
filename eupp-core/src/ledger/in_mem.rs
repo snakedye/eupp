@@ -1,32 +1,31 @@
 use std::collections::{BTreeMap, HashMap};
 
-use blake2::Blake2s256;
-
-use crate::core::{
+use crate::{
     Hash,
     block::{Block, BlockError},
     transaction::{Output, OutputId, TransactionError},
 };
 
 #[derive(Clone)]
-pub struct UtxoEntry {
+pub(crate) struct UtxoEntry {
     pub block_hash: Hash,
     pub output: Output,
 }
 
 use super::{BlockMetadata, Ledger};
 
+/// Represents an in-memory implementation of a blockchain ledger.
 pub struct InMemoryLedger {
     /// Block metadata index
-    pub block_index: HashMap<Hash, BlockMetadata>,
+    pub(crate) block_index: HashMap<Hash, BlockMetadata>,
 
     // The complete set of unspent transaction outputs (UTXOs)
-    pub utxo_set: BTreeMap<OutputId, UtxoEntry>,
+    pub(crate) utxo_set: BTreeMap<OutputId, UtxoEntry>,
 
     /// Points to the block with the Maximum Accumulated Supply (MAS)
     ///
-    /// This is the main branch of the blockchain.
-    pub tip: Hash,
+    /// This is the main blockchain.
+    pub(crate) tip: Hash,
 }
 
 impl InMemoryLedger {
@@ -39,7 +38,7 @@ impl InMemoryLedger {
     }
 
     fn apply_block_to_utxo_set(&mut self, block: &Block) -> Result<(), BlockError> {
-        let block_hash = block.header().hash::<Blake2s256>();
+        let block_hash = block.header().hash();
         for tx in &block.transactions {
             // Remove spent UTXOs
             for input in &tx.inputs {
@@ -51,7 +50,7 @@ impl InMemoryLedger {
                 }
             }
             // Add new UTXOs
-            let tx_id = tx.hash::<Blake2s256>();
+            let tx_id = tx.hash();
             for (i, output) in tx.outputs.iter().enumerate() {
                 self.utxo_set.insert(
                     OutputId::new(tx_id, i as u8),
@@ -102,10 +101,10 @@ impl Ledger for InMemoryLedger {
         }
 
         let metadata = BlockMetadata {
-            hash: block.header().hash::<Blake2s256>(),
+            hash: block.header().hash(),
             prev_block_hash: block.prev_block_hash,
             available_supply: total_supply,
-            lead_utxo: OutputId::new(block.transactions[0].hash::<Blake2s256>(), 0),
+            lead_utxo: OutputId::new(block.transactions[0].hash(), 0),
             locked_supply,
             height,
         };
