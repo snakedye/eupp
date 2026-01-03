@@ -56,6 +56,7 @@ pub const fn p2wsh() -> &'static [u8] {
     ]
 }
 
+/// Returns a string to check the signature
 pub const fn check_sig_script() -> &'static [u8] {
     use op::r#const::*;
     &[

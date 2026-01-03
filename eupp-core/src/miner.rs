@@ -15,6 +15,7 @@ use super::{
     transaction::{TransactionHash, sighash},
 };
 
+/// Computes the mining solution for a given public key and previous block hash.
 pub fn mining_solution(pubkey: &PublicKey, prev_block_hash: &Hash) -> Hash {
     let mut h = Blake2s256::new();
     h.update(prev_block_hash);

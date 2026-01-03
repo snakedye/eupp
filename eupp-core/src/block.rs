@@ -178,12 +178,11 @@ mod tests {
         let mut block = Block::new(0, prev_block_hash);
         block.transactions.push(Transaction::new(
             vec![],
-            vec![Output {
-                version: crate::transaction::Version::V0,
-                amount: calculate_reward(&mask),
-                data: [0; 32],
-                commitment: mask, // this is the mask challenge
-            }],
+            vec![Output::new_v0(
+                calculate_reward(&mask),
+                &[0; 32],
+                &mask, // this is the mask challenge
+            )],
         ));
         block
     }

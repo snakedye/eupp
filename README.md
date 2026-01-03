@@ -60,8 +60,9 @@ Consensus in EUPP is defined by the transaction graph itself rather than an exte
 ### 4.1 The Mask Mechanism
 
 1. **Lead UTXO:** The output at index 0 of the previous block defines the next challenge.  
-2. **The Mask:** The commitment of this Lead UTXO acts as a bitmask for the next miner.  
+2. **The Mask:** The data of this Lead UTXO acts as a bitmask for the next miner. 
 3. **Mining Condition:** A miner must find an Ed25519 public key (`pk`) such that: `Mask & hash(pk, prev_block_hash) == 0`
+4. **Commitment:** The winner commits the next mask with his pubkey: `hash(pk, mask)`.
 
 To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
 

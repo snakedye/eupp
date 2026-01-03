@@ -10,61 +10,59 @@
 pub mod r#const {
     //! Raw opcode byte values.
 
-    // Stack / VM opcodes
-    pub const OP_FALSE: u8 = 0x00;
-    pub const OP_TRUE: u8 = 0x01;
-    pub const OP_DUP: u8 = 0x02;
-    pub const OP_DROP: u8 = 0x03;
-    pub const OP_SWAP: u8 = 0x04;
-    /// Push a 32-bit unsigned integer (4 bytes follow the opcode, little-endian).
-    pub const OP_PUSH_U32: u8 = 0x06;
-    /// Push a single byte onto the stack.
-    pub const OP_PUSH_BYTE: u8 = 0x07;
-    /// Push a byte array of length N onto the stack (N bytes follow the opcode).
-    pub const OP_PUSH_BYTES: u8 = 0x08;
+    // Stack Manipulation
+    pub const OP_FALSE: u8 = 0x00; // Pushes an empty array (0) onto the stack.
+    pub const OP_TRUE: u8 = 0x01; // Pushes a 1 onto the stack.
+    pub const OP_DUP: u8 = 0x02; // Duplicates the top item on the stack.
+    pub const OP_DROP: u8 = 0x03; // Removes the top item from the stack.
+    pub const OP_SWAP: u8 = 0x04; // Swaps the top two items on the stack.
 
-    pub const OP_SELF_AMT: u8 = 0x10;
-    pub const OP_SELF_DATA: u8 = 0x11;
-    pub const OP_SELF_COMM: u8 = 0x12;
-    pub const OP_OUT_AMT: u8 = 0x13;
-    pub const OP_OUT_DATA: u8 = 0x14;
-    pub const OP_OUT_COMM: u8 = 0x15;
+    // Push Operations
+    pub const OP_PUSH_U32: u8 = 0x10; // Push a 32-bit unsigned integer (4 bytes follow the opcode, little-endian).
+    pub const OP_PUSH_BYTE: u8 = 0x11; // Push a single byte onto the stack.
+    pub const OP_PUSH_BYTES: u8 = 0x12; // Push a byte array of length N onto the stack (N bytes follow the opcode).
 
-    /// Pushes the sighash for all inputs and outputs onto the stack.
-    pub const OP_SIGHASH_ALL: u8 = 0x60;
-    /// Pushes the sighash for only the outputs onto the stack.
-    pub const OP_SIGHASH_OUT: u8 = 0x61;
+    // UTXO and Transaction Data
+    pub const OP_SELF_AMT: u8 = 0x20; // Pushes the amount of the UTXO being spent.
+    pub const OP_SELF_DATA: u8 = 0x21; // Pushes the data hash of the UTXO being spent.
+    pub const OP_SELF_COMM: u8 = 0x22; // Pushes the commitment of the UTXO being spent.
+    pub const OP_OUT_AMT: u8 = 0x23; // Pops index, pushes the amount of Output[index].
+    pub const OP_OUT_DATA: u8 = 0x24; // Pops index, pushes the data hash of Output[index].
+    pub const OP_OUT_COMM: u8 = 0x25; // Pops index, pushes the commitment of Output[index].
 
-    /// Push current total supply onto the stack.
-    pub const OP_PUSH_SUPPLY: u8 = 0x50;
-    /// Push current block height onto the stack.
-    pub const OP_PUSH_HEIGHT: u8 = 0x51;
-    /// Pushes the block height of the UTXO onto the stack.
-    pub const OP_SELF_HEIGHT: u8 = 0x52;
+    // Sighash Operations
+    pub const OP_SIGHASH_ALL: u8 = 0x30; // Pushes the sighash for all inputs and outputs onto the stack.
+    pub const OP_SIGHASH_OUT: u8 = 0x31; // Pushes the sighash for only the outputs onto the stack.
 
-    pub const OP_PUSH_PK: u8 = 0x20;
-    pub const OP_PUSH_SIG: u8 = 0x21;
-    pub const OP_PUSH_WITNESS: u8 = 0x22;
+    // Blockchain State
+    pub const OP_PUSH_SUPPLY: u8 = 0x40; // Push current total supply onto the stack.
+    pub const OP_PUSH_HEIGHT: u8 = 0x41; // Push current block height onto the stack.
+    pub const OP_SELF_HEIGHT: u8 = 0x42; // Pushes the block height of the UTXO onto the stack.
 
-    pub const OP_CHECKSIG: u8 = 0x30;
-    pub const OP_HASH_B2: u8 = 0x31;
-    pub const OP_EQUAL: u8 = 0x32;
-    pub const OP_GREATER: u8 = 0x33;
-    /// Concatenate the top two byte arrays on the stack.
-    pub const OP_CAT: u8 = 0x37;
-    pub const OP_ADD: u8 = 0x34;
-    pub const OP_SUB: u8 = 0x35;
-    /// Splits a slice into two at a given index (u8).
-    pub const OP_SPLIT: u8 = 0x38;
-    /// Reads a byte slice from the stack and casts it into a u32.
-    pub const OP_READ_U32: u8 = 0x39;
-    /// Reads a byte slice from the stack and casts it into a single byte.
-    pub const OP_READ_BYTE: u8 = 0x3A;
+    // Public Key and Signature
+    pub const OP_PUSH_PK: u8 = 0x50; // Pushes the 32-byte public key from the input.
+    pub const OP_PUSH_SIG: u8 = 0x51; // Pushes the 64-byte signature from the input.
+    pub const OP_PUSH_WITNESS: u8 = 0x52; // Pushes the witness data onto the stack.
 
-    pub const OP_VERIFY: u8 = 0x40;
-    pub const OP_RETURN: u8 = 0x41;
-    pub const OP_IF: u8 = 0x42;
-    pub const OP_END_IF: u8 = 0x43;
+    // Cryptographic and Comparison Operations
+    pub const OP_CHECKSIG: u8 = 0x60; // Pops pk, sig. Checks Ed25519 signature against the transaction sighash.
+    pub const OP_HASH_B2: u8 = 0x61; // Pops data, pushes Blake2s256 hash.
+    pub const OP_EQUAL: u8 = 0x62; // Pops two items, pushes 1 if equal, 0 otherwise.
+    pub const OP_GREATER: u8 = 0x63; // Pops a, b. Pushes 1 if b > a.
+
+    // Data Manipulation
+    pub const OP_CAT: u8 = 0x70; // Concatenates the top two byte arrays on the stack.
+    pub const OP_ADD: u8 = 0x71; // Pops a, b. Pushes a + b.
+    pub const OP_SUB: u8 = 0x72; // Pops a, b. Pushes b − a.
+    pub const OP_SPLIT: u8 = 0x73; // Splits a slice into two at a given index (u8).
+    pub const OP_READ_U32: u8 = 0x74; // Reads a byte slice from the stack and casts it into a u32.
+    pub const OP_READ_BYTE: u8 = 0x75; // Reads a byte slice from the stack and casts it into a single byte.
+
+    // Control Flow
+    pub const OP_VERIFY: u8 = 0x80; // Pops top item. If 0 (False), the entire transaction is invalid.
+    pub const OP_RETURN: u8 = 0x81; // Immediately terminates the script.
+    pub const OP_IF: u8 = 0x82; // Executes subsequent code only if the top item is non-zero.
+    pub const OP_END_IF: u8 = 0x83; // Marks the end of an if block.
 }
 
 // Re-export the constants so existing imports like `use crate::core::vm::op::OP_TRUE`
@@ -74,6 +72,7 @@ pub use r#const::*;
 /// An operation that can be executed by the `Vm`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op<'a> {
+    // Stack Manipulation
     /// Pushes an empty array (0) onto the stack.
     False,
     /// Pushes a 1 onto the stack.
@@ -84,6 +83,8 @@ pub enum Op<'a> {
     Drop,
     /// Swaps the top two items on the stack.
     Swap,
+
+    // Push Operations
     /// Pushes a 32-bit unsigned integer (u32) onto the stack.
     ///
     /// Encoding: `[OP_PUSH_U32][u32 le bytes...]`.
@@ -95,6 +96,7 @@ pub enum Op<'a> {
     /// Pushes a byte array of length N onto the stack.
     PushBytes(&'a [u8]),
 
+    // UTXO and Transaction Data
     /// Pushes the Amount of the UTXO being spent.
     SelfAmt,
     /// Pushes the Data Hash of the UTXO being spent.
@@ -109,15 +111,18 @@ pub enum Op<'a> {
     OutComm(u8),
     /// Pushes the current total supply of the currency onto the stack.
     Supply,
-    /// Pushes the current block height onto the stack.
+    /// Pushes the height of the UTXO's block onto the stack.
     SelfHeight,
+    /// Pushes the current block height onto the stack.
     Height,
 
+    // Public Key and Signature
     /// Pushes the 32-byte Public Key from the input.
     PushPk,
     /// Pushes the 64-byte Signature from the input.
     PushSig,
 
+    // Cryptographic and Comparison Operations
     /// Pops pk, sig. Checks Ed25519 signature against the transaction sighash.
     CheckSig,
     /// Pops data, pushes Blake2s256 hash.
@@ -126,13 +131,22 @@ pub enum Op<'a> {
     Equal,
     /// Pops a, b. Pushes 1 if b > a.
     Greater,
+
+    // Data Manipulation
     /// Concatenates the top two byte arrays on the stack.
     Cat,
     /// Pops a, b. Pushes a + b.
     Add,
     /// Pops a, b. Pushes b − a.
     Sub,
+    /// Splits a slice into two at a given index (u8).
+    Split(u8),
+    /// Reads a byte slice from the stack and casts it into a u32.
+    ReadU32,
+    /// Reads a byte slice from the stack and casts it into a single byte.
+    ReadByte,
 
+    // Control Flow
     /// Pops top item. If 0 (False), the entire transaction is invalid.
     Verify,
     /// Immediately terminates the script.
@@ -141,18 +155,16 @@ pub enum Op<'a> {
     If,
     /// Mark the end of an if block.
     EndIf,
+
+    // Sighash Operations
     /// Pushes the sighash for all inputs and outputs onto the stack.
     SighashAll,
     /// Pushes the sighash for only the outputs onto the stack.
     SighashOut,
+
+    // Witness Data
     /// Pushes the witness data onto the stack.
     PushWitness,
-    /// Splits a slice into two at a given index (u8).
-    Split(u8),
-    /// Reads a byte slice from the stack and casts it into a u32.
-    ReadU32,
-    /// Reads a byte slice from the stack and casts it into a single byte.
-    ReadByte,
 }
 
 /// Error returned when decoding an opcode byte into an `Op`.

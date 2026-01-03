@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct UtxoEntry {
+pub(crate) struct UtxoEntry {
     pub block_hash: Hash,
     pub output: Output,
 }
@@ -17,15 +17,15 @@ use super::{BlockMetadata, Ledger};
 /// Represents an in-memory implementation of a blockchain ledger.
 pub struct InMemoryLedger {
     /// Block metadata index
-    pub block_index: HashMap<Hash, BlockMetadata>,
+    pub(crate) block_index: HashMap<Hash, BlockMetadata>,
 
     // The complete set of unspent transaction outputs (UTXOs)
-    pub utxo_set: BTreeMap<OutputId, UtxoEntry>,
+    pub(crate) utxo_set: BTreeMap<OutputId, UtxoEntry>,
 
     /// Points to the block with the Maximum Accumulated Supply (MAS)
     ///
-    /// This is the main branch of the blockchain.
-    pub tip: Hash,
+    /// This is the main blockchain.
+    pub(crate) tip: Hash,
 }
 
 impl InMemoryLedger {
