@@ -78,3 +78,16 @@ The difficulty (`D`) is determined by the number of 1-bits in the mask. The rewa
 ```
 R(D) = min(1000000, 2^(floor(D/4)))
 ```
+Here is a suggested snippet for your README that incorporates the specific properties of your consensus algorithm, particularly the decoupling of block assembly from the hashing process.
+
+Here is a suggested addition for your **README.md**, specifically designed to highlight the protocol's advantages in high-frequency environments and dynamic fee markets. You can append this as a new subsection under **Consensus**:
+
+### 4.4 High-Frequency & Dynamic Fee Market Optimization
+
+The decoupling of Proof of Work from the block's transaction set enables EUPP to function as a high-frequency clearing house with a highly efficient fee market:
+
+* **Zero-Latency Hashing**: Unlike sequential systems (e.g., Bitcoin) where adding a transaction changes the Merkle Root and invalidates current hashing progress, EUPP allows miners to run hashing hardware at 100% capacity continuously. Transaction selection occurs in parallel, removing the "hashing penalty" for being inclusive.
+* **Just-In-Time (JIT) Fee Selection**: Miners can find a valid `nonce` first and then "fill" the block with the most profitable transactions from the mempool at the exact millisecond before broadcasting. This ensures that blocks always reflect the most current, highest-value state of the fee market.
+* **Reduced "Empty Block" Pressure**: In traditional PoW, miners often broadcast empty blocks to avoid the "dead time" spent validating a previous block's transactions before starting a new hash search. In EUPP, the parallel nature of block construction allows miners to start hashing the next height immediately while their node assembles the transaction list in the background, minimizing the necessity of empty blocks.
+* **Dynamic Transaction Heartbeat**: The Chained Mask difficulty is adjusted block-by-block by the previous miner. This allows the network to potentially respond to high-frequency traffic bursts by adjusting difficulty and reward incentives dynamically through the transaction graph itself.
+* **Confirmation Pipeline**: While construction is parallel, cryptographic security follows a "one-block lag". Block  transactions are effectively "sealed" by the PoW of Block , creating a pipelined validation structure optimized for high-throughput stream processing.
