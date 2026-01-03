@@ -288,13 +288,12 @@ impl fmt::Debug for Output {
 }
 
 impl Output {
-    pub fn new_v0(amount: u32, public_key: &PublicKey, mask: &Hash) -> Self {
-        let commitment = commitment(public_key, Some(mask.as_slice()));
+    pub fn new_v0(amount: u32, nonce: &Hash, mask: &Hash) -> Self {
         Self {
             version: Version::V0,
             amount,
-            data: *mask, // The mask for the next challenge
-            commitment, // The commitment for the next challenge with the pubkey of the winner of the previous challenge
+            data: *mask,        // The mask for the next challenge
+            commitment: *nonce, // The solution for the previous challenge
         }
     }
     pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {

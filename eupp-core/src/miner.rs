@@ -15,11 +15,12 @@ use super::{
     transaction::{TransactionHash, sighash},
 };
 
-/// Computes the mining solution for a given public key and previous block hash.
-pub fn mining_solution(pubkey: &PublicKey, prev_block_hash: &Hash) -> Hash {
+/// Computes the mining solution for a given public key, previous block hash, and nonce.
+pub fn mining_solution(prev_block_hash: &Hash, pubkey: &PublicKey, nonce: &[u8]) -> Hash {
     let mut h = Blake2s256::new();
     h.update(prev_block_hash);
     h.update(pubkey);
+    h.update(nonce);
     h.finalize().into()
 }
 
@@ -34,22 +35,14 @@ pub(self) fn build_mining_tx_deterministic(
     // Mask is stored in previous minting output's data
     let mask = lead_utxo.data;
 
+    let signing_key = SigningKey::from_bytes(&master_seed);
+    let verifying_key = signing_key.verifying_key();
+    let pk_bytes = verifying_key.to_bytes();
+
     for attempt in 0..max_attempts {
-        // Derive seed = Blake2s256(master_seed || nonce_be)
-        let mut h = Blake2s256::new();
-        h.update(&master_seed);
-        h.update(&attempt.to_be_bytes());
-        let digest = h.finalize();
-        let seed = digest.as_slice().try_into().unwrap();
-
-        // Build signing key from seed deterministically
-        let signing_key = SigningKey::from_bytes(&seed);
-        let verifying_key = signing_key.verifying_key();
-        let pk_bytes = verifying_key.to_bytes();
-        let solution = mining_solution(&pk_bytes, prev_block_hash);
-
-        // We'll use a nonce as the data hash for outputs (kept zero for now)
-        let data_hash = [0u8; 32];
+        let mut nonce = [0u8; 32];
+        nonce[..8].copy_from_slice(&attempt.to_be_bytes());
+        let solution = mining_solution(prev_block_hash, &pk_bytes, &nonce);
 
         // Check mask against the raw public key bytes (README semantics)
         if matches_mask(&mask, &solution) {
@@ -62,8 +55,8 @@ pub(self) fn build_mining_tx_deterministic(
 
             // Build outputs: new mint (carry forward mask) and miner reward
             let new_mint_output =
-                Output::new_v0(lead_utxo.amount.saturating_sub(reward), &pk_bytes, &mask);
-            let miner_reward_output = Output::new_v1(reward, &pk_bytes, &data_hash);
+                Output::new_v0(lead_utxo.amount.saturating_sub(reward), &nonce, &mask);
+            let miner_reward_output = Output::new_v1(reward, &pk_bytes, &[0; 32]);
             let outputs = vec![new_mint_output, miner_reward_output];
 
             // Compute sighash
@@ -136,10 +129,7 @@ pub fn build_next_block<L: Ledger>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        commitment,
-        transaction::{Output, Transaction, Version},
-    };
+    use crate::transaction::{Output, Transaction, Version};
     use ed25519_dalek::{Signature, VerifyingKey};
     use std::time::{Duration, Instant};
 
@@ -174,10 +164,10 @@ mod tests {
         assert_eq!(tx.inputs.len(), 1);
         assert_eq!(tx.outputs.len(), 2);
 
-        // Miner reward commitment should be the commitment of the revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = commitment(&input.public_key, Some(mask.as_slice()));
-        assert_eq!(tx.outputs[0].commitment, expected_commitment);
+        let output = &tx.outputs[0];
+        let solution = mining_solution(&prev_block_hash, &input.public_key, &output.commitment);
+        assert!(matches_mask(&mask, &solution));
 
         // Verify the signature over the sighash using the revealed public key
         let sighash = sighash(&[input.output_id], &tx.outputs);
@@ -264,10 +254,10 @@ mod tests {
         assert_eq!(tx.inputs.len(), 1);
         assert_eq!(tx.outputs.len(), 2);
 
-        // Miner reward commitment should match revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = commitment(&input.public_key, Some(mask.as_slice()));
-        assert_eq!(tx.outputs[0].commitment, expected_commitment);
+        let output = &tx.outputs[0];
+        let solution = mining_solution(&prev_block_hash, &input.public_key, &output.commitment);
+        assert!(matches_mask(&mask, &solution));
 
         // Verify the signature over the sighash using the revealed public key
         let sighash = sighash(&[input.output_id], &tx.outputs);

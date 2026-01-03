@@ -19,7 +19,7 @@ This ensures that no new value is created within the transaction, maintaining th
 
 Every UTXO consists of four distinct fields:
 
-* **Version (1 byte):** Specifies the spending logic, with supported versions being V0, V1, or V2.  
+* **Version (1 byte):** Specifies the spending logic.  
 * **Amount (4 bytes):** Represents the stored value in the output.  
 * **Data (32 bytes):** Contains contextual state or VM bytecode, which can be used for programmable spending conditions.  
 * **Commitment (32 bytes):** A cryptographic commitment that can serve as a locking mechanism.
@@ -60,13 +60,18 @@ Consensus in EUPP is defined by the transaction graph itself rather than an exte
 ### 4.1 The Mask Mechanism
 
 1. **Lead UTXO:** The output at index 0 of the previous block defines the next challenge.  
-2. **The Mask:** The **data** of this Lead UTXO acts as a bitmask for the next miner. 
-3. **Mining Condition:** A miner must find an Ed25519 public key (`pk`) such that: `Mask & hash(pk, prev_block_hash) == 0`
-4. **Commitment:** The winner commits the next mask with his pubkey such that: `commitment = hash(pk, mask)`.
+2. **The Mask:** The **data** field of this Lead UTXO acts as a bitmask for the next miner. 
+3. **Mining Condition:** A miner must find a solution such that the hash of the previous block, the miner's public key, and a nonce satisfies the mask condition:  
+   `Mask & hash(prev_block_hash, pubkey, nonce) == 0`
+4. **Commitment:** The miner includes the nonce as part of the commitment in the next **Lead UTXO**.
 
-To successfully mine the block, the miner must create a transaction that **spends** this Lead UTXO.
+To successfully mine the block, the miner must create a transaction that **spends** this **Lead UTXO**.
 
-### 4.2 Difficulty-Based Rewards
+### 4.2 Deterministic Mining
+
+Miners can use a deterministic approach by deriving signing keys from a master seed and iterating through nonces to find a valid solution. This ensures reproducibility and fairness in the mining process.
+
+### 4.3 Difficulty-Based Rewards
 
 The difficulty (`D`) is determined by the number of 1-bits in the mask. The reward grows exponentially to incentivize solving harder masks:
 

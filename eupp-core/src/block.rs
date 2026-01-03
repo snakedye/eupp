@@ -78,12 +78,13 @@ impl Block {
             let prev_block_hash = self.prev_block_hash;
 
             // Verify the previous block hash
-            ledger
-                .get_block_metadata(&prev_block_hash)
-                .ok_or(BlockError::InvalidBlockHash(format!(
-                    "Previous block hash not found: {}",
-                    hex::encode(&self.prev_block_hash)
-                )))?;
+            let _ =
+                ledger
+                    .get_block_metadata(&prev_block_hash)
+                    .ok_or(BlockError::InvalidBlockHash(format!(
+                        "Previous block hash not found: {}",
+                        hex::encode(&self.prev_block_hash)
+                    )))?;
 
             // Verify the challenge
             let input = self
@@ -91,10 +92,13 @@ impl Block {
                 .first()
                 .and_then(|tx| tx.inputs.first())
                 .unwrap();
-            let lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
-            let mask = &lead_utxo.data;
-            let solution = mining_solution(&input.public_key, &self.prev_block_hash);
-            if !matches_mask(&mask, &solution) {
+            let this_lead_utxo = &self.transactions[0].outputs[0];
+            let prev_lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
+
+            let mask = &prev_lead_utxo.data;
+            let nonce = &this_lead_utxo.commitment;
+            let solution = mining_solution(&prev_block_hash, &input.public_key, nonce);
+            if !matches_mask(mask, &solution) {
                 return Err(BlockError::ChallengeError);
             }
 
@@ -105,7 +109,7 @@ impl Block {
                 .and_then(|tx| tx.outputs.first())
                 .map(|o| o.amount)
                 .unwrap_or_default();
-            let old_supply = lead_utxo.amount;
+            let old_supply = prev_lead_utxo.amount;
             let max_reward = calculate_reward(mask);
             let min_supply = old_supply.saturating_sub(max_reward);
             if new_supply < min_supply || new_supply > old_supply {

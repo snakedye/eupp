@@ -18,7 +18,7 @@ fn main() {
     // A mask requiring ~2.5 bytes of zeros for a valid PoW solution.
     let mut mask = [0_u8; 32];
     mask[0] = 0xFF;
-    mask[1] = 0x0F;
+    mask[1] = 0xFF;
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
