@@ -1,34 +1,39 @@
-use super::vm::{ExecError, Vm, check_sig_script, p2pkh_v1, p2wsh};
-use super::{Hash, PublicKey, ledger::Ledger, pubkey_hash};
+use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
+use super::{Hash, PublicKey, commitment, ledger::Ledger};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
 use std::fmt;
 
+pub type TransactionHash = Hash;
+
 const MAX_WITNESS_SIZE: usize = 1024;
 const MAX_ALLOWED: usize = u8::MAX as usize;
 
+/// A blockchain transaction.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Transaction {
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
 }
 
+/// An output identifier.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputId {
     pub tx_hash: TransactionHash,
     pub index: u8,
 }
 
+/// A blockchain transaction input.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Input {
     /// The id of the output being spent.
-    pub output_id: OutputId,
+    pub(crate) output_id: OutputId,
     /// The public key used to verify the signature.
-    pub public_key: PublicKey,
-    /// The signature signed by the private key linked to the public key.
-    pub signature: Signature,
+    pub(crate) public_key: PublicKey,
     /// Witness data for the input.
-    pub witness: Vec<u8>,
+    pub(crate) witness: Vec<u8>,
+    /// The signature signed by the private key linked to the public key.
+    pub(crate) signature: Signature,
 }
 
 /// Protocol version used for outputs in the codebase.
@@ -47,20 +52,20 @@ pub enum Version {
     V3 = 3,
 }
 
+/// A blockchain transaction output.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Output {
     /// Protocol version used for the output.
-    pub version: Version,
+    pub(crate) version: Version,
     /// Amount of the output.
-    pub amount: u32,
+    pub(crate) amount: u32,
     /// Data associated with the output.
-    pub data: Hash,
+    pub(crate) data: Hash,
     /// The hash of the public key.
-    pub commitment: Hash,
+    pub(crate) commitment: Hash,
 }
 
-pub type TransactionHash = Hash;
-
+/// Error type for transaction validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
@@ -84,7 +89,7 @@ pub enum TransactionError {
 impl VirtualSize for Input {
     fn vsize(&self) -> usize {
         // the pk and sig can be pruned after validation
-        let witness_len = self.public_key.len() + self.signature.len();
+        let witness_len = self.public_key.len() + self.signature.len() + self.witness.len();
         self.output_id.vsize() + witness_len / 2
     }
 }
@@ -235,7 +240,7 @@ impl Transaction {
                 }
                 Version::V1 => {
                     // V1 transactions use a simple P2PK script
-                    vm.run(&p2pkh_v1()).map_err(TransactionError::Execution)?;
+                    vm.run(&p2pkh()).map_err(TransactionError::Execution)?;
                 }
                 Version::V2 => {
                     // V2 transactions can use a more complex script
@@ -284,16 +289,16 @@ impl fmt::Debug for Output {
 
 impl Output {
     pub fn new_v0(amount: u32, public_key: &PublicKey, mask: &Hash) -> Self {
-        let commitment = pubkey_hash(public_key, None);
+        let commitment = commitment(public_key, Some(mask.as_slice()));
         Self {
             version: Version::V0,
             amount,
-            data: *mask,
-            commitment,
+            data: *mask, // The mask for the next challenge
+            commitment, // The commitment for the next challenge with the pubkey of the winner of the previous challenge
         }
     }
     pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
-        let commitment = pubkey_hash(public_key, None);
+        let commitment = commitment(public_key, Some(data.as_slice()));
         Self {
             version: Version::V1,
             amount,
@@ -303,7 +308,7 @@ impl Output {
     }
 
     pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
-        let commitment = pubkey_hash(public_key, Some(script));
+        let commitment = commitment(public_key, Some(script.as_slice()));
         Self {
             version: Version::V2,
             amount,
@@ -312,13 +317,17 @@ impl Output {
         }
     }
 
-    pub fn new_v3(amount: u32, public_key: &PublicKey, witness_script: &[u8]) -> Self {
-        let commitment = pubkey_hash(public_key, None);
-        let witness_commitment = pubkey_hash(public_key, Some(&witness_script));
+    pub fn new_v3(
+        amount: u32,
+        public_key: &PublicKey,
+        data: &[u8; 32],
+        witness_script: &[u8],
+    ) -> Self {
+        let commitment = commitment(public_key, [data.as_slice(), witness_script]);
         Self {
             version: Version::V3,
             amount,
-            data: witness_commitment,
+            data: *data,
             commitment,
         }
     }
@@ -360,7 +369,7 @@ mod tests {
         block::Block,
         calculate_reward,
         ledger::{InMemoryLedger, Ledger},
-        vm::p2pkh_v2,
+        vm::p2pkh,
     };
     use blake2::Blake2s256;
     use ed25519_dalek::Signer;
@@ -640,7 +649,7 @@ mod tests {
 
         // Build funding (previous) transaction that creates a UTXO
         let mut data = [0u8; 32];
-        data.as_mut_slice().write(&p2pkh_v2()).unwrap();
+        data.as_mut_slice().write(&p2pkh()).unwrap();
         let mask = [0u8; 32]; // A zero mask allows for any pubkey
         let reward = calculate_reward(&mask);
 
@@ -816,7 +825,7 @@ mod tests {
         let bad_data = [0u8; 32];
 
         // commitment must match the pubkey used to spend
-        let commitment = pubkey_hash(&pubkey, None);
+        let commitment = commitment(&pubkey, None);
 
         let reward = 42; // arbitrary non-zero amount for test
         let funding_tx = Transaction {
@@ -875,7 +884,7 @@ mod tests {
         let reward = 42; // arbitrary non-zero amount for test
         let funding_tx = Transaction {
             inputs: vec![],
-            outputs: vec![Output::new_v3(reward, &pubkey, &witness)],
+            outputs: vec![Output::new_v3(reward, &pubkey, &[0; 32], &witness)],
         };
         let funding_txid = funding_tx.hash();
 

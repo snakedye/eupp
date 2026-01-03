@@ -30,8 +30,8 @@ pub(self) fn build_mining_tx_deterministic(
     lead_utxo: &Output,
     max_attempts: usize,
 ) -> Option<(SigningKey, Transaction)> {
-    // Mask is stored in previous minting output's commitment
-    let mask = lead_utxo.commitment;
+    // Mask is stored in previous minting output's data
+    let mask = lead_utxo.data;
 
     for attempt in 0..max_attempts {
         // Derive seed = Blake2s256(master_seed || nonce_be)
@@ -60,12 +60,8 @@ pub(self) fn build_mining_tx_deterministic(
             let reward = calculate_reward(&mask);
 
             // Build outputs: new mint (carry forward mask) and miner reward
-            let new_mint_output = Output {
-                version: super::transaction::Version::V0,
-                amount: lead_utxo.amount.saturating_sub(reward),
-                data: data_hash,
-                commitment: mask,
-            };
+            let new_mint_output =
+                Output::new_v0(lead_utxo.amount.saturating_sub(reward), &pk_bytes, &mask);
             let miner_reward_output = Output::new_v1(reward, &pk_bytes, &data_hash);
             let outputs = vec![new_mint_output, miner_reward_output];
 
@@ -140,10 +136,9 @@ pub fn build_next_block<L: Ledger>(
 mod tests {
     use super::*;
     use crate::{
-        pubkey_hash,
+        commitment,
         transaction::{Output, Transaction, Version},
     };
-    use blake2::Blake2s256;
     use ed25519_dalek::{Signature, VerifyingKey};
     use std::time::{Duration, Instant};
 
@@ -151,21 +146,14 @@ mod tests {
     fn test_build_mining_tx_deterministic_finds_solution_with_permissive_mask() {
         // With the updated matches_mask semantics, a zero mask permits any candidate
         // because (attempted & mask) == 0 for all attempted when mask == 0.
-        let mask = [0x00u8; 32];
-        let prev_mint_output = Output {
-            version: Version::V1,
-            amount: 100,
-            data: [0u8; 32],
-            commitment: mask,
-        };
+        let mask = [0; 32];
+        let prev_mint_output = Output::new_v0(100, &[0; 32], &mask);
         let funding_tx = Transaction {
             inputs: vec![],
             outputs: vec![prev_mint_output],
         };
         let prev_tx_hash = funding_tx.hash();
         let prev_block_hash = [0u8; 32];
-        // let mut prev_block = Block::new(crate::Version::V1, [0u8; 32]);
-        // prev_block.transactions.push(funding_tx);
 
         // We only need a single attempt because the mask accepts any pubkey.
         let result = build_mining_tx_deterministic(
@@ -187,8 +175,8 @@ mod tests {
 
         // Miner reward commitment should be the commitment of the revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = pubkey_hash(&input.public_key, None);
-        assert_eq!(tx.outputs[1].commitment, expected_commitment);
+        let expected_commitment = commitment(&input.public_key, Some(mask.as_slice()));
+        assert_eq!(tx.outputs[0].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
         let sighash = sighash(&[input.output_id], &tx.outputs);
@@ -236,12 +224,7 @@ mod tests {
         mask[0] = 0xFF;
         mask[1] = 0xF0;
 
-        let prev_mint_output = Output {
-            version: Version::V0,
-            amount: 100,
-            data: [0u8; 32],
-            commitment: mask,
-        };
+        let prev_mint_output = Output::new_v0(100, &[0; 32], &mask);
         let funding_tx = Transaction {
             inputs: vec![],
             outputs: vec![prev_mint_output],
@@ -282,8 +265,8 @@ mod tests {
 
         // Miner reward commitment should match revealed public key
         let input = &tx.inputs[0];
-        let expected_commitment = pubkey_hash(&input.public_key, None);
-        assert_eq!(tx.outputs[1].commitment, expected_commitment);
+        let expected_commitment = commitment(&input.public_key, Some(mask.as_slice()));
+        assert_eq!(tx.outputs[0].commitment, expected_commitment);
 
         // Verify the signature over the sighash using the revealed public key
         let sighash = sighash(&[input.output_id], &tx.outputs);

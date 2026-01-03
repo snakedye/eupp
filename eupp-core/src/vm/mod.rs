@@ -18,27 +18,7 @@ use super::transaction::{Input, Output, Transaction, sighash};
 const MAX_VALUE_SIZE: usize = 1024;
 
 /// Returns a standard pay to public key hash script.
-pub const fn p2pkh_v1() -> &'static [u8] {
-    use op::r#const::*;
-    &[
-        // Verify signature
-        OP_PUSH_SIG,
-        OP_SIGHASH_ALL,
-        OP_PUSH_PK,
-        OP_CHECKSIG,
-        OP_VERIFY,
-        // Verify commitment
-        OP_SELF_COMM, // Push the original commitment from the UTXO
-        OP_PUSH_PK,   // Push the public key from the UTXO
-        OP_HASH_B2,   // Hash the pubkey (public_key)
-        OP_EQUAL,     // Compare: HASH(public_key) == original_commitment
-        OP_VERIFY,    // Fail if they are not equal
-        OP_RETURN,    // Succeed
-    ]
-}
-
-/// Returns a standard pay to public key hash script.
-pub const fn p2pkh_v2() -> &'static [u8] {
+pub const fn p2pkh() -> &'static [u8] {
     use op::r#const::*;
     &[
         // Verify signature
@@ -63,9 +43,11 @@ pub const fn p2pkh_v2() -> &'static [u8] {
 pub const fn p2wsh() -> &'static [u8] {
     use op::r#const::*;
     &[
-        OP_SELF_DATA,
+        OP_SELF_COMM,
         OP_PUSH_WITNESS,
+        OP_SELF_DATA,
         OP_PUSH_PK,
+        OP_CAT,
         OP_CAT,
         OP_HASH_B2,
         OP_EQUAL,
@@ -1175,7 +1157,7 @@ mod tests {
         };
 
         let vm = create_vm(&ledger, 0, &transaction);
-        let script = p2pkh_v1();
+        let script = p2pkh();
 
         assert_eq!(vm.run(script), Ok(OwnedStackValue::U32(0)));
     }
@@ -1200,7 +1182,7 @@ mod tests {
         };
 
         let vm = create_vm(&ledger, 0, &transaction);
-        let script = p2pkh_v2();
+        let script = p2pkh();
 
         assert_eq!(vm.run(&script).unwrap_err().op, OP_VERIFY);
     }

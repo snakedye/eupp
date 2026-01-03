@@ -92,7 +92,7 @@ impl Block {
                 .and_then(|tx| tx.inputs.first())
                 .unwrap();
             let lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
-            let mask = &lead_utxo.commitment;
+            let mask = &lead_utxo.data;
             let solution = mining_solution(&input.public_key, &self.prev_block_hash);
             if !matches_mask(&mask, &solution) {
                 return Err(BlockError::ChallengeError);

@@ -71,6 +71,7 @@ pub mod r#const {
 // continue to work.
 pub use r#const::*;
 
+/// An operation that can be executed by the `Vm`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op<'a> {
     /// Pushes an empty array (0) onto the stack.

@@ -16,13 +16,12 @@ pub trait VirtualSize {
     fn vsize(&self) -> usize;
 }
 
-// Helpers
 /// Create a 32-byte commitment from a public key.
-pub fn pubkey_hash(pk: &PublicKey, data: Option<&[u8]>) -> Hash {
+pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) -> Hash {
     let mut hasher = blake2::Blake2s256::new();
     hasher.update(pk);
-    if let Some(data) = data {
-        hasher.update(data);
+    for chunk in data {
+        hasher.update(chunk);
     }
     hasher.finalize().into()
 }
@@ -46,11 +45,6 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
 }
 
 /// Calculate block reward using a Capped Exponential Growth curve.
-///
-/// Reward policy (as requested):
-/// - Base reward = 1 (pure powers of two)
-/// - exponent = floor(difficulty / SCALE_FACTOR)
-/// - reward = min(HARD_CAP, 2^exponent)
 pub fn calculate_reward(mask: &[u8; 32]) -> u32 {
     const HARD_CAP: u32 = 1_000_000;
     const MIN_REWARD: u32 = 1;
