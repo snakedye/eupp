@@ -78,9 +78,6 @@ The difficulty (`D`) is determined by the number of 1-bits in the mask. The rewa
 ```
 R(D) = min(1000000, 2^(floor(D/4)))
 ```
-Here is a suggested snippet for your README that incorporates the specific properties of your consensus algorithm, particularly the decoupling of block assembly from the hashing process.
-
-Here is a suggested addition for your **README.md**, specifically designed to highlight the protocol's advantages in high-frequency environments and dynamic fee markets. You can append this as a new subsection under **Consensus**:
 
 ### 4.4 High-Frequency & Dynamic Fee Market Optimization
 
