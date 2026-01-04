@@ -7,15 +7,16 @@ use super::{
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub version: u8,
     pub prev_block_hash: Hash,
     pub transactions: Vec<Transaction>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlockHeader {
     pub version: u8,
     pub prev_block_hash: Hash,

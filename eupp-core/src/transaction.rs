@@ -2,6 +2,7 @@ use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
 use super::{Hash, PublicKey, commitment, ledger::Ledger};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub type TransactionHash = Hash;
@@ -10,14 +11,14 @@ const MAX_WITNESS_SIZE: usize = 1024;
 const MAX_ALLOWED: usize = u8::MAX as usize;
 
 /// A blockchain transaction.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transaction {
     pub inputs: Vec<Input>,
     pub outputs: Vec<Output>,
 }
 
 /// An output identifier.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OutputId {
     pub tx_hash: TransactionHash,
     pub index: u8,
@@ -129,6 +130,50 @@ impl Input {
     }
 }
 
+impl<'de> serde::Deserialize<'de> for Input {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct InputHelper {
+            output_id: OutputId,
+            public_key: String,
+            witness: String,
+            signature: String,
+        }
+
+        let helper = InputHelper::deserialize(deserializer)?;
+        let pubkey = hex::decode(helper.public_key).map_err(serde::de::Error::custom)?;
+        let witness = hex::decode(helper.witness).map_err(serde::de::Error::custom)?;
+        let signature = hex::decode(helper.signature).map_err(serde::de::Error::custom)?;
+
+        Ok(Input {
+            output_id: helper.output_id,
+            public_key: PublicKey::try_from(pubkey.as_slice()).map_err(serde::de::Error::custom)?,
+            witness,
+            signature: Signature::try_from(signature.as_slice())
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+impl serde::Serialize for Input {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Input", 4)?;
+        state.serialize_field("output_id", &self.output_id)?;
+        state.serialize_field("public_key", &hex::encode(&self.public_key))?;
+        state.serialize_field("witness", &hex::encode(&self.witness))?;
+        state.serialize_field("signature", &hex::encode(&self.signature))?;
+        state.end()
+    }
+}
+
 impl VirtualSize for OutputId {
     fn vsize(&self) -> usize {
         1 + self.tx_hash.len()
@@ -162,6 +207,117 @@ impl Ord for OutputId {
 impl PartialOrd for OutputId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl VirtualSize for Output {
+    fn vsize(&self) -> usize {
+        let size = 1 + std::mem::size_of::<u64>() + self.data.len() + self.commitment.len();
+        if self.amount > 0 { size } else { size / 2 } // 0 amount outputs can be pruned after validation
+    }
+}
+
+impl fmt::Debug for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Output")
+            .field("version", &self.version)
+            .field("amount", &self.amount)
+            .field("data", &hex::encode(&self.data))
+            .field("commitment", &hex::encode(&self.commitment))
+            .finish()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Output {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct OutputHelper {
+            version: u8,
+            amount: u32,
+            data: String,
+            commitment: String,
+        }
+
+        let helper = OutputHelper::deserialize(deserializer)?;
+        let data = hex::decode(helper.data).map_err(serde::de::Error::custom)?;
+        let commitment = hex::decode(helper.commitment).map_err(serde::de::Error::custom)?;
+
+        Ok(Output {
+            version: match helper.version {
+                0 => Version::V0,
+                1 => Version::V1,
+                2 => Version::V2,
+                3 => Version::V3,
+                _ => return Err(serde::de::Error::custom("Invalid version")),
+            },
+            amount: helper.amount,
+            data: Hash::try_from(data.as_slice()).map_err(serde::de::Error::custom)?,
+            commitment: Hash::try_from(commitment.as_slice()).map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+impl serde::Serialize for Output {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Output", 4)?;
+        state.serialize_field("version", &(self.version as u8))?;
+        state.serialize_field("amount", &self.amount)?;
+        state.serialize_field("data", &hex::encode(&self.data))?;
+        state.serialize_field("commitment", &hex::encode(&self.commitment))?;
+        state.end()
+    }
+}
+
+impl Output {
+    pub fn new_v0(amount: u32, mask: &Hash, nonce: &Hash) -> Self {
+        Self {
+            version: Version::V0,
+            amount,
+            data: *mask,        // The mask for the next challenge
+            commitment: *nonce, // The solution for the previous challenge
+        }
+    }
+    pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
+        let commitment = commitment(public_key, Some(data.as_slice()));
+        Self {
+            version: Version::V1,
+            amount,
+            data: *data,
+            commitment,
+        }
+    }
+
+    pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
+        let commitment = commitment(public_key, Some(script.as_slice()));
+        Self {
+            version: Version::V2,
+            amount,
+            data: *script,
+            commitment,
+        }
+    }
+
+    pub fn new_v3(
+        amount: u32,
+        public_key: &PublicKey,
+        data: &[u8; 32],
+        witness_script: &[u8],
+    ) -> Self {
+        let commitment = commitment(public_key, [data.as_slice(), witness_script]);
+        Self {
+            version: Version::V3,
+            amount,
+            data: *data,
+            commitment,
+        }
     }
 }
 
@@ -266,69 +422,6 @@ impl Transaction {
             });
         }
         Ok(())
-    }
-}
-
-impl VirtualSize for Output {
-    fn vsize(&self) -> usize {
-        let size = 1 + std::mem::size_of::<u64>() + self.data.len() + self.commitment.len();
-        if self.amount > 0 { size } else { size / 2 } // 0 amount outputs can be pruned after validation
-    }
-}
-
-impl fmt::Debug for Output {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Output")
-            .field("version", &self.version)
-            .field("amount", &self.amount)
-            .field("data", &hex::encode(&self.data))
-            .field("commitment", &hex::encode(&self.commitment))
-            .finish()
-    }
-}
-
-impl Output {
-    pub fn new_v0(amount: u32, mask: &Hash, nonce: &Hash) -> Self {
-        Self {
-            version: Version::V0,
-            amount,
-            data: *mask,        // The mask for the next challenge
-            commitment: *nonce, // The solution for the previous challenge
-        }
-    }
-    pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
-        let commitment = commitment(public_key, Some(data.as_slice()));
-        Self {
-            version: Version::V1,
-            amount,
-            data: *data,
-            commitment,
-        }
-    }
-
-    pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
-        let commitment = commitment(public_key, Some(script.as_slice()));
-        Self {
-            version: Version::V2,
-            amount,
-            data: *script,
-            commitment,
-        }
-    }
-
-    pub fn new_v3(
-        amount: u32,
-        public_key: &PublicKey,
-        data: &[u8; 32],
-        witness_script: &[u8],
-    ) -> Self {
-        let commitment = commitment(public_key, [data.as_slice(), witness_script]);
-        Self {
-            version: Version::V3,
-            amount,
-            data: *data,
-            commitment,
-        }
     }
 }
 
