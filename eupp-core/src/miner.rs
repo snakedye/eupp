@@ -55,7 +55,7 @@ pub(self) fn build_mining_tx_deterministic(
 
             // Build outputs: new mint (carry forward mask) and miner reward
             let new_mint_output =
-                Output::new_v0(lead_utxo.amount.saturating_sub(reward), &nonce, &mask);
+                Output::new_v0(lead_utxo.amount.saturating_sub(reward), &mask, &nonce);
             let miner_reward_output = Output::new_v1(reward, &pk_bytes, &[0; 32]);
             let outputs = vec![new_mint_output, miner_reward_output];
 
@@ -138,7 +138,7 @@ mod tests {
         // With the updated matches_mask semantics, a zero mask permits any candidate
         // because (attempted & mask) == 0 for all attempted when mask == 0.
         let mask = [0; 32];
-        let prev_mint_output = Output::new_v0(100, &[0; 32], &mask);
+        let prev_mint_output = Output::new_v0(100, &mask, &[0; 32]);
         let funding_tx = Transaction {
             inputs: vec![],
             outputs: vec![prev_mint_output],
@@ -215,7 +215,7 @@ mod tests {
         mask[0] = 0xFF;
         mask[1] = 0xF0;
 
-        let prev_mint_output = Output::new_v0(100, &[0; 32], &mask);
+        let prev_mint_output = Output::new_v0(100, &mask, &[0; 32]);
         let funding_tx = Transaction {
             inputs: vec![],
             outputs: vec![prev_mint_output],

@@ -288,7 +288,7 @@ impl fmt::Debug for Output {
 }
 
 impl Output {
-    pub fn new_v0(amount: u32, nonce: &Hash, mask: &Hash) -> Self {
+    pub fn new_v0(amount: u32, mask: &Hash, nonce: &Hash) -> Self {
         Self {
             version: Version::V0,
             amount,
@@ -557,7 +557,7 @@ mod tests {
             tx_hash: funding_txid,
             index: 0,
         };
-        let new_outputs = vec![Output::new_v0(150, &mask, &data)]; // Any commitment will work with the mask chosen before
+        let new_outputs = vec![Output::new_v0(150, &data, &mask)]; // Any commitment will work with the mask chosen before
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();

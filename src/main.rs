@@ -22,7 +22,7 @@ fn main() {
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
-        outputs: vec![Output::new_v0(100000, &[0; 32], &mask)],
+        outputs: vec![Output::new_v0(100000, &mask, &[0; 32])],
     };
     let mut genesis_block = Block::new(0, [0u8; 32]);
     genesis_block.transactions.push(coinbase_tx);

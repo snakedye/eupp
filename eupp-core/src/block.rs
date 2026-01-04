@@ -51,6 +51,10 @@ impl BlockHeader {
 
         hasher.finalize().into()
     }
+    /// Verifies a transaction using its Merkle proof.
+    pub fn verify_transaction_with_proof(&self, proof: &[Leaf]) -> Option<()> {
+        verify_proof(&self.merkle_root, proof)
+    }
 }
 
 impl Block {
@@ -146,26 +150,97 @@ impl Block {
 
     /// Returns the merkle root of the transactions in the block.
     pub(crate) fn merkle_root(&self) -> TransactionHash {
-        merkle_root(&self.transactions)
+        merkle_root(&self.transactions, &mut Vec::new()).1
+    }
+
+    /// Returns the merkle proof for a given transaction hash.
+    pub fn merkle_proof(&self, tx_hash: &TransactionHash) -> Option<Vec<Leaf>> {
+        let mut proof = vec![Leaf::new(*tx_hash)];
+        merkle_root(&self.transactions, &mut proof);
+        if proof.len() > 1 { Some(proof) } else { None }
     }
 }
 
-// This is a non-standard implementation of the Merkle root algorithm.
-fn merkle_root(transactions: &[Transaction]) -> TransactionHash {
-    let hash;
-    match transactions.len() {
-        0 => hash = [0; 32],
-        1 => hash = transactions[0].hash(),
-        _ => {
-            let mut hasher = Blake2s256::new();
-            let (a, b) = transactions.split_at(transactions.len() / 2);
-            let (merkle_root_a, merkle_root_b) = (merkle_root(a), merkle_root(b));
-            hasher.update(&merkle_root_a);
-            hasher.update(&merkle_root_b);
-            hash = hasher.finalize().into();
+/// A leaf node in the Merkle tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Leaf {
+    dir: Option<Direction>,
+    hash: TransactionHash,
+}
+
+/// The direction of a node in the Merkle tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Direction {
+    Left,
+    Right,
+}
+
+impl Leaf {
+    fn new_with_dir(hash: TransactionHash, dir: Direction) -> Self {
+        Leaf {
+            hash,
+            dir: Some(dir),
         }
     }
-    hash
+    pub fn new(hash: TransactionHash) -> Self {
+        Leaf { hash, dir: None }
+    }
+}
+
+/// Computes the Merkle root of a list of transactions and generates a Merkle proof for a specific transaction.
+fn merkle_root(transactions: &[Transaction], proof: &mut Vec<Leaf>) -> (bool, TransactionHash) {
+    match transactions.len() {
+        0 => (false, [0; 32]),
+        1 => {
+            let hash = transactions[0].hash();
+            (
+                proof
+                    .first()
+                    .map(|leaf| hash.eq(&leaf.hash))
+                    .unwrap_or_default(),
+                hash,
+            )
+        }
+        _ => {
+            let mut hasher = Blake2s256::new();
+            let (a, b) = transactions.split_at(transactions.len().div_euclid(2));
+            let ((found_a, merkle_root_a), (found_b, merkle_root_b)) =
+                (merkle_root(a, proof), merkle_root(b, proof));
+            hasher.update(&merkle_root_a);
+            hasher.update(&merkle_root_b);
+            if found_a {
+                proof.push(Leaf::new_with_dir(merkle_root_b, Direction::Right));
+            } else if found_b {
+                proof.push(Leaf::new_with_dir(merkle_root_a, Direction::Left));
+            }
+            let hash = hasher.finalize().into();
+            (found_a || found_b, hash)
+        }
+    }
+}
+
+/// Verify a proof of inclusion for a given root hash and proof.
+fn verify_proof(root: &Hash, proof: &[Leaf]) -> Option<()> {
+    let calculated_root = proof
+        .iter()
+        .copied()
+        .reduce(|leaf_a, leaf_b| {
+            let mut hasher = Blake2s256::new();
+            match leaf_b.dir {
+                Some(Direction::Right) => {
+                    hasher.update(leaf_a.hash);
+                    hasher.update(leaf_b.hash);
+                }
+                Some(Direction::Left) => {
+                    hasher.update(leaf_b.hash);
+                    hasher.update(leaf_a.hash);
+                }
+                None => {}
+            }
+            Leaf::new(hasher.finalize().into())
+        })
+        .map(|leaf| leaf.hash)?;
+    (calculated_root.eq(root)).then_some(())
 }
 
 #[cfg(test)]
@@ -182,11 +257,7 @@ mod tests {
         let mut block = Block::new(0, prev_block_hash);
         block.transactions.push(Transaction::new(
             vec![],
-            vec![Output::new_v0(
-                calculate_reward(&mask),
-                &[0; 32],
-                &mask, // this is the mask challenge
-            )],
+            vec![Output::new_v0(calculate_reward(&mask), &mask, &[0; 32])],
         ));
         block
     }
@@ -214,6 +285,31 @@ mod tests {
         let mining_transaction = mining_transaction(new_supply, prev_tx_hash, public_key);
         ledger.add_block(genesis_block.clone()).unwrap();
         (ledger, mining_transaction)
+    }
+
+    #[test]
+    fn test_merkle_proof() {
+        use crate::transaction::Transaction;
+
+        // Create 5 dummy transactions
+        let transactions: Vec<Transaction> = (0..10)
+            .map(|i| Transaction::new(vec![], vec![Output::new_v1(i, &[0; 32], &[0; 32])]))
+            .collect();
+
+        // Hash one of the transactions (e.g., the third one)
+        let tx_hash_n = transactions[2].hash();
+        println!("tx_hash_n: {}", hex::encode(tx_hash_n));
+
+        // Prepare the proof vector
+        let mut proof = vec![Leaf::new(tx_hash_n)];
+
+        // Call the merkle_proof function
+        let (found, merkle_root) = merkle_root(&transactions, &mut proof);
+
+        assert!(found, "Transaction not found in the merkle tree");
+
+        // Verify the proof
+        verify_proof(&merkle_root, &proof).unwrap();
     }
 
     #[test]
