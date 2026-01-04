@@ -717,6 +717,7 @@ dependencies = [
  "bincode",
  "eupp-core",
  "futures",
+ "hex",
  "libp2p",
  "log",
  "serde",

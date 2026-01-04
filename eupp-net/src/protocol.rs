@@ -6,4 +6,8 @@ use serde::{Deserialize, Serialize};
 pub enum NetworkMessage {
     Transaction(Transaction),
     Block(Block),
+    GetMaxSupply,
+    MaxSupply(u32),
+    GetBlocks(u32), // from height
+    SyncComplete,
 }

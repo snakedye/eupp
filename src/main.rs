@@ -7,7 +7,7 @@ use eupp_net::{EuppNode, mempool::SimpleMempool};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("AUPP node starting...");
+    eprintln!("EUPP node starting...");
 
     // Create an in-memory ledger
     let mut ledger = InMemoryLedger::new();
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mask = [0_u8; 32];
     mask[0] = 0xFF;
     mask[1] = 0xFF;
-    // mask[2] = 0xF0; // 20 bits of zeros
+    mask[2] = 0xF0; // 20 bits of zeros
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let genesis_block_hash = genesis_block.header().hash();
 
     // Add genesis block to ledger
-    if let Err(e) = ledger.add_block(genesis_block) {
+    if let Err(e) = ledger.add_block(genesis_block.clone()) {
         eprintln!("Failed to add genesis block: {:?}", e);
         return Ok(());
     }
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mempool = SimpleMempool::new();
 
     // Create and run the EuppNode
-    let node = EuppNode::new(ledger, mempool);
+    let node = EuppNode::new(ledger, mempool, genesis_block);
     println!("Launching network node...");
     node.run().await?;
 
