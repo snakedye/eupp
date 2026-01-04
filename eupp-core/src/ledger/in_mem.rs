@@ -81,7 +81,7 @@ impl Ledger for InMemoryLedger {
             .unwrap_or_default();
 
         // Get the previous block metadata
-        if self.block_index.len() > 1 {
+        if !self.block_index.is_empty() {
             let prev_meta = self.block_index.get(&block.prev_block_hash).ok_or(
                 BlockError::InvalidBlockHash(format!(
                     "Previous block hash not found: {}",

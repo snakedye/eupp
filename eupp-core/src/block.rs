@@ -98,7 +98,12 @@ impl Block {
                 .and_then(|tx| tx.inputs.first())
                 .unwrap();
             let this_lead_utxo = &self.transactions[0].outputs[0];
-            let prev_lead_utxo = ledger.get_utxo(&input.output_id).unwrap();
+            let prev_lead_utxo =
+                ledger
+                    .get_utxo(&input.output_id)
+                    .ok_or(BlockError::TransactionError(
+                        crate::transaction::TransactionError::InvalidOutput(input.output_id),
+                    ))?;
 
             let mask = &prev_lead_utxo.data;
             let nonce = &this_lead_utxo.commitment;
