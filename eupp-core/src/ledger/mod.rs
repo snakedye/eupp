@@ -1,6 +1,6 @@
 mod in_mem;
 
-pub use in_mem::InMemoryLedger;
+pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
 
 use super::{
     Hash,
@@ -30,10 +30,11 @@ pub struct BlockMetadata {
     pub lead_utxo: OutputId,
 }
 
-/// A blockchain ledger.
-pub trait Ledger {
-    /// Adds a new block to the ledger.
-    fn add_block(&mut self, block: Block) -> Result<(), BlockError>;
+/// An Indexer provides optimized views of the blockchain state.
+/// This includes the UTXO set and block metadata needed for validation.
+pub trait Indexer {
+    /// Applies a block to the indexer's state (UTXOs, Metadata, etc.).
+    fn add_block(&mut self, block: &Block) -> Result<(), BlockError>;
 
     /// Retrieves metadata for a block identified by its hash.
     fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata>;
@@ -44,6 +45,16 @@ pub trait Ledger {
     /// Fetches the block hash of a UTXO by its identifier.
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
 
-    /// Retrieves metadata for the most recently added block in the ledger.
+    /// Retrieves metadata for the most recently added block.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
+}
+
+/// A Ledger represents the authoritative archival store of blocks.
+/// It extends Indexer to provide access to full block data.
+pub trait Ledger: Indexer {
+    /// Retrieves a full block by its hash.
+    fn get_block(&self, hash: &Hash) -> Option<Block>;
+
+    /// Returns an iterator over blocks.
+    fn get_blocks(&self) -> impl Iterator<Item = Block>;
 }

@@ -10,7 +10,7 @@ use crate::{
 
 use super::{
     Hash, calculate_reward,
-    ledger::Ledger,
+    ledger::Indexer,
     matches_mask,
     transaction::{TransactionHash, sighash},
 };
@@ -100,14 +100,14 @@ pub fn build_mining_tx(
 }
 
 /// Build the next block by mining a valid mining transaction and assembling the block.
-pub fn build_next_block<L: Ledger>(
-    ledger: &L,
+pub fn build_next_block<L: Indexer>(
+    indexer: &L,
     max_attempts: usize,
 ) -> Option<(SigningKey, crate::block::Block)> {
-    let prev_block = ledger.get_last_block_metadata()?;
+    let prev_block = indexer.get_last_block_metadata()?;
     let prev_block_hash = prev_block.hash;
     let lead_utxo_id = prev_block.lead_utxo;
-    let lead_utxo = ledger.get_utxo(&lead_utxo_id)?;
+    let lead_utxo = indexer.get_utxo(&lead_utxo_id)?;
 
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let (signing_key, mining_tx) = build_mining_tx(
@@ -118,7 +118,7 @@ pub fn build_next_block<L: Ledger>(
     )?;
 
     // Create a new block.
-    let mut block = crate::block::Block::new(0, ledger.get_last_block_metadata()?.hash);
+    let mut block = crate::block::Block::new(0, indexer.get_last_block_metadata()?.hash);
 
     // Include the mining transaction as the first transaction in the block
     block.transactions.push(mining_tx);

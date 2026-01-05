@@ -2,7 +2,7 @@ use crate::miner::mining_solution;
 
 use super::{
     Hash, VirtualSize, calculate_reward,
-    ledger::Ledger,
+    ledger::Indexer,
     matches_mask,
     transaction::{Output, Transaction, TransactionHash},
 };
@@ -76,20 +76,19 @@ impl Block {
         }
     }
 
-    pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), BlockError> {
+    pub fn verify<L: Indexer>(&self, indexer: &L) -> Result<(), BlockError> {
         // We only check if there's a previous block
         // Otherwise this block is the genesis block and we don't need to verify it
-        if ledger.get_last_block_metadata().is_some() {
+        if indexer.get_last_block_metadata().is_some() {
             let prev_block_hash = self.prev_block_hash;
 
             // Verify the previous block hash
-            let _ =
-                ledger
-                    .get_block_metadata(&prev_block_hash)
-                    .ok_or(BlockError::InvalidBlockHash(format!(
-                        "Previous block hash not found: {}",
-                        hex::encode(&self.prev_block_hash)
-                    )))?;
+            let _ = indexer.get_block_metadata(&prev_block_hash).ok_or(
+                BlockError::InvalidBlockHash(format!(
+                    "Previous block hash not found: {}",
+                    hex::encode(&self.prev_block_hash)
+                )),
+            )?;
 
             // Verify the challenge
             let input = self
@@ -99,7 +98,7 @@ impl Block {
                 .unwrap();
             let this_lead_utxo = &self.transactions[0].outputs[0];
             let prev_lead_utxo =
-                ledger
+                indexer
                     .get_utxo(&input.output_id)
                     .ok_or(BlockError::TransactionError(
                         crate::transaction::TransactionError::InvalidOutput(input.output_id),
@@ -146,7 +145,7 @@ impl Block {
 
         self.transactions
             .iter()
-            .try_for_each(|tx| tx.verify(ledger).map_err(BlockError::TransactionError))
+            .try_for_each(|tx| tx.verify(indexer).map_err(BlockError::TransactionError))
     }
 
     /// Returns the lead (mint) UTXO if present.
@@ -254,7 +253,7 @@ mod tests {
     use super::*;
     use crate::{
         PublicKey,
-        ledger::InMemoryLedger,
+        ledger::InMemoryIndexer,
         transaction::{Input, OutputId},
     };
 
@@ -283,14 +282,14 @@ mod tests {
         transaction
     }
 
-    fn new_ledger(public_key: PublicKey) -> (InMemoryLedger, Transaction) {
-        let mut ledger = InMemoryLedger::new();
+    fn new_indexer(public_key: PublicKey) -> (InMemoryIndexer, Transaction) {
+        let mut indexer = InMemoryIndexer::new();
         let genesis_block = genesis_block([0; 32]);
         let new_supply = genesis_block.transactions[0].outputs[0].amount;
         let prev_tx_hash = genesis_block.transactions[0].hash();
         let mining_transaction = mining_transaction(new_supply, prev_tx_hash, public_key);
-        ledger.add_block(genesis_block.clone()).unwrap();
-        (ledger, mining_transaction)
+        indexer.add_block(&genesis_block).unwrap();
+        (indexer, mining_transaction)
     }
 
     #[test]
@@ -320,12 +319,12 @@ mod tests {
 
     #[test]
     fn test_block_with_invalid_prev_block_hash() {
-        let (ledger, mining_transaction) = new_ledger([0; 32]);
+        let (indexer, mining_transaction) = new_indexer([0; 32]);
 
         let mut block = Block::new(1, [1; 32]); // Invalid prev_block_hash
         block.transactions.push(mining_transaction);
 
-        let result = block.verify(&ledger);
+        let result = block.verify(&indexer);
         match result {
             Err(BlockError::InvalidBlockHash(_)) => (),
             e => panic!("Expected BlockError::InvalidBlockHash, got {:?}", e),
@@ -334,32 +333,32 @@ mod tests {
 
     #[test]
     fn test_block_with_invalid_challenge() {
-        let mut ledger = InMemoryLedger::new();
+        let mut indexer = InMemoryIndexer::new();
         let genesis_block = genesis_block([1; 32]);
         let genesis_block_hash = genesis_block.header().hash();
         let first_tx_hash = genesis_block.transactions[0].hash();
-        ledger.add_block(genesis_block.clone()).unwrap();
+        indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block_hash);
         let transaction = mining_transaction(1, first_tx_hash, [0; 32]);
         block.transactions.push(transaction); // Invalid challenge
 
-        let result = block.verify(&ledger);
+        let result = block.verify(&indexer);
         assert_eq!(result, Err(BlockError::ChallengeError));
     }
 
     #[test]
     fn test_block_with_valid_challenge() {
-        let mut ledger = InMemoryLedger::new();
+        let mut indexer = InMemoryIndexer::new();
         let genesis_block = genesis_block([0; 32]);
         let first_tx_hash = genesis_block.transactions[0].hash();
-        ledger.add_block(genesis_block.clone()).unwrap();
+        indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block.header().hash());
         let transaction = mining_transaction(1, first_tx_hash, [1; 32]);
         block.transactions.push(transaction);
 
-        let result = block.verify(&ledger);
+        let result = block.verify(&indexer);
         match result {
             Ok(()) | Err(BlockError::TransactionError(_)) => (),
             e => panic!("Expected Ok or BlockError::TransactionError, got {:?}", e),
@@ -368,16 +367,16 @@ mod tests {
 
     #[test]
     fn test_block_with_reward_above_max_reward() {
-        let mut ledger = InMemoryLedger::new();
+        let mut indexer = InMemoryIndexer::new();
         let genesis_block = genesis_block([0; 32]);
         let first_tx_hash = genesis_block.transactions[0].hash();
-        ledger.add_block(genesis_block.clone()).unwrap();
+        indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block.header().hash());
         let transaction = mining_transaction(2, first_tx_hash, [1; 32]);
         block.transactions.push(transaction);
 
-        let result = block.verify(&ledger);
+        let result = block.verify(&indexer);
         match result {
             Err(BlockError::SupplyError { .. }) => (),
             e => panic!("Expected BlockError::RewardError, got {:?}", e),
@@ -386,17 +385,17 @@ mod tests {
 
     #[test]
     fn test_block_with_invalid_lead_utxo_version() {
-        let mut ledger = InMemoryLedger::new();
+        let mut indexer = InMemoryIndexer::new();
         let genesis_block = genesis_block([0; 32]);
         let first_tx_hash = genesis_block.transactions[0].hash();
-        ledger.add_block(genesis_block.clone()).unwrap();
+        indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block.header().hash());
         let mut transaction = mining_transaction(1, first_tx_hash, [1; 32]);
         transaction.outputs[0].version = crate::transaction::Version::V1; // Invalid version
         block.transactions.push(transaction);
 
-        let result = block.verify(&ledger);
+        let result = block.verify(&indexer);
         match result {
             Err(BlockError::InvalidVersion(_)) => (),
             e => panic!("Expected BlockError::InvalidVersion, got {:?}", e),

@@ -6,7 +6,7 @@ pub mod op;
 mod scanner;
 mod stack;
 
-use crate::ledger::Ledger;
+use crate::ledger::Indexer;
 use blake2::Digest;
 use ed25519_dalek::Verifier;
 use op::Op;
@@ -91,11 +91,11 @@ impl ExecError {
     }
 }
 
-/// VM runtime holding a reference to a Ledger.
+/// VM runtime holding a reference to a indexer.
 pub struct Vm<'a, L> {
     input_index: usize,
     transaction: &'a Transaction,
-    ledger: &'a L,
+    indexer: &'a L,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,11 +210,11 @@ impl Default for OwnedStackValue {
 
 type VmStack<'a, 'b> = Stack<'a, StackValue<'b>>;
 
-impl<'a, L: Ledger> Vm<'a, L> {
-    /// Create a VM that references the provided ledger.
-    pub fn new(ledger: &'a L, input_index: usize, transaction: &'a Transaction) -> Self {
+impl<'a, L: Indexer> Vm<'a, L> {
+    /// Create a VM that references the provided indexer.
+    pub fn new(indexer: &'a L, input_index: usize, transaction: &'a Transaction) -> Self {
         Vm {
-            ledger,
+            indexer,
             input_index,
             transaction,
         }
@@ -321,24 +321,24 @@ impl<'a, L: Ledger> Vm<'a, L> {
                     None => Err(ExecError::new(op, &stack)),
                 },
 
-                // Ledger / transaction related (placeholders or small integrations)
+                // indexer / transaction related (placeholders or small integrations)
                 Op::SelfAmt => {
                     let utxo = self
-                        .ledger
+                        .indexer
                         .get_utxo(&self.get_input().output_id)
                         .ok_or(ExecError::new(op, &stack))?;
                     return self.exec(scanner, stack.push(utxo.amount.into()));
                 }
                 Op::SelfData => {
                     let utxo = self
-                        .ledger
+                        .indexer
                         .get_utxo(&self.get_input().output_id)
                         .ok_or(ExecError::new(op, &stack))?;
                     return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.data)));
                 }
                 Op::SelfComm => {
                     let utxo = self
-                        .ledger
+                        .indexer
                         .get_utxo(&self.get_input().output_id)
                         .ok_or(ExecError::new(op, &stack))?;
                     return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.commitment)));
@@ -360,23 +360,23 @@ impl<'a, L: Ledger> Vm<'a, L> {
                 // Chain state
                 Op::Supply => {
                     let supply = self
-                        .ledger
+                        .indexer
                         .get_last_block_metadata()
                         .map_or(0, |meta| meta.available_supply);
                     return self.exec(scanner, stack.push(supply.into()));
                 }
                 Op::Height => {
                     let height = self
-                        .ledger
+                        .indexer
                         .get_last_block_metadata()
                         .map_or(0, |meta| meta.height);
                     return self.exec(scanner, stack.push(height.into()));
                 }
                 Op::SelfHeight => {
                     let height = self
-                        .ledger
+                        .indexer
                         .get_utxo_block_hash(&self.get_input().output_id)
-                        .and_then(|hash| self.ledger.get_block_metadata(&hash))
+                        .and_then(|hash| self.indexer.get_block_metadata(&hash))
                         .map_or(0, |meta| meta.height);
                     return self.exec(scanner, stack.push(height.into()));
                 }
@@ -631,15 +631,15 @@ mod tests {
     use op::r#const::*;
     use std::collections::HashMap;
 
-    // A mock ledger for testing purposes.
+    // A mock indexer for testing purposes.
     #[derive(Default, Clone)]
     struct MockLedger {
         utxos: HashMap<OutputId, Output>,
         block_meta: Option<BlockMetadata>,
     }
 
-    impl Ledger for MockLedger {
-        fn add_block(&mut self, _block: Block) -> Result<(), BlockError> {
+    impl Indexer for MockLedger {
+        fn add_block(&mut self, _block: &Block) -> Result<(), BlockError> {
             unimplemented!()
         }
 
@@ -668,54 +668,54 @@ mod tests {
     }
 
     fn create_vm<'a>(
-        ledger: &'a MockLedger,
+        indexer: &'a MockLedger,
         input: usize,
         transaction: &'a Transaction,
     ) -> Vm<'a, MockLedger> {
-        Vm::new(ledger, input, transaction)
+        Vm::new(indexer, input, transaction)
     }
 
     #[test]
     fn test_op_false() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_FALSE];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(0)));
     }
 
     #[test]
     fn test_op_true() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_TRUE];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
     }
 
     #[test]
     fn test_op_dup() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 123, OP_DUP, OP_ADD];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(246)));
     }
 
     #[test]
     fn test_op_drop() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 200, OP_DROP];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(123)));
     }
 
     #[test]
     fn test_op_swap() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_SWAP, OP_SUB];
         assert_eq!(
             vm.run(&code),
@@ -725,9 +725,9 @@ mod tests {
 
     #[test]
     fn test_op_push_u32() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let val = 12345u32.to_le_bytes();
         let code = [OP_PUSH_U32, val[0], val[1], val[2], val[3]];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(12345)));
@@ -735,9 +735,9 @@ mod tests {
 
     #[test]
     fn test_op_push_byte() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let val = 100u8;
         let code = [OP_PUSH_BYTE, val];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(val)));
@@ -753,11 +753,11 @@ mod tests {
             commitment: [0; 32],
             data: [0; 32],
         };
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, utxo);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, utxo);
 
         let transaction = Transaction::new(vec![input], vec![]);
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_SELF_AMT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100)));
     }
@@ -775,11 +775,11 @@ mod tests {
             data,
         };
         let input = Input::new(output_id, [0; 32], [0; 64]);
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, utxo);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, utxo);
 
         let transaction = Transaction::new(vec![input], vec![]);
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_SELF_DATA, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
     }
@@ -797,12 +797,12 @@ mod tests {
             data: [0; 32],
         };
         let input = Input::new(output_id, [0; 32], [0; 64]);
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, output);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, output);
 
         let new_outputs = vec![output];
         let transaction = Transaction::new(vec![input], new_outputs);
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_SELF_COMM, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
 
@@ -820,12 +820,12 @@ mod tests {
             commitment: [0; 32],
             data: [0; 32],
         };
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, output);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, output);
         let mut transaction = default_transaction();
         transaction.outputs.push(output);
 
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [u8::from(Op::OutAmt(0)), 0];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(200)));
     }
@@ -842,12 +842,12 @@ mod tests {
             commitment: [0; 32],
             data,
         };
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, output);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, output);
         let mut transaction = default_transaction();
         transaction.outputs.push(output);
 
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [u8::from(Op::OutData(0)), 0, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
@@ -865,12 +865,12 @@ mod tests {
             commitment,
             data: [0; 32],
         };
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, output);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, output);
         let mut transaction = default_transaction();
         transaction.outputs.push(output);
 
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [u8::from(Op::OutComm(0)), 0, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
@@ -878,8 +878,8 @@ mod tests {
 
     #[test]
     fn test_op_supply_height() {
-        let mut ledger = MockLedger::default();
-        ledger.block_meta = Some(BlockMetadata {
+        let mut indexer = MockLedger::default();
+        indexer.block_meta = Some(BlockMetadata {
             hash: [0; 32],
             prev_block_hash: [0; 32],
             height: 50,
@@ -888,7 +888,7 @@ mod tests {
             lead_utxo: OutputId::new([0; 32], 0),
         });
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_PUSH_SUPPLY];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100_000)));
@@ -900,9 +900,9 @@ mod tests {
 
     #[test]
     fn test_op_supply_height_none() {
-        let ledger = MockLedger::default(); // No block_meta
+        let indexer = MockLedger::default(); // No block_meta
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_PUSH_SUPPLY];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
@@ -921,8 +921,8 @@ mod tests {
             inputs: vec![input],
             outputs: vec![],
         };
-        let ledger = MockLedger::default();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let indexer = MockLedger::default();
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_PUSH_PK, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
@@ -937,8 +937,8 @@ mod tests {
             inputs: vec![input],
             outputs: vec![],
         };
-        let ledger = MockLedger::default();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let indexer = MockLedger::default();
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_PUSH_SIG, OP_DUP, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
@@ -960,8 +960,8 @@ mod tests {
             outputs: vec![],
         };
 
-        let ledger = MockLedger::default();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let indexer = MockLedger::default();
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = check_sig_script();
         assert_eq!(vm.run(&code[..4]), Ok(OwnedStackValue::U8(1)));
     }
@@ -983,8 +983,8 @@ mod tests {
             outputs: vec![],
         };
 
-        let ledger = MockLedger::default();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let indexer = MockLedger::default();
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = check_sig_script();
         assert_eq!(vm.run(&code[0..4]), Ok(OwnedStackValue::U8(0)));
     }
@@ -1006,9 +1006,9 @@ mod tests {
             inputs: vec![input],
             outputs: vec![],
         };
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(output_id, output);
-        let vm = create_vm(&ledger, 0, &transaction);
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(output_id, output);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_SELF_DATA, OP_HASH_B2, OP_SELF_COMM, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
@@ -1016,9 +1016,9 @@ mod tests {
 
     #[test]
     fn test_op_equal() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 123, OP_PUSH_BYTE, 123, OP_EQUAL];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
 
@@ -1031,9 +1031,9 @@ mod tests {
 
     #[test]
     fn test_op_greater() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         // b > a -> 456 > 123
         let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_GREATER];
@@ -1050,9 +1050,9 @@ mod tests {
 
     #[test]
     fn test_op_add() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let val1 = 10u32.to_le_bytes();
         let val2 = 20u32.to_le_bytes();
         let code = [
@@ -1073,36 +1073,36 @@ mod tests {
 
     #[test]
     fn test_op_sub() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 30, OP_PUSH_BYTE, 10, OP_SUB];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(20)));
     }
 
     #[test]
     fn test_op_verify_ok() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 1, OP_VERIFY, OP_TRUE];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(1)));
     }
 
     #[test]
     fn test_op_verify_fail() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 0, OP_VERIFY, OP_TRUE];
         assert_eq!(vm.run(&code).unwrap_err().op, OP_VERIFY);
     }
 
     #[test]
     fn test_op_return() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 200, OP_RETURN, OP_TRUE];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U8(200)));
     }
@@ -1110,11 +1110,11 @@ mod tests {
     #[test]
 
     fn test_op_if() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
 
         let transaction = default_transaction();
 
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         // Condition is 1, so OP_TRUE is executed
         let val = 1u8;
@@ -1144,8 +1144,8 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let mut ledger = MockLedger::default();
-        ledger.utxos.insert(
+        let mut indexer = MockLedger::default();
+        indexer.utxos.insert(
             output_id,
             Output::new_v1(100, &verifying_key.to_bytes(), &[0; 32]),
         );
@@ -1157,7 +1157,7 @@ mod tests {
             outputs: vec![],
         };
 
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let script = p2pkh();
 
         assert_eq!(vm.run(script), Ok(OwnedStackValue::U32(0)));
@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn test_p2pk_script_invalid() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let signing_key = SigningKey::from_bytes(&[1u8; 32]);
         let verifying_key = signing_key.verifying_key();
         let other_signing_key = SigningKey::from_bytes(&[2u8; 32]);
@@ -1182,7 +1182,7 @@ mod tests {
             outputs: vec![],
         };
 
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
         let script = p2pkh();
 
         assert_eq!(vm.run(&script).unwrap_err().op, OP_VERIFY);
@@ -1190,9 +1190,9 @@ mod tests {
 
     #[test]
     fn test_op_cat() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [
             OP_PUSH_BYTE,
@@ -1205,9 +1205,9 @@ mod tests {
     }
     #[test]
     fn test_op_cat_dos_attack() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         // Create a script that continuously pushes onto the stack and concatenates
         let mut code = vec![];
@@ -1223,11 +1223,11 @@ mod tests {
 
     #[test]
     fn test_op_push_witness() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let mut transaction = default_transaction();
         let witness_data = [0x01, 0x02, 0x03, 0x04];
         transaction.inputs[0].witness = witness_data.to_vec();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let result = vm.run(&[OP_PUSH_WITNESS]);
         assert_eq!(result, Ok(OwnedStackValue::Bytes(witness_data.to_vec())));
@@ -1235,20 +1235,20 @@ mod tests {
 
     #[test]
     fn test_op_split() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let mut transaction = default_transaction();
         let witness_data = [0x01, 0x02, 0x03, 0x04];
         transaction.inputs[0].witness = witness_data.to_vec();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let result = vm.run(&[OP_PUSH_WITNESS, OP_SPLIT, 2]);
         assert_eq!(result, Ok(OwnedStackValue::Bytes(vec![0x03, 0x04])));
     }
     #[test]
     fn test_op_read_u32() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let data = 12345678u32.to_le_bytes();
         let code = [
@@ -1271,9 +1271,9 @@ mod tests {
 
     #[test]
     fn test_op_read_byte() {
-        let ledger = MockLedger::default();
+        let indexer = MockLedger::default();
         let transaction = default_transaction();
-        let vm = create_vm(&ledger, 0, &transaction);
+        let vm = create_vm(&indexer, 0, &transaction);
 
         let data = [0xAB];
         let code = [OP_PUSH_BYTE, data[0], OP_READ_BYTE];

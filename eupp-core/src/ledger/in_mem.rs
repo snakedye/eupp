@@ -12,10 +12,10 @@ pub(crate) struct UtxoEntry {
     pub output: Output,
 }
 
-use super::{BlockMetadata, Ledger};
+use super::{BlockMetadata, Indexer, Ledger};
 
-/// Represents an in-memory implementation of a blockchain ledger.
-pub struct InMemoryLedger {
+/// Represents an in-memory implementation of a blockchain `Indexer`.
+pub struct InMemoryIndexer {
     /// Block metadata index
     pub(crate) block_index: HashMap<Hash, BlockMetadata>,
 
@@ -23,14 +23,20 @@ pub struct InMemoryLedger {
     pub(crate) utxo_set: BTreeMap<OutputId, UtxoEntry>,
 
     /// Points to the block with the Maximum Accumulated Supply (MAS)
-    ///
-    /// This is the main blockchain.
     pub(crate) tip: Hash,
 }
 
-impl InMemoryLedger {
+/// Represents an in-memory implementation of a blockchain `Ledger`.
+pub struct FullInMemoryLedger {
+    indexer: InMemoryIndexer,
+    blocks: HashMap<Hash, Block>,
+    // Map height to hash for the get_blocks_from implementation
+    height_to_hash: BTreeMap<u32, Hash>,
+}
+
+impl InMemoryIndexer {
     pub fn new() -> Self {
-        InMemoryLedger {
+        InMemoryIndexer {
             block_index: HashMap::new(),
             utxo_set: BTreeMap::new(),
             tip: Hash::default(),
@@ -65,8 +71,8 @@ impl InMemoryLedger {
     }
 }
 
-impl Ledger for InMemoryLedger {
-    fn add_block(&mut self, block: Block) -> Result<(), BlockError> {
+impl Indexer for InMemoryIndexer {
+    fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
         // Initialize variables
         let height;
         let total_supply;
@@ -147,5 +153,56 @@ impl Ledger for InMemoryLedger {
 
     fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
         self.block_index.get(&self.tip).cloned()
+    }
+}
+
+impl FullInMemoryLedger {
+    pub fn new() -> Self {
+        FullInMemoryLedger {
+            indexer: InMemoryIndexer::new(),
+            blocks: HashMap::new(),
+            height_to_hash: BTreeMap::new(),
+        }
+    }
+}
+
+impl Indexer for FullInMemoryLedger {
+    fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
+        self.indexer.add_block(block)?;
+        let hash = block.header().hash();
+        self.blocks.insert(hash, block.clone());
+
+        if let Some(meta) = self.indexer.get_block_metadata(&hash) {
+            self.height_to_hash.insert(meta.height, hash);
+        }
+        Ok(())
+    }
+
+    fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata> {
+        self.indexer.get_block_metadata(hash)
+    }
+
+    fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
+        self.indexer.get_utxo(output_id)
+    }
+
+    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
+        self.indexer.get_utxo_block_hash(output_id)
+    }
+
+    fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
+        self.indexer.get_last_block_metadata()
+    }
+}
+
+impl Ledger for FullInMemoryLedger {
+    fn get_block(&self, hash: &Hash) -> Option<Block> {
+        self.blocks.get(hash).cloned()
+    }
+
+    fn get_blocks(&self) -> impl Iterator<Item = Block> {
+        self.height_to_hash
+            .values()
+            .filter_map(move |hash| self.get_block(hash))
     }
 }

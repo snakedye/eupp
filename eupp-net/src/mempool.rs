@@ -1,4 +1,4 @@
-use eupp_core::ledger::Ledger;
+use eupp_core::ledger::Indexer;
 use eupp_core::transaction::{Transaction, TransactionError, TransactionHash};
 use std::collections::HashMap;
 
@@ -9,7 +9,7 @@ pub enum MempoolError {
 }
 
 pub trait Mempool: Send + Sync {
-    fn add<L: Ledger>(&mut self, tx: Transaction, ledger: &L) -> Result<(), MempoolError>;
+    fn add<L: Indexer>(&mut self, tx: Transaction, indexer: &L) -> Result<(), MempoolError>;
     fn get_transactions(&self) -> Vec<Transaction>;
     fn remove_transactions(&mut self, tx_hashes: impl IntoIterator<Item = TransactionHash>);
 }
@@ -27,12 +27,12 @@ impl SimpleMempool {
 }
 
 impl Mempool for SimpleMempool {
-    fn add<L: Ledger>(&mut self, tx: Transaction, ledger: &L) -> Result<(), MempoolError> {
+    fn add<L: Indexer>(&mut self, tx: Transaction, indexer: &L) -> Result<(), MempoolError> {
         let hash = tx.hash();
         if self.pending.contains_key(&hash) {
             return Err(MempoolError::TransactionExists);
         }
-        tx.verify(ledger)
+        tx.verify(indexer)
             .map_err(MempoolError::VerificationFailed)?;
         self.pending.insert(hash, tx);
         Ok(())
