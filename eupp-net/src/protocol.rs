@@ -12,7 +12,12 @@ pub enum NetworkRequest {
     GetMaxSupply,
 
     /// Request blocks starting from the given height (inclusive).
-    GetBlocks(u32), // from height
+    /// Optionally target the request to a specific peer by providing their peer id as a string.
+    /// If `peer_id` is `None`, this is a broadcast request (existing behavior).
+    GetBlocks {
+        from: u32,               // starting height (inclusive)
+        peer_id: Option<String>, // optional target peer id as string
+    },
 }
 
 /// Responses sent on the network.
@@ -25,9 +30,21 @@ pub enum NetworkResponse {
     MaxSupply(u32),
 
     /// Reply with a single block and its height (preferred for streaming/ordered delivery).
-    /// Receivers should buffer out-of-order `Block` messages and attempt to apply any
-    /// contiguous sequence starting at the expected height when possible.
-    Block(u32, Block),
+    /// The optional `peer_id` is included when the block is being sent in response
+    /// to a targeted `GetBlocks { ..., peer_id }` request; receivers should ignore
+    /// `Block` messages not addressed to them (or when they are not currently
+    /// expecting that height). Receivers should buffer out-of-order `Block`
+    /// messages and attempt to apply any contiguous sequence starting at the
+    /// expected height when possible.
+    Block {
+        height: u32,
+        target_height: u32,
+        block: Block,
+    },
+
+    /// Published when a peer broadcasts a newly-mined block (no explicit height).
+    /// This is distinct from the streamed `Block(height, block)` used during sync.
+    BroadcastBlock(Block),
 }
 
 /// Top-level message wrapper that explicitly separates requests and responses.

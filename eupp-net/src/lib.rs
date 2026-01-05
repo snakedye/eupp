@@ -79,6 +79,8 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
 
         // Mining helper task that builds mining transactions and sends new blocks into the channel
         tokio::spawn(async move {
+            // Timeout before starting to mine.
+            tokio::time::sleep(Duration::from_secs(3)).await;
             loop {
                 if is_syncing(&expected_sync_clone) {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -141,6 +143,9 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     },
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                         let msg: NetworkMessage = bincode::deserialize(&message.data)?;
+                        // Capture the message source peer id (if present) as a string so we can
+                        // target requests/responses to specific peers without flooding everyone.
+                        let src: Option<String> = message.source.map(|p| p.to_string());
                         match msg {
                             NetworkMessage::Request(req) => match req {
                                 NetworkRequest::GetMaxSupply => {
@@ -154,22 +159,36 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                         }
                                     }
                                 },
-                                NetworkRequest::GetBlocks(from_height) => {
-                                    match self.ledger.read() {
-                                        Ok(lg) => {
-                                            // Stream blocks one-by-one, publishing each as a `Block(height, block)` response.
-                                            for (idx, block) in lg.get_blocks().skip(from_height as usize).enumerate() {
-                                                let height = from_height + idx as u32;
-                                                let msg = NetworkMessage::Response(NetworkResponse::Block(height, block));
-                                                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg)?) {
-                                                    eprintln!("Failed to publish block for sync: {:?}", e);
-                                                    break;
+                                NetworkRequest::GetBlocks { from, peer_id } => {
+                                    // Only respond to GetBlocks when this node is the intended target (or when no target was specified).
+                                    // This prevents many peers from responding to a single GetBlocks request.
+                                    let local_id = swarm.local_peer_id().to_string();
+                                    let should_respond = match &peer_id {
+                                        Some(target) => target == &local_id,
+                                        None => true,
+                                    };
+
+                                    if !should_respond {
+                                        // Not the intended recipient — ignore the request.
+                                    } else {
+                                        match self.ledger.read() {
+                                            Ok(lg) => {
+                                                let target_height = lg.get_last_block_metadata().map(|m| m.height).unwrap();
+                                                // Stream blocks one-by-one, publishing each as a `Block(height, block)` response.
+                                                for (idx, block) in lg.get_blocks().skip(from as usize).enumerate() {
+                                                    let height = from + idx as u32;
+                                                    // Include the original request's intended recipient so that only that peer applies them.
+                                                    let msg = NetworkMessage::Response(NetworkResponse::Block { height, target_height, block });
+                                                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg)?) {
+                                                        eprintln!("Failed to publish block for sync: {:?}", e);
+                                                        break;
+                                                    }
+                                                    // yield to avoid tight flooding loops
+                                                    tokio::task::yield_now().await;
                                                 }
-                                                // yield to avoid tight flooding loops
-                                                tokio::task::yield_now().await;
                                             }
+                                            Err(_) => eprintln!("Failed to acquire read lock on ledger."),
                                         }
-                                        Err(_) => eprintln!("Failed to acquire read lock on ledger."),
                                     }
                                 },
                                 NetworkRequest::Transaction(tx) => {
@@ -195,7 +214,12 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                                     pending.clear();
                                                 }
 
-                                                let request = NetworkMessage::Request(NetworkRequest::GetBlocks(metadata.height + 1));
+                                                // Target the GetBlocks request to the peer that sent the MaxSupply.
+                                                // `src` is the message.source captured above (Option<String>).
+                                                let request = NetworkMessage::Request(NetworkRequest::GetBlocks {
+                                                    from: metadata.height + 1,
+                                                    peer_id: src.clone(),
+                                                });
                                                 if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&request)?) {
                                                     eprintln!("Failed to publish GetBlocks: {:?}", e);
                                                 }
@@ -203,39 +227,50 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                         }
                                     }
                                 },
-                                NetworkResponse::Block(height, block) => {
+
+                                NetworkResponse::BroadcastBlock(block) => {
+                                    // A freshly-mined block broadcast by a peer.
+                                    // If we are not in the middle of an explicit sync session, try to apply it directly.
+                                    match self.ledger.write() {
+                                        Ok(mut lg) => {
+                                            match lg.add_block(&block) {
+                                                Ok(_) => {
+                                                    println!("Added a broadcast block from the network: {}", hex::encode(block.header().hash()));
+                                                    self.expected_sync_height.store(EXPECTED_NONE, Ordering::SeqCst);
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Failed to add broadcast block from the network: {:?}", e);
+                                                }
+                                            }
+                                        }
+                                        Err(_) => eprintln!("Failed to acquire write lock on ledger."),
+                                    }
+                                },
+                                NetworkResponse::Block { height, target_height, block } => {
+                                    // Simplified: Block responses are only used for syncing, so no need to check peer_id.
+
                                     // Buffer or apply streamed block depending on sync state
                                     match self.ledger.write() {
                                         Ok(mut lg) => {
-                                            let mut pending_guard = self.pending_blocks.lock().unwrap();
                                             let current = self.expected_sync_height.load(Ordering::SeqCst);
-                                            if current == EXPECTED_NONE {
-                                                // Not in an explicit syncing session: try to add directly
-                                                match lg.add_block(&block) {
-                                                    Ok(_) => println!("Added a new block from the network: {}", hex::encode(block.header().hash())),
-                                                    Err(e) => eprintln!("Failed to add block from the network: {:?}", e),
-                                                }
-                                            } else {
-                                                // Buffer the block and then attempt to apply any contiguous sequence
-                                                pending_guard.insert(height, block);
-                                                loop {
-                                                    let exp_h = self.expected_sync_height.load(Ordering::SeqCst);
-                                                    if exp_h == EXPECTED_NONE { break; }
-                                                    if let Some(next_block) = pending_guard.remove(&exp_h) {
-                                                        match lg.add_block(&next_block) {
-                                                            Ok(_) => {
-                                                                println!("Added a new block from the network: {}", hex::encode(next_block.header().hash()));
-                                                                self.expected_sync_height.store(exp_h + 1, Ordering::SeqCst);
-                                                            }
-                                                            Err(e) => {
-                                                                eprintln!("Failed to add block from the network: {:?}", e);
-                                                                // abort sync on validation error
-                                                                self.expected_sync_height.store(EXPECTED_NONE, Ordering::SeqCst);
-                                                                pending_guard.clear();
-                                                                break;
-                                                            }
+                                            // Buffer the block and attempt to apply contiguous sequence
+                                            let mut pending_guard = self.pending_blocks.lock().unwrap();
+                                            pending_guard.insert(height, block);
+                                            while let Some(next_block) = pending_guard.remove(&current) {
+                                                match lg.add_block(&next_block) {
+                                                    Ok(_) => {
+                                                        println!("Added a new block from the network: {}", hex::encode(next_block.header().hash()));
+                                                        if current == target_height {
+                                                            self.expected_sync_height.store(EXPECTED_NONE, Ordering::SeqCst);
+                                                            break;
+                                                        } else {
+                                                            self.expected_sync_height.fetch_add(1, Ordering::SeqCst);
                                                         }
-                                                    } else {
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("Failed to add block from the network: {:?}", e);
+                                                        self.expected_sync_height.store(EXPECTED_NONE, Ordering::SeqCst);
+                                                        pending_guard.clear();
                                                         break;
                                                     }
                                                 }
@@ -278,8 +313,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
 
                             // Publish the single newly-mined block as a streamed Block message.
                             // `get_last_block_metadata` returns Option<BlockMetadata>.
-                            let height = lg.get_last_block_metadata().map(|metadata| metadata.height).unwrap_or(0);
-                            let msg = NetworkMessage::Response(NetworkResponse::Block(height, block));
+                            let msg = NetworkMessage::Response(NetworkResponse::BroadcastBlock(block));
                             if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg)?) {
                                 eprintln!("Failed to publish block: {:?}", e);
                             }
