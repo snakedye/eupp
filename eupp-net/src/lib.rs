@@ -66,6 +66,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         let ledger = Arc::clone(&self.ledger);
         let is_synching = Arc::clone(&self.is_syncing);
 
+        // Debounce window in milliseconds to collect MaxSupply responses before choosing the best peer
+        const GET_MAX_SUPPLY_DEBOUNCE_MS: u64 = 300;
+        // Map peer_id string -> reported max supply
+        let mut max_supply_responses: HashMap<String, u32> = HashMap::new();
+        // Channel used by timer tasks to notify the main loop that the debounce window expired
+        let (debounce_tx, mut debounce_rx) = mpsc::channel::<()>(1);
+
         // Mining helper task that builds mining transactions and sends new blocks into the channel
         tokio::spawn(async move {
             // Timeout before starting to mine.
@@ -127,6 +134,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                             let msg = NetworkMessage::Request(NetworkRequest::GetMaxSupply);
                             if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg)?) {
                                 eprintln!("Failed to publish GetMaxSupply: {:?}", e);
+                            } else {
+                                // Clear previous responses and start debounce timer to collect replies
+                                max_supply_responses.clear();
+                                let debounce_tx_clone = debounce_tx.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(Duration::from_millis(GET_MAX_SUPPLY_DEBOUNCE_MS)).await;
+                                    let _ = debounce_tx_clone.send(()).await;
+                                });
                             }
                         }
                     },
@@ -163,7 +178,6 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                                 let target = lg.get_last_block_metadata().map(|m| m.hash);
                                                 // Stream blocks one-by-one, publishing each as a `Block(height, block)` response.
                                                 for block in lg.get_blocks().take_while(|block| from != block.header().hash()) {
-                                                    // println!("==> {}", hex::encode(block.header().hash()));
                                                     // Include the original request's intended recipient so that only that peer applies them.
                                                     let msg = NetworkMessage::Response(NetworkResponse::Block { target, block });
                                                     if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg)?) {
@@ -189,25 +203,11 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                             },
                             NetworkMessage::Response(resp) => match resp {
                                 NetworkResponse::MaxSupply(supply) => {
-                                    if let Ok(ledger) = self.ledger.read() {
-                                        if let Some(metadata) = ledger.get_last_block_metadata() {
-                                            if !self.is_syncing.load(Ordering::SeqCst)
-                                            && supply > metadata.available_supply {
-                                                println!("Discovered a peer with a longer chain");
-                                                self.is_syncing.store(true, Ordering::SeqCst);
-                                                self.pending_blocks.clear();
-
-                                                // Target the GetBlocks request to the peer that sent the MaxSupply.
-                                                // `src` is the message.source captured above (Option<String>).
-                                                let request = NetworkMessage::Request(NetworkRequest::GetBlocks {
-                                                    from: metadata.hash,
-                                                    peer_id: src.clone(),
-                                                });
-                                                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&request)?) {
-                                                    eprintln!("Failed to publish GetBlocks: {:?}", e);
-                                                }
-                                            }
-                                        }
+                                    // Buffer max supply responses for the debounce window. Use message source as peer id.
+                                    if let Some(peer_str) = src {
+                                        max_supply_responses.insert(peer_str, supply);
+                                    } else {
+                                        // If source isn't present, ignore — we need a specific peer to target GetBlocks.
                                     }
                                 },
 
@@ -238,6 +238,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                                         let msg = NetworkMessage::Request(NetworkRequest::GetMaxSupply);
                                                         if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg)?) {
                                                             eprintln!("Failed to publish GetMaxSupply: {:?}", e);
+                                                        } else {
+                                                            // Start debounce window to pick the best peer
+                                                            max_supply_responses.clear();
+                                                            let debounce_tx_clone = debounce_tx.clone();
+                                                            tokio::spawn(async move {
+                                                                tokio::time::sleep(Duration::from_millis(GET_MAX_SUPPLY_DEBOUNCE_MS)).await;
+                                                                let _ = debounce_tx_clone.send(()).await;
+                                                            });
                                                         }
                                                         break;
                                                     }
@@ -254,6 +262,46 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         }
                     },
                     _ => {}
+                },
+                // Debounce timer expired: pick the best peer from collected MaxSupply replies and start sync if needed
+                Some(_) = debounce_rx.recv() => {
+                    // Check if the node is currently syncing. If so, clear the max supply responses and skip further processing.
+                    if self.is_syncing.load(Ordering::SeqCst) {
+                        max_supply_responses.clear();
+                        continue;
+                    }
+
+                    // Retrieve the local ledger's supply and hash of the last block. If unavailable, clear responses and skip.
+                    let (local_supply, local_hash) = match self.ledger.read().ok().and_then(|lg| lg.get_last_block_metadata()) {
+                        Some(meta) => (meta.available_supply, meta.hash),
+                        None => {
+                            max_supply_responses.clear();
+                            continue;
+                        }
+                    };
+
+                    // Find the peer with the highest reported max supply from the collected responses.
+                    if let Some((best_peer, &best_supply)) = max_supply_responses.iter().max_by_key(|&(_, s)| s) {
+                        // If the best peer's supply is greater than the local supply, initiate a sync with that peer.
+                        if best_supply > local_supply {
+                            println!("Selected peer {} with greater supply {} (local {})", best_peer, best_supply, local_supply);
+                            self.is_syncing.store(true, Ordering::SeqCst);
+                            self.pending_blocks.clear();
+
+                            // Create a GetBlocks request starting from the local hash and targeting the selected peer.
+                            let request = NetworkMessage::Request(NetworkRequest::GetBlocks {
+                                from: local_hash,
+                                peer_id: Some(best_peer.clone()),
+                            });
+                            // Publish the GetBlocks request to the network. If it fails, reset the syncing state.
+                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&request)?) {
+                                eprintln!("Failed to publish GetBlocks: {:?}", e);
+                                self.is_syncing.store(false, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    // Clear the max supply responses after processing.
+                    max_supply_responses.clear();
                 },
                 Some(mut block) = block_receiver.recv() => {
                     let added_transactions;
