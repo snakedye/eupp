@@ -55,6 +55,11 @@ pub trait Ledger: Indexer {
     /// Retrieves a full block by its hash.
     fn get_block(&self, hash: &Hash) -> Option<Block>;
 
-    /// Returns an iterator over blocks.
+    /// Returns an iterator over blocks starting from the tip to oldest.
     fn get_blocks(&self) -> impl Iterator<Item = Block>;
+
+    /// Returns an iterator over blocks starting from a given hash.
+    ///
+    /// Like `get_blocks()`, but starts from the given hash.
+    fn get_blocks_from(&self, start_hash: &Hash) -> impl Iterator<Item = Block>;
 }

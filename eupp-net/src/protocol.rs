@@ -1,51 +1,33 @@
+use eupp_core::Hash;
+use eupp_core::block::Block;
 use eupp_core::transaction::Transaction;
-use eupp_core::{Hash, block::Block};
 use serde::{Deserialize, Serialize};
 
-/// Requests sent on the network.
+/// Messages broadcast over gossipsub for all peers to see.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum NetworkRequest {
+pub enum GossipMessage {
     /// Broadcast a transaction to peers.
     Transaction(Transaction),
-
-    /// Ask peers for their current maximum available supply (handshake / chain tip summary).
-    GetMaxSupply,
-
-    /// Request blocks starting from the given height (inclusive).
-    /// Optionally target the request to a specific peer by providing their peer id as a string.
-    /// If `peer_id` is `None`, this is a broadcast request (existing behavior).
-    GetBlocks {
-        from: Hash,              // starting block hash (non-inclusive)
-        peer_id: Option<String>, // optional target peer id as string
-    },
+    /// A new block has been mined.
+    NewBlock(Block),
 }
 
-/// Responses sent on the network.
-///
-/// Keeping responses separate makes it clearer which messages are replies
-/// and which are initiating requests.
+/// Requests sent directly to a peer for synchronization purposes.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum NetworkResponse {
-    /// Reply with the maximum available supply observed by the peer.
-    MaxSupply(u32),
+pub enum SyncRequest {
+    /// Ask a peer for their current chain tip (latest block hash and total supply).
+    GetChainTip,
 
-    /// Reply with a single block and its target (preferred for streaming/ordered delivery).
-    Block {
-        /// The hash of the last block in the sequence.
-        target: Option<Hash>,
-        /// The block sent
-        block: Block,
-    },
+    /// Request a chunk of blocks starting from a given hash.
+    GetBlocks { from: Hash, count: u32 },
 }
 
-/// Top-level message wrapper that explicitly separates requests and responses.
-///
-/// This preserves a single exported type while still providing strong
-/// separation between request and response kinds. Callers can match on
-/// `NetworkMessage::Request` / `NetworkMessage::Response` and then further
-/// match the inner enums.
+/// Responses sent directly back to a peer for a `SyncRequest`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum NetworkMessage {
-    Request(NetworkRequest),
-    Response(NetworkResponse),
+pub enum SyncResponse {
+    /// The peer's current chain tip.
+    ChainTip { hash: Hash, supply: u32 },
+
+    /// A chunk of blocks in response to `GetBlocks`.
+    Blocks(Vec<Block>),
 }

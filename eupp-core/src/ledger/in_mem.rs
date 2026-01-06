@@ -232,4 +232,8 @@ impl Ledger for FullInMemoryLedger {
     fn get_blocks(&self) -> impl Iterator<Item = Block> {
         BlockIter::new(self.indexer.tip, &self.blocks).cloned()
     }
+
+    fn get_blocks_from(&self, start_hash: &Hash) -> impl Iterator<Item = Block> {
+        BlockIter::new(*start_hash, &self.blocks).cloned()
+    }
 }
