@@ -8,6 +8,7 @@ use crate::{
 
 #[derive(Clone)]
 pub(crate) struct UtxoEntry {
+    spent: bool,
     pub block_hash: Hash,
     pub output: Output,
 }
@@ -30,8 +31,30 @@ pub struct InMemoryIndexer {
 pub struct FullInMemoryLedger {
     indexer: InMemoryIndexer,
     blocks: HashMap<Hash, Block>,
-    // Map height to hash for the get_blocks_from implementation
-    height_to_hash: BTreeMap<u32, Hash>,
+}
+
+pub struct BlockIter<'a> {
+    current_hash: Hash,
+    blocks: &'a HashMap<Hash, Block>,
+}
+
+impl<'a> BlockIter<'a> {
+    pub fn new(tip: Hash, blocks: &'a HashMap<Hash, Block>) -> Self {
+        BlockIter {
+            current_hash: tip,
+            blocks,
+        }
+    }
+}
+
+impl<'a> Iterator for BlockIter<'a> {
+    type Item = &'a Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.blocks
+            .get(&self.current_hash)
+            .inspect(|block| self.current_hash = block.prev_block_hash)
+    }
 }
 
 impl InMemoryIndexer {
@@ -46,10 +69,17 @@ impl InMemoryIndexer {
     fn apply_block_to_utxo_set(&mut self, block: &Block) -> Result<(), BlockError> {
         let block_hash = block.header().hash();
         for tx in &block.transactions {
-            // Remove spent UTXOs
             for input in &tx.inputs {
                 let output_id = input.output_id;
-                if self.utxo_set.remove(&output_id).is_none() {
+                if let Some(entry) = self.utxo_set.get_mut(&output_id) {
+                    // Double spending occurs when the same output is spent multiple times in the same branch
+                    if entry.spent && entry.block_hash != block.prev_block_hash {
+                        return Err(BlockError::TransactionError(TransactionError::DoubleSpend(
+                            output_id,
+                        )));
+                    }
+                    entry.spent = true;
+                } else {
                     return Err(BlockError::TransactionError(
                         TransactionError::InvalidOutput(output_id),
                     ));
@@ -61,6 +91,7 @@ impl InMemoryIndexer {
                 self.utxo_set.insert(
                     OutputId::new(tx_id, i as u8),
                     UtxoEntry {
+                        spent: false,
                         block_hash,
                         output: output.clone(),
                     },
@@ -161,7 +192,6 @@ impl FullInMemoryLedger {
         FullInMemoryLedger {
             indexer: InMemoryIndexer::new(),
             blocks: HashMap::new(),
-            height_to_hash: BTreeMap::new(),
         }
     }
 }
@@ -171,10 +201,6 @@ impl Indexer for FullInMemoryLedger {
         self.indexer.add_block(block)?;
         let hash = block.header().hash();
         self.blocks.insert(hash, block.clone());
-
-        if let Some(meta) = self.indexer.get_block_metadata(&hash) {
-            self.height_to_hash.insert(meta.height, hash);
-        }
         Ok(())
     }
 
@@ -200,9 +226,10 @@ impl Ledger for FullInMemoryLedger {
         self.blocks.get(hash).cloned()
     }
 
+    /// Get all blocks in the ledger.
+    ///
+    /// The blocks are returned from the tip of the chain to the genesis block.
     fn get_blocks(&self) -> impl Iterator<Item = Block> {
-        self.height_to_hash
-            .values()
-            .filter_map(move |hash| self.get_block(hash))
+        BlockIter::new(self.indexer.tip, &self.blocks).cloned()
     }
 }

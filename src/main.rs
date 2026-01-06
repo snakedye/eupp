@@ -17,8 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A mask requiring ~2.5 bytes of zeros for a valid PoW solution.
     let mut mask = [0_u8; 32];
     mask[0] = 0xFF;
-    mask[1] = 0xFF;
-    mask[2] = 0xF0; // 20 bits of zeros
+    mask[1] = 0xF0;
+    // mask[2] = 0xF0; // 20 bits of zeros
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mempool = SimpleMempool::new();
 
     // Create and run the EuppNode
-    let node = EuppNode::new(ledger, mempool);
+    let mut node = EuppNode::new(ledger, mempool);
     println!("Launching network node...");
     node.run().await?;
 

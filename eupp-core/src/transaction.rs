@@ -72,6 +72,9 @@ pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),
 
+    /// The referenced output (UTXO) was already spent.
+    DoubleSpend(OutputId),
+
     /// Execution error occurred during transaction validation.
     Execution(ExecError),
 
