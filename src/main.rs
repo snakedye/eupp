@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A mask requiring ~2.5 bytes of zeros for a valid PoW solution.
     let mut mask = [0_u8; 32];
     mask[0] = 0xFF;
-    mask[1] = 0xF0;
+    mask[1] = 0xFF;
     // mask[2] = 0xF0; // 20 bits of zeros
 
     let coinbase_tx = Transaction {
