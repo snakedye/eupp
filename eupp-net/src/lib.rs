@@ -127,9 +127,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 }
                             }
                         }
-                        SyncRequest::GetBlocks { .. } => {
+                        SyncRequest::GetBlocks { to } => {
                             if let Ok(lg) = self.ledger.read() {
-                                let blocks = lg.block_iter().collect();
+                                let blocks = lg
+                                    .block_iter()
+                                    .zip(lg.metadata_iter())
+                                    .take_while(|(_, meta)| Some(meta.hash) != to)
+                                    .map(|(block, _)| block)
+                                    .collect();
                                 if let Err(e) = swarm
                                     .behaviour_mut()
                                     .sync
@@ -201,11 +206,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             );
             self.is_syncing.store(true, Ordering::SeqCst);
             self.sync_target = Some((peer_id, sync_state.clone()));
+            let lg = self.ledger.read().unwrap();
+            let to = lg.get_last_block_metadata().map(|meta| meta.hash);
 
             swarm
                 .behaviour_mut()
                 .sync
-                .send_request(&peer_id, SyncRequest::GetBlocks { to: None });
+                .send_request(&peer_id, SyncRequest::GetBlocks { to });
         }
     }
 
