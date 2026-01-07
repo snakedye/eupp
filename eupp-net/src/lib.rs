@@ -252,7 +252,8 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         let is_synching = Arc::clone(&self.is_syncing);
 
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            // Sleep for 6 seconds before starting the loop
+            tokio::time::sleep(Duration::from_secs(6)).await;
             loop {
                 if is_synching.load(Ordering::SeqCst) {
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -274,7 +275,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         &prev_block_hash,
                         &lead_utxo_id.tx_hash,
                         &lead_utxo,
-                        100_000,
+                        10_000,
                     )
                 })
                 .await
