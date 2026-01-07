@@ -6,7 +6,7 @@ use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::mempool::Mempool;
 use crate::protocol::{GossipMessage, SyncRequest, SyncResponse};
 use eupp_core::ledger::Ledger;
-use eupp_core::{Hash, VirtualSize, block::Block, miner};
+use eupp_core::{VirtualSize, block::Block, miner};
 use libp2p::{
     PeerId, StreamProtocol, SwarmBuilder,
     futures::StreamExt,
@@ -19,12 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
 
-// Maximum number of blocks to request in a single sync chunk.
-const MAX_BLOCKS_PER_SYNC_CHUNK: u32 = 500;
-
 #[derive(Clone, Debug)]
 struct PeerSyncState {
-    hash: Hash,
     supply: u32,
 }
 
@@ -68,13 +64,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             }
             GossipMessage::NewBlock(block) => {
                 if !self.is_syncing.load(Ordering::SeqCst) {
-                    let added_ok;
+                    let added_res;
                     {
                         let mut lg = self.ledger.write().unwrap();
-                        added_ok = lg.add_block(&block).is_ok();
+                        added_res = lg.add_block(&block);
                     }
 
-                    if added_ok {
+                    if let Ok(_) = added_res {
                         println!(
                             "<- Recv Block via gossip {}",
                             hex::encode(block.header().hash())
@@ -110,103 +106,71 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         swarm: &mut Swarm<EuppBehaviour>,
     ) {
         match event {
-            request_response::Event::Message { peer, message, .. } => match message {
-                request_response::Message::Request {
-                    request, channel, ..
-                } => match request {
-                    SyncRequest::GetChainTip => {
-                        let response = self
-                            .ledger
-                            .read()
-                            .unwrap()
-                            .get_last_block_metadata()
-                            .map(|metadata| SyncResponse::ChainTip {
-                                hash: metadata.hash,
-                                supply: metadata.available_supply,
-                            })
-                            .unwrap_or_else(|| SyncResponse::ChainTip {
-                                hash: Default::default(), // Zero hash for empty ledger
-                                supply: 0,
-                            });
-
-                        if let Err(e) = swarm.behaviour_mut().sync.send_response(channel, response)
-                        {
-                            eprintln!("Failed to send ChainTip response: {:?}", e);
-                        }
-                    }
-                    SyncRequest::GetBlocks { from, count } => {
-                        if let Ok(lg) = self.ledger.read() {
-                            let blocks: Vec<Block> =
-                                (*lg).get_blocks_from(&from).take(count as usize).collect();
-                            if let Err(e) = swarm
-                                .behaviour_mut()
-                                .sync
-                                .send_response(channel, SyncResponse::Blocks(blocks))
-                            {
-                                eprintln!("Failed to send Blocks response: {:?}", e);
-                            }
-                        }
-                    }
-                },
-                request_response::Message::Response { response, .. } => match response {
-                    SyncResponse::ChainTip { hash, supply } => {
-                        self.peers_sync_state
-                            .insert(peer, PeerSyncState { hash, supply });
-                    }
-                    SyncResponse::Blocks(blocks) => {
-                        let (is_syncing, sync_peer) = (
-                            self.is_syncing.load(Ordering::SeqCst),
-                            self.sync_target.as_ref().map(|(p, _)| *p),
-                        );
-
-                        if is_syncing && Some(peer) == sync_peer {
-                            if blocks.is_empty() {
-                                println!("Sync finished: peer sent an empty chunk.");
-                                self.is_syncing.store(false, Ordering::SeqCst);
-                                self.sync_target = None;
-                                return;
-                            }
-
-                            let last_hash_in_chunk = blocks.last().unwrap().prev_block_hash;
-
-                            let mut lg = self.ledger.write().unwrap();
-                            let local_tip_hash = lg.get_last_block_metadata().map(|m| m.hash);
-
-                            for block in blocks.iter().rev() {
-                                if lg.add_block(block).is_ok() {
-                                    println!(
-                                        "<- Synced Block {}",
-                                        hex::encode(block.header().hash())
-                                    );
-                                }
-                            }
-
-                            // Refactor: only look the first block
-                            let reached_our_tip = local_tip_hash.is_some()
-                                && blocks
-                                    .iter()
-                                    .any(|b| b.header().hash() == local_tip_hash.unwrap());
-
-                            if reached_our_tip {
-                                println!(
-                                    "Sync finished: integrated blocks up to our previous tip."
-                                );
-                                self.is_syncing.store(false, Ordering::SeqCst);
-                                self.sync_target = None;
-                            } else {
-                                // Request next chunk
-                                swarm.behaviour_mut().sync.send_request(
-                                    &peer,
-                                    SyncRequest::GetBlocks {
-                                        from: last_hash_in_chunk,
-                                        count: MAX_BLOCKS_PER_SYNC_CHUNK,
+            request_response::Event::Message { peer, message, .. } => {
+                match message {
+                    request_response::Message::Request {
+                        request, channel, ..
+                    } => match request {
+                        SyncRequest::GetChainTip => {
+                            let response =
+                                self.ledger.read().unwrap().get_last_block_metadata().map(
+                                    |metadata| SyncResponse::ChainTip {
+                                        hash: metadata.hash,
+                                        supply: metadata.available_supply,
                                     },
                                 );
+                            if let Some(response) = response {
+                                if let Err(e) =
+                                    swarm.behaviour_mut().sync.send_response(channel, response)
+                                {
+                                    eprintln!("Failed to send ChainTip response: {:?}", e);
+                                }
                             }
                         }
-                    }
-                },
-            },
+                        SyncRequest::GetBlocks { .. } => {
+                            if let Ok(lg) = self.ledger.read() {
+                                let blocks = lg.block_iter().collect();
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .sync
+                                    .send_response(channel, SyncResponse::Blocks(blocks))
+                                {
+                                    eprintln!("Failed to send Blocks response: {:?}", e);
+                                }
+                            }
+                        }
+                    },
+                    request_response::Message::Response { response, .. } => match response {
+                        SyncResponse::ChainTip { hash, supply } => {
+                            self.peers_sync_state.insert(peer, PeerSyncState { supply });
+                        }
+                        SyncResponse::Blocks(blocks) => {
+                            let (is_syncing, sync_peer) = (
+                                self.is_syncing.load(Ordering::SeqCst),
+                                self.sync_target.as_ref().map(|(p, _)| *p),
+                            );
+
+                            if is_syncing && Some(peer) == sync_peer {
+                                let mut lg = self.ledger.write().unwrap();
+
+                                for block in blocks.iter().rev() {
+                                    if lg.add_block(block).is_ok() {
+                                        println!(
+                                            "<- Synced Block {}",
+                                            hex::encode(block.header().hash())
+                                        );
+                                    }
+                                }
+
+                                // Since we send everything in a single chunk, we can assume that the peer has all the blocks.
+                                println!("Sync finished.");
+                                self.is_syncing.store(false, Ordering::SeqCst);
+                                self.sync_target = None;
+                            }
+                        }
+                    },
+                }
+            }
             _ => {}
         }
     }
@@ -232,20 +196,16 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
     fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId) {
         if let Some(sync_state) = self.peers_sync_state.get(&peer_id).cloned() {
             println!(
-                "Initiating sync with peer {}, starting from their tip {}",
+                "Initiating sync with peer {}, starting from their tip",
                 peer_id,
-                hex::encode(sync_state.hash)
             );
             self.is_syncing.store(true, Ordering::SeqCst);
             self.sync_target = Some((peer_id, sync_state.clone()));
 
-            swarm.behaviour_mut().sync.send_request(
-                &peer_id,
-                SyncRequest::GetBlocks {
-                    from: sync_state.hash,
-                    count: MAX_BLOCKS_PER_SYNC_CHUNK,
-                },
-            );
+            swarm
+                .behaviour_mut()
+                .sync
+                .send_request(&peer_id, SyncRequest::GetBlocks { to: None });
         }
     }
 

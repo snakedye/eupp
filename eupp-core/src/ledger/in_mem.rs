@@ -33,30 +33,6 @@ pub struct FullInMemoryLedger {
     blocks: HashMap<Hash, Block>,
 }
 
-pub struct BlockIter<'a> {
-    current_hash: Hash,
-    blocks: &'a HashMap<Hash, Block>,
-}
-
-impl<'a> BlockIter<'a> {
-    pub fn new(tip: Hash, blocks: &'a HashMap<Hash, Block>) -> Self {
-        BlockIter {
-            current_hash: tip,
-            blocks,
-        }
-    }
-}
-
-impl<'a> Iterator for BlockIter<'a> {
-    type Item = &'a Block;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.blocks
-            .get(&self.current_hash)
-            .inspect(|block| self.current_hash = block.prev_block_hash)
-    }
-}
-
 impl InMemoryIndexer {
     pub fn new() -> Self {
         InMemoryIndexer {
@@ -224,16 +200,5 @@ impl Indexer for FullInMemoryLedger {
 impl Ledger for FullInMemoryLedger {
     fn get_block(&self, hash: &Hash) -> Option<Block> {
         self.blocks.get(hash).cloned()
-    }
-
-    /// Get all blocks in the ledger.
-    ///
-    /// The blocks are returned from the tip of the chain to the genesis block.
-    fn get_blocks(&self) -> impl Iterator<Item = Block> {
-        BlockIter::new(self.indexer.tip, &self.blocks).cloned()
-    }
-
-    fn get_blocks_from(&self, start_hash: &Hash) -> impl Iterator<Item = Block> {
-        BlockIter::new(*start_hash, &self.blocks).cloned()
     }
 }

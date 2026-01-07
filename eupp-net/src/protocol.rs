@@ -19,7 +19,10 @@ pub enum SyncRequest {
     GetChainTip,
 
     /// Request a chunk of blocks starting from a given hash.
-    GetBlocks { from: Hash, count: u32 },
+    GetBlocks {
+        // from: Option<Hash>,
+        to: Option<Hash>,
+    },
 }
 
 /// Responses sent directly back to a peer for a `SyncRequest`.

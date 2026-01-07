@@ -30,6 +30,36 @@ pub struct BlockMetadata {
     pub lead_utxo: OutputId,
 }
 
+/// Iterator over the blockchain from the tip to genesis.
+pub struct BlockIter<'a, L: ?Sized> {
+    current_hash: Hash,
+    ledger: &'a L,
+}
+
+/// Iterator over the blockchain metadata from the tip to genesis.
+pub struct BlockMetadataIter<'a, I: ?Sized> {
+    current_hash: Hash,
+    indexer: &'a I,
+}
+
+impl<'a, I: Indexer> Iterator for BlockMetadataIter<'a, I> {
+    type Item = BlockMetadata;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.indexer
+            .get_block_metadata(&self.current_hash)
+            .inspect(|block| self.current_hash = block.prev_block_hash)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let height = self
+            .indexer
+            .metadata_iter()
+            .next()
+            .map(|meta| meta.height as usize);
+        (height.unwrap_or_default(), height)
+    }
+}
+
 /// An Indexer provides optimized views of the blockchain state.
 /// This includes the UTXO set and block metadata needed for validation.
 pub trait Indexer {
@@ -47,6 +77,41 @@ pub trait Indexer {
 
     /// Retrieves metadata for the most recently added block.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
+
+    fn metadata_iter(&self) -> BlockMetadataIter<'_, Self> {
+        BlockMetadataIter {
+            current_hash: self
+                .get_last_block_metadata()
+                .map(|meta| meta.hash)
+                .unwrap_or_default(),
+            indexer: self,
+        }
+    }
+
+    fn metadata_iter_from(&self, hash: &Hash) -> BlockMetadataIter<'_, Self> {
+        BlockMetadataIter {
+            current_hash: *hash,
+            indexer: self,
+        }
+    }
+}
+
+impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
+    type Item = Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.ledger
+            .get_block(&self.current_hash)
+            .inspect(|block| self.current_hash = block.prev_block_hash)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let height = self
+            .ledger
+            .metadata_iter()
+            .next()
+            .map(|meta| meta.height as usize);
+        (height.unwrap_or_default(), height)
+    }
 }
 
 /// A Ledger represents the authoritative archival store of blocks.
@@ -56,10 +121,21 @@ pub trait Ledger: Indexer {
     fn get_block(&self, hash: &Hash) -> Option<Block>;
 
     /// Returns an iterator over blocks starting from the tip to oldest.
-    fn get_blocks(&self) -> impl Iterator<Item = Block>;
+    fn block_iter(&self) -> BlockIter<Self> {
+        BlockIter {
+            current_hash: self
+                .get_last_block_metadata()
+                .map(|meta| meta.hash)
+                .unwrap_or_default(),
+            ledger: self,
+        }
+    }
 
     /// Returns an iterator over blocks starting from a given hash.
-    ///
-    /// Like `get_blocks()`, but starts from the given hash.
-    fn get_blocks_from(&self, start_hash: &Hash) -> impl Iterator<Item = Block>;
+    fn block_iter_from(&self, hash: &Hash) -> BlockIter<Self> {
+        BlockIter {
+            current_hash: *hash,
+            ledger: self,
+        }
+    }
 }
