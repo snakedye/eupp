@@ -1,5 +1,5 @@
 use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
-use super::{Hash, PublicKey, commitment, ledger::Ledger};
+use super::{Hash, PublicKey, commitment, ledger::Indexer};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,9 @@ pub struct Output {
 pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),
+
+    /// The referenced output (UTXO) was already spent.
+    DoubleSpend(OutputId),
 
     /// Execution error occurred during transaction validation.
     Execution(ExecError),
@@ -368,10 +371,10 @@ impl Transaction {
         hasher.finalize().into()
     }
 
-    /// Verifies the transaction against the ledger.
-    pub fn verify<L: Ledger>(&self, ledger: &L) -> Result<(), TransactionError> {
+    /// Verifies the transaction against the indexer.
+    pub fn verify<L: Indexer>(&self, indexer: &L) -> Result<(), TransactionError> {
         let mut total_input_amount = 0_u32;
-        let is_genesis = ledger.get_last_block_metadata().is_none();
+        let is_genesis = indexer.get_last_block_metadata().is_none();
 
         if self.inputs.len() > MAX_ALLOWED {
             return Err(TransactionError::TooManyInputs);
@@ -381,9 +384,9 @@ impl Transaction {
         }
 
         for (i, input) in self.inputs.iter().enumerate() {
-            let vm = Vm::new(ledger, i, self);
+            let vm = Vm::new(indexer, i, self);
             // Lookup referenced utxo
-            let utxo = ledger
+            let utxo = indexer
                 .get_utxo(&input.output_id)
                 .ok_or(TransactionError::InvalidOutput(input.output_id))?;
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
@@ -460,7 +463,7 @@ mod tests {
     use crate::{
         block::Block,
         calculate_reward,
-        ledger::{InMemoryLedger, Ledger},
+        ledger::{InMemoryIndexer, Indexer},
         vm::p2pkh,
     };
     use blake2::Blake2s256;
@@ -539,8 +542,8 @@ mod tests {
 
     #[test]
     fn test_transaction_verify_invalid_public_key() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data = [12u8; 32];
@@ -560,10 +563,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Create a block containing the funding transaction and add to ledger
+        // Create a block containing the funding transaction and add to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let input = Input::new(
@@ -586,7 +589,7 @@ mod tests {
         };
 
         // Now verification should fail parsing the funding output's commitment as a public key
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Err(TransactionError::Execution(_)) => {}
             other => panic!("Expected InvalidSignature error, got: {:?}", other),
         }
@@ -620,8 +623,8 @@ mod tests {
 
     #[test]
     fn test_transaction_verify_invalid_input_output_totals() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data = [12u8; 32];
@@ -640,10 +643,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Create a block containing the funding transaction and add to ledger
+        // Create a block containing the funding transaction and add to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
@@ -666,7 +669,7 @@ mod tests {
         };
 
         // Now verification should fail due to mismatched input and output totals
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Err(TransactionError::InvalidBalance { .. }) => {}
             other => panic!("Expected InsufficientInputAmount error, got: {:?}", other),
         }
@@ -674,8 +677,8 @@ mod tests {
 
     #[test]
     fn test_transaction_verify_valid_coinbase() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data = [12u8; 32];
@@ -695,10 +698,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Create a block containing the funding transaction and add to ledger
+        // Create a block containing the funding transaction and add to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
@@ -726,15 +729,15 @@ mod tests {
         };
 
         // Now verification should succeed
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
         }
     }
     #[test]
     fn test_transaction_verify_v2() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
         // Create a signing key for the funding transaction
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
@@ -759,10 +762,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Create a block containing the funding transaction and add to ledger
+        // Create a block containing the funding transaction and add to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the second UTXO
         let utxo_id = OutputId {
@@ -783,15 +786,15 @@ mod tests {
         };
 
         // Now verification should succeed
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
         }
     }
     #[test]
     fn test_transaction_verify_too_many_inputs() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data = [12u8; 32];
@@ -809,10 +812,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Create a block containing the funding transaction and add to ledger
+        // Create a block containing the funding transaction and add to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Generate inputs exceeding the maximum allowed
         let max_allowed = u8::MAX as usize;
@@ -843,15 +846,15 @@ mod tests {
         };
 
         // Now verification should fail due to too many inputs
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Err(TransactionError::TooManyInputs) => {}
             other => panic!("Expected TooManyInputs error, got: {:?}", other),
         }
     }
     #[test]
     fn test_transaction_verify_too_many_outputs() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
 
         // Build funding (previous) transaction that creates a UTXO
         let data = [12u8; 32];
@@ -869,10 +872,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Create a block containing the funding transaction and add to ledger
+        // Create a block containing the funding transaction and add to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Generate outputs exceeding the maximum allowed
         let max_allowed = u8::MAX as usize;
@@ -898,15 +901,15 @@ mod tests {
         };
 
         // Now verification should fail due to too many outputs
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Err(TransactionError::TooManyOutputs) => {}
             other => panic!("Expected TooManyOutputs error, got: {:?}", other),
         }
     }
     #[test]
     fn test_transaction_verify_v3_invalid_witness_script() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
         // Create a signing key for the funding transaction
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
@@ -931,10 +934,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Add funding block to ledger
+        // Add funding block to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
@@ -956,7 +959,7 @@ mod tests {
             outputs: new_outputs,
         };
 
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Err(TransactionError::Execution(_)) => {}
             other => panic!("Expected Execution error, got: {:?}", other),
         }
@@ -964,8 +967,8 @@ mod tests {
 
     #[test]
     fn test_transaction_verify_v3_valid_witness() {
-        // Create a ledger with one block containing a funding transaction
-        let mut ledger = InMemoryLedger::new();
+        // Create a indexer with one block containing a funding transaction
+        let mut indexer = InMemoryIndexer::new();
         // Create a signing key for the funding transaction
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
@@ -980,10 +983,10 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        // Add funding block to ledger
+        // Add funding block to indexer
         let mut block = Block::new(0, [0u8; 32]);
         block.transactions.push(funding_tx);
-        ledger.add_block(block).unwrap();
+        indexer.add_block(&block).unwrap();
 
         // Build a spending transaction that consumes the funding UTXO
         let utxo_id = OutputId {
@@ -1005,7 +1008,7 @@ mod tests {
             outputs: new_outputs,
         };
 
-        match spending_tx.verify(&ledger) {
+        match spending_tx.verify(&indexer) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
         }
