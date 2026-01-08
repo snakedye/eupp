@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
 
+const BLOCKS_CHUNK_SIZE: usize = 100;
+
 #[derive(Clone, Debug)]
 struct PeerSyncState {
     supply: u32,
@@ -127,11 +129,35 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 }
                             }
                         }
-                        SyncRequest::GetBlocks { to } => {
+                        SyncRequest::GetBlocksHash { from, to } => {
                             if let Ok(lg) = self.ledger.read() {
-                                let blocks = lg
-                                    .block_iter()
-                                    .zip(lg.metadata_iter())
+                                let iter = match from {
+                                    Some(from) => lg.metadata_iter_from(&from),
+                                    None => lg.metadata_iter(),
+                                };
+                                let hashes = iter
+                                    .take_while(|meta| Some(meta.hash) != to)
+                                    .map(|meta| meta.hash)
+                                    .collect();
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .sync
+                                    .send_response(channel, SyncResponse::BlocksHash(hashes))
+                                {
+                                    eprintln!("Failed to send BlocksHash response: {:?}", e);
+                                }
+                            }
+                        }
+                        SyncRequest::GetBlocks { from, to } => {
+                            if let Ok(lg) = self.ledger.read() {
+                                let (block_iter, metadata_iter) = match from {
+                                    Some(from) => {
+                                        (lg.block_iter_from(&from), lg.metadata_iter_from(&from))
+                                    }
+                                    None => (lg.block_iter(), lg.metadata_iter()),
+                                };
+                                let blocks = block_iter
+                                    .zip(metadata_iter)
                                     .take_while(|(_, meta)| Some(meta.hash) != to)
                                     .map(|(block, _)| block)
                                     .collect();
@@ -149,15 +175,67 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         SyncResponse::ChainTip { hash, supply } => {
                             self.peers_sync_state.insert(peer, PeerSyncState { supply });
                         }
+                        SyncResponse::BlocksHash(hashes) => {
+                            if hashes.is_empty() {
+                                println!("Start termination.");
+                                // We send a request that can only be responded with an empty list.
+                                swarm.behaviour_mut().sync.send_request(
+                                    &peer,
+                                    SyncRequest::GetBlocks {
+                                        from: Some([0u8; 32]),
+                                        to: None,
+                                    },
+                                );
+                                return;
+                            }
+                            let from = hashes.first().copied();
+                            let to = hashes.last().copied();
+                            println!(
+                                "Syncing from {} to {}",
+                                hex::encode(from.unwrap()),
+                                hex::encode(to.unwrap())
+                            );
+                            // If sending multiple that same time breaks synchronicity
+                            //
+                            // The solution is to buffer hashes and send a chunk of hashes at a time
+                            swarm
+                                .behaviour_mut()
+                                .sync
+                                .send_request(&peer, SyncRequest::GetBlocks { from, to });
+
+                            swarm.behaviour_mut().sync.send_request(
+                                &peer,
+                                SyncRequest::GetBlocksHash {
+                                    from: None,
+                                    to: hashes.first().copied(),
+                                },
+                            );
+                        }
                         SyncResponse::Blocks(blocks) => {
                             let (is_syncing, sync_peer) = (
                                 self.is_syncing.load(Ordering::SeqCst),
                                 self.sync_target.as_ref().map(|(p, _)| *p),
                             );
-
+                            println!(
+                                "Processing blocks from {} to {}",
+                                hex::encode(
+                                    blocks
+                                        .first()
+                                        .map(|b| b.header().hash())
+                                        .unwrap_or_default()
+                                ),
+                                hex::encode(
+                                    blocks.last().map(|b| b.header().hash()).unwrap_or_default()
+                                )
+                            );
                             if is_syncing && Some(peer) == sync_peer {
+                                if blocks.is_empty() {
+                                    println!("Sync finished.");
+                                    self.is_syncing.store(false, Ordering::SeqCst);
+                                    self.sync_target = None;
+                                    return;
+                                }
                                 let mut lg = self.ledger.write().unwrap();
-
                                 for block in blocks.iter().rev() {
                                     if lg.add_block(block).is_ok() {
                                         println!(
@@ -166,11 +244,6 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                         );
                                     }
                                 }
-
-                                // Since we send everything in a single chunk, we can assume that the peer has all the blocks.
-                                println!("Sync finished.");
-                                self.is_syncing.store(false, Ordering::SeqCst);
-                                self.sync_target = None;
                             }
                         }
                     },
@@ -207,12 +280,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             self.is_syncing.store(true, Ordering::SeqCst);
             self.sync_target = Some((peer_id, sync_state.clone()));
             let lg = self.ledger.read().unwrap();
-            let to = lg.get_last_block_metadata().map(|meta| meta.hash);
+            let to = lg
+                .get_last_block_metadata()
+                .map(|meta| meta.prev_block_hash);
 
             swarm
                 .behaviour_mut()
                 .sync
-                .send_request(&peer_id, SyncRequest::GetBlocks { to });
+                .send_request(&peer_id, SyncRequest::GetBlocksHash { from: None, to });
         }
     }
 

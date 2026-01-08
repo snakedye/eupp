@@ -18,9 +18,15 @@ pub enum SyncRequest {
     /// Ask a peer for their current chain tip (latest block hash and total supply).
     GetChainTip,
 
-    /// Request a chunk of blocks starting from a given hash.
+    /// Request a chunk of blocks in a given range.
     GetBlocks {
-        // from: Option<Hash>,
+        from: Option<Hash>,
+        to: Option<Hash>,
+    },
+
+    /// Request the hashes of blocks in a given range.
+    GetBlocksHash {
+        from: Option<Hash>,
         to: Option<Hash>,
     },
 }
@@ -33,4 +39,7 @@ pub enum SyncResponse {
 
     /// A chunk of blocks in response to `GetBlocks`.
     Blocks(Vec<Block>),
+
+    /// A chunk of block hashes in response to `GetBlocksHash`.
+    BlocksHash(Vec<Hash>),
 }

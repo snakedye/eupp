@@ -30,12 +30,14 @@ pub struct BlockMetadata {
     pub lead_utxo: OutputId,
 }
 
+#[derive(Clone, Copy)]
 /// Iterator over the blockchain from the tip to genesis.
 pub struct BlockIter<'a, L: ?Sized> {
     current_hash: Hash,
     ledger: &'a L,
 }
 
+#[derive(Clone, Copy)]
 /// Iterator over the blockchain metadata from the tip to genesis.
 pub struct BlockMetadataIter<'a, I: ?Sized> {
     current_hash: Hash,
