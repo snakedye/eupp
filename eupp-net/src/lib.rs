@@ -217,18 +217,6 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 self.is_syncing.load(Ordering::SeqCst),
                                 self.sync_target.as_ref().map(|(p, _)| *p),
                             );
-                            println!(
-                                "Processing blocks from {} to {}",
-                                hex::encode(
-                                    blocks
-                                        .first()
-                                        .map(|b| b.header().hash())
-                                        .unwrap_or_default()
-                                ),
-                                hex::encode(
-                                    blocks.last().map(|b| b.header().hash()).unwrap_or_default()
-                                )
-                            );
                             if is_syncing && Some(peer) == sync_peer {
                                 if blocks.len() <= 1 {
                                     println!("Sync finished.");
