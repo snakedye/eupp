@@ -135,8 +135,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     Some(from) => lg.metadata_iter_from(&from),
                                     None => lg.metadata_iter(),
                                 };
+                                let mut hash = None;
                                 let hashes = iter
-                                    .take_while(|meta| Some(meta.hash) != to)
+                                    .take_while(|meta| {
+                                        let found = hash == to;
+                                        hash = Some(meta.hash);
+                                        !found
+                                    })
                                     .map(|meta| meta.hash)
                                     .collect();
                                 if let Err(e) = swarm
@@ -156,11 +161,17 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     }
                                     None => (lg.block_iter(), lg.metadata_iter()),
                                 };
+                                let mut hash = None;
                                 let blocks = block_iter
                                     .zip(metadata_iter)
-                                    .take_while(|(_, meta)| Some(meta.hash) != to)
+                                    .take_while(|(_, meta)| {
+                                        let found = hash == to;
+                                        hash = Some(meta.hash);
+                                        !found
+                                    })
                                     .map(|(block, _)| block)
                                     .collect();
+
                                 if let Err(e) = swarm
                                     .behaviour_mut()
                                     .sync
@@ -176,40 +187,30 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                             self.peers_sync_state.insert(peer, PeerSyncState { supply });
                         }
                         SyncResponse::BlocksHash(hashes) => {
-                            if hashes.is_empty() {
-                                println!("Start termination.");
-                                // We send a request that can only be responded with an empty list.
+                            if let Some(chunk) = hashes.rchunks(BLOCKS_CHUNK_SIZE).next() {
+                                let from = chunk.first().copied();
+                                let to = chunk.last().copied();
+                                println!(
+                                    "Syncing from {} to {}",
+                                    hex::encode(from.unwrap()),
+                                    hex::encode(to.unwrap())
+                                );
+                                // If sending multiple that same time breaks synchronicity
+                                swarm
+                                    .behaviour_mut()
+                                    .sync
+                                    .send_request(&peer, SyncRequest::GetBlocks { from, to });
+                                if from == to {
+                                    return;
+                                }
                                 swarm.behaviour_mut().sync.send_request(
                                     &peer,
-                                    SyncRequest::GetBlocks {
-                                        from: Some([0u8; 32]),
-                                        to: None,
+                                    SyncRequest::GetBlocksHash {
+                                        from: None,
+                                        to: from,
                                     },
                                 );
-                                return;
                             }
-                            let from = hashes.first().copied();
-                            let to = hashes.last().copied();
-                            println!(
-                                "Syncing from {} to {}",
-                                hex::encode(from.unwrap()),
-                                hex::encode(to.unwrap())
-                            );
-                            // If sending multiple that same time breaks synchronicity
-                            //
-                            // The solution is to buffer hashes and send a chunk of hashes at a time
-                            swarm
-                                .behaviour_mut()
-                                .sync
-                                .send_request(&peer, SyncRequest::GetBlocks { from, to });
-
-                            swarm.behaviour_mut().sync.send_request(
-                                &peer,
-                                SyncRequest::GetBlocksHash {
-                                    from: None,
-                                    to: hashes.first().copied(),
-                                },
-                            );
                         }
                         SyncResponse::Blocks(blocks) => {
                             let (is_syncing, sync_peer) = (
@@ -229,12 +230,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 )
                             );
                             if is_syncing && Some(peer) == sync_peer {
-                                if blocks.is_empty() {
+                                if blocks.len() <= 1 {
                                     println!("Sync finished.");
                                     self.is_syncing.store(false, Ordering::SeqCst);
                                     self.sync_target = None;
                                     return;
                                 }
+                                if blocks.is_empty() {}
                                 let mut lg = self.ledger.write().unwrap();
                                 for block in blocks.iter().rev() {
                                     if lg.add_block(block).is_ok() {
