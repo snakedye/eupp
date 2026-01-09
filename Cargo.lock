@@ -750,6 +750,16 @@ dependencies = [
 [[package]]
 name = "eupp-cli"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eupp-core",
+ "eupp-rpc",
+ "hex",
+ "jsonrpsee",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "eupp-core"

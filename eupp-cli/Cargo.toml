@@ -4,3 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Local workspace crates
+eupp-core = { path = "../eupp-core" }
+eupp-rpc = { path = "../eupp-rpc" }
+
+# RPC client
+jsonrpsee = { version = "0.22", features = ["client"] }
+
+# Async runtime + utilities
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# (De)serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+hex = "0.4"
+
+# Optional - helpful for simple error handling in the CLI implementation
+anyhow = "1.0"
