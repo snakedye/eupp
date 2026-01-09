@@ -6,6 +6,7 @@ use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::mempool::Mempool;
 use crate::protocol::{GossipMessage, SyncRequest, SyncResponse};
 use eupp_core::Hash;
+use eupp_core::block::BlockError;
 use eupp_core::ledger::Ledger;
 use eupp_core::{VirtualSize, block::Block, miner};
 use libp2p::{
@@ -35,8 +36,7 @@ pub struct EuppNode<L: Ledger, M: Mempool> {
     is_syncing: Arc<AtomicBool>,
     // A map of peers and their last advertised chain tip.
     peers_sync_state: HashMap<PeerId, PeerSyncState>,
-    sync_target: Option<(PeerId, PeerSyncState)>,
-
+    sync_target: Option<PeerId>,
     // The queue of block hashes to be fetched from peers.
     block_fetch_queue: Vec<Hash>,
 }
@@ -184,40 +184,47 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         }
                     },
                     request_response::Message::Response { response, .. } => match response {
-                        SyncResponse::ChainTip { hash, supply } => {
+                        SyncResponse::ChainTip { supply, .. } => {
                             self.peers_sync_state.insert(peer, PeerSyncState { supply });
                         }
-                        SyncResponse::BlocksHash(mut hashes) => {
+                        SyncResponse::BlocksHash(hashes) => {
                             if hashes.len() <= 1 {
                                 println!("Syncing done.");
                                 self.is_syncing.store(false, Ordering::SeqCst);
                                 self.sync_target = None;
                                 return;
                             }
-                            if let Some(chunk) = hashes.rchunks(BLOCKS_CHUNK_SIZE).next() {
-                                let from = chunk.first().copied();
-                                let to = chunk.last().copied();
-                                swarm
-                                    .behaviour_mut()
-                                    .sync
-                                    .send_request(&peer, SyncRequest::GetBlocks { from, to });
-                            }
-                            hashes.truncate(hashes.len().saturating_sub(BLOCKS_CHUNK_SIZE));
                             self.block_fetch_queue = hashes;
+                            // This will start the block fetch process
+                            swarm.behaviour_mut().sync.send_request(
+                                &peer,
+                                SyncRequest::GetBlocks {
+                                    from: Some([0; 32]),
+                                    to: None,
+                                },
+                            );
                         }
                         SyncResponse::Blocks(blocks) => {
-                            let (is_syncing, sync_peer) = (
-                                self.is_syncing.load(Ordering::SeqCst),
-                                self.sync_target.as_ref().map(|(p, _)| *p),
-                            );
+                            let (is_syncing, sync_peer) =
+                                (self.is_syncing.load(Ordering::SeqCst), self.sync_target);
                             if is_syncing && Some(peer) == sync_peer {
                                 let mut lg = self.ledger.write().unwrap();
                                 for block in blocks.iter().rev() {
-                                    if lg.add_block(block).is_ok() {
-                                        println!(
-                                            "<- Synced Block {}",
-                                            hex::encode(block.header().hash())
-                                        );
+                                    match lg.add_block(block) {
+                                        Ok(_) => {
+                                            println!(
+                                                "<- Synced Block {}",
+                                                hex::encode(block.header().hash())
+                                            );
+                                        }
+                                        // Terminate sync if there's an invalid proof of chain.
+                                        Err(BlockError::ChallengeError) => {
+                                            println!("Invalid proof of chain");
+                                            self.is_syncing.store(false, Ordering::SeqCst);
+                                            self.sync_target = None;
+                                            return;
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 // If there are no pending blocks, send a request to continue syncing
@@ -228,8 +235,9 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                         SyncRequest::GetBlocksHash { from: None, to },
                                     );
                                     return;
+                                }
                                 // If there are pending blocks, send request the next chunk
-                                } else if let Some(chunk) =
+                                if let Some(chunk) =
                                     self.block_fetch_queue.rchunks(BLOCKS_CHUNK_SIZE).next()
                                 {
                                     let from = chunk.first().copied();
@@ -272,21 +280,19 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
 
     /// Sets the node to syncing state and sends the initial GetBlocks request.
     fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId) {
-        if let Some(sync_state) = self.peers_sync_state.get(&peer_id).cloned() {
-            println!(
-                "Initiating sync with peer {}, starting from their tip",
-                peer_id,
-            );
-            self.is_syncing.store(true, Ordering::SeqCst);
-            self.sync_target = Some((peer_id, sync_state.clone()));
-            let lg = self.ledger.read().unwrap();
-            let to = lg.get_last_block_metadata().map(|meta| meta.hash);
+        println!(
+            "Initiating sync with peer {}, starting from their tip",
+            peer_id,
+        );
+        self.is_syncing.store(true, Ordering::SeqCst);
+        self.sync_target = Some(peer_id);
+        let lg = self.ledger.read().unwrap();
+        let to = lg.get_last_block_metadata().map(|meta| meta.hash);
 
-            swarm
-                .behaviour_mut()
-                .sync
-                .send_request(&peer_id, SyncRequest::GetBlocksHash { from: None, to });
-        }
+        swarm
+            .behaviour_mut()
+            .sync
+            .send_request(&peer_id, SyncRequest::GetBlocksHash { from: None, to });
     }
 
     pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
