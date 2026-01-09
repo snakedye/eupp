@@ -37,7 +37,8 @@ pub struct EuppNode<L: Ledger, M: Mempool> {
     peers_sync_state: HashMap<PeerId, PeerSyncState>,
     sync_target: Option<(PeerId, PeerSyncState)>,
 
-    pending_blocks: Vec<Hash>,
+    // The queue of block hashes to be fetched from peers.
+    block_fetch_queue: Vec<Hash>,
 }
 
 impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
@@ -46,7 +47,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             ledger: Arc::new(RwLock::new(ledger)),
             mempool: Arc::new(RwLock::new(mempool)),
             is_syncing: Arc::new(AtomicBool::new(false)),
-            pending_blocks: Vec::new(),
+            block_fetch_queue: Vec::new(),
             peers_sync_state: HashMap::new(),
             sync_target: None,
         }
@@ -202,7 +203,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     .send_request(&peer, SyncRequest::GetBlocks { from, to });
                             }
                             hashes.truncate(hashes.len().saturating_sub(BLOCKS_CHUNK_SIZE));
-                            self.pending_blocks = hashes;
+                            self.block_fetch_queue = hashes;
                         }
                         SyncResponse::Blocks(blocks) => {
                             let (is_syncing, sync_peer) = (
@@ -220,7 +221,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     }
                                 }
                                 // If there are no pending blocks, send a request to continue syncing
-                                if self.pending_blocks.is_empty() {
+                                if self.block_fetch_queue.is_empty() {
                                     let to = blocks.first().map(|block| block.header().hash());
                                     swarm.behaviour_mut().sync.send_request(
                                         &peer,
@@ -229,7 +230,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     return;
                                 // If there are pending blocks, send request the next chunk
                                 } else if let Some(chunk) =
-                                    self.pending_blocks.rchunks(BLOCKS_CHUNK_SIZE).next()
+                                    self.block_fetch_queue.rchunks(BLOCKS_CHUNK_SIZE).next()
                                 {
                                     let from = chunk.first().copied();
                                     let to = chunk.last().copied();
@@ -237,8 +238,10 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                         .behaviour_mut()
                                         .sync
                                         .send_request(&peer, SyncRequest::GetBlocks { from, to });
-                                    self.pending_blocks.truncate(
-                                        self.pending_blocks.len().saturating_sub(BLOCKS_CHUNK_SIZE),
+                                    self.block_fetch_queue.truncate(
+                                        self.block_fetch_queue
+                                            .len()
+                                            .saturating_sub(BLOCKS_CHUNK_SIZE),
                                     );
                                 }
                             }
