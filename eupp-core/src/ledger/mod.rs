@@ -80,6 +80,14 @@ pub trait Indexer {
     /// Retrieves metadata for the most recently added block.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
 
+    /// Retrieves the hash of the block containing the given transaction.
+    fn get_transaction_block_hash(
+        &self,
+        tx_hash: &super::transaction::TransactionHash,
+    ) -> Option<Hash> {
+        self.get_utxo_block_hash(&OutputId::new(*tx_hash, 0))
+    }
+
     fn metadata_iter(&self) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
             current_hash: self

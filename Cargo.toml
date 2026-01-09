@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["eupp-core", "eupp-net"]
+members = [ "eupp-cli","eupp-core", "eupp-net", "eupp-rpc"]
 
 [dependencies]
 eupp-core = { path = "./eupp-core" }

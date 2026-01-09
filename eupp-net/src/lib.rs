@@ -1,22 +1,26 @@
 pub mod behavior;
 pub mod mempool;
 pub mod protocol;
+pub mod rpc;
 
 use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::mempool::Mempool;
 use crate::protocol::{GossipMessage, SyncRequest, SyncResponse};
-use eupp_core::Hash;
 use eupp_core::block::BlockError;
 use eupp_core::ledger::Ledger;
-use eupp_core::{VirtualSize, block::Block, miner};
+use eupp_core::transaction::Transaction;
+use eupp_core::{Hash, VirtualSize, block::Block, miner};
+use eupp_rpc::EuppRpcServer;
+use futures::StreamExt;
 use libp2p::{
-    PeerId, StreamProtocol, SwarmBuilder,
-    futures::StreamExt,
-    gossipsub, mdns,
+    PeerId, StreamProtocol, SwarmBuilder, gossipsub, mdns,
     request_response::{self, ProtocolSupport},
     swarm::{Swarm, SwarmEvent},
 };
+use rpc::EuppRpcImpl;
 use std::collections::HashMap;
+use std::error::Error;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
@@ -326,7 +330,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
+        // Set up channels for mining and rpc
         let (block_sender, mut block_receiver) = mpsc::channel(10);
+        let (rpc_tx_sender, mut rpc_tx_receiver) = mpsc::channel(32);
+
+        // Spawn the RPC server
+        tokio::spawn(start_rpc_server(Arc::clone(&self.ledger), rpc_tx_sender));
+
         let ledger = Arc::clone(&self.ledger);
         let is_synching = Arc::clone(&self.is_syncing);
 
@@ -398,6 +408,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         }
                     }
                 }
+                // Handle transactions submitted from the RPC
+                Some(tx) = rpc_tx_receiver.recv() => {
+                    println!("-> Gossiping Tx from RPC");
+                    let msg = GossipMessage::Transaction(tx);
+                    if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap()) {
+                        eprintln!("Failed to publish RPC tx: {:?}", e);
+                    }
+                }
                 Some(mut block) = block_receiver.recv() => {
                     let added_transactions;
                     {
@@ -435,4 +453,21 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             }
         }
     }
+}
+
+async fn start_rpc_server<L>(
+    ledger: Arc<RwLock<L>>,
+    tx_sender: mpsc::Sender<Transaction>,
+) -> Result<(), Box<dyn Error + Send + Sync>>
+where
+    L: Ledger + Send + Sync + 'static,
+{
+    let server = jsonrpsee::server::ServerBuilder::default()
+        .build("0.0.0.0:9944".parse::<SocketAddr>()?)
+        .await?;
+    let rpc_module = EuppRpcImpl::new(ledger, tx_sender);
+    let handle = server.start(rpc_module.into_rpc());
+    println!("RPC server listening on 0.0.0.0:9944");
+    handle.stopped().await;
+    Ok(())
 }
