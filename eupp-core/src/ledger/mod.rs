@@ -71,6 +71,11 @@ pub trait Indexer {
     /// Retrieves metadata for a block identified by its hash.
     fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata>;
 
+    /// Checks if a transaction output is spent.
+    fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
+        self.get_utxo(output_id).is_none()
+    }
+
     /// Fetches an unspent transaction output (UTXO) by its identifier.
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
 

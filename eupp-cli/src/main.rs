@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use eupp_core::transaction::{Input, Output, OutputId, Transaction};
-use eupp_core::{Hash, PublicKey, Signature};
+use ed25519_dalek::{Signer, SigningKey};
+use eupp_core::Hash;
+use eupp_core::transaction::{Input, Output, OutputId, Transaction, sighash};
 use eupp_rpc::EuppRpcClient;
 use hex;
 use jsonrpsee::http_client::HttpClientBuilder;
@@ -15,33 +16,36 @@ use jsonrpsee::http_client::HttpClientBuilder;
 #[tokio::main]
 async fn main() -> Result<()> {
     // RPC endpoint where the node is listening
-    let rpc_url = "http://127.0.0.1:9944";
+    let rpc_url = "http://127.0.0.1:36331";
 
     // Build JSON-RPC HTTP client
     let http_client = HttpClientBuilder::default()
         .request_timeout(Duration::from_secs(10))
         .build(rpc_url)?;
 
-    let client = EuppRpcClient::new(http_client);
-
     // --- Construct a very small, hardcoded transaction ---
-    //
-    // Note: These are dummy values for a first draft CLI. Real transactions must
-    // use real previous output ids, public keys, and signatures.
-    let prev_tx_hash: Hash = [1u8; 32];
-    let prev_output_index: u8 = 0;
-    let output_id = OutputId::new(prev_tx_hash, prev_output_index);
+    let secret_key =
+        hex::decode("66faba5cc813b8567435c8c4935e83f0f20bcda85f78797b39852559a4488b11").unwrap();
+    let signing_key = SigningKey::from_bytes(&secret_key.try_into().unwrap());
+    let public_key = signing_key.verifying_key().to_bytes();
 
-    let public_key: PublicKey = [2u8; 32];
-    let signature: Signature = [0u8; 64];
+    let prev_tx_hash =
+        hex::decode("983e7b6f65079858b7fcee203b63aca24195d36772fb16569774379db0ce2b70").unwrap();
+    let prev_output_index: u8 = 1;
 
-    let input = Input::new(output_id, public_key, signature);
+    let output_id = OutputId::new(prev_tx_hash.try_into().unwrap(), prev_output_index);
+    let input = Input::new_unsigned(output_id, public_key);
 
-    // Create a single output sending 50 units back to `public_key` with dummy data.
+    // Create a single output sending 5 units back to `public_key` with dummy data.
     let data: Hash = [3u8; 32];
-    let output = Output::new_v1(50, &public_key, &data);
+    let output = Output::new_v1(11, &public_key, &data);
+    let sighash = sighash([&output_id], Some(&output));
+    let signature = signing_key.sign(&sighash);
 
-    let tx = Transaction::new(vec![input], vec![output]);
+    let tx = Transaction::new(
+        vec![input.with_signature(signature.to_bytes())],
+        vec![output],
+    );
 
     // Print transaction hash locally
     let tx_hash = tx.hash();
@@ -52,7 +56,7 @@ async fn main() -> Result<()> {
 
     // Broadcast using the RPC client
     println!("Broadcasting transaction to {rpc_url} ...");
-    match client.send_raw_transaction(tx).await {
+    match http_client.send_raw_transaction(tx).await {
         Ok(broadcasted_hash) => {
             println!(
                 "Transaction broadcasted successfully. Node returned hash: 0x{}",

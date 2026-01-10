@@ -1,5 +1,6 @@
+use std::ops::Range;
+
 use blake2::{Blake2s256, Digest};
-use rand::{TryRngCore, rngs::OsRng};
 
 use ed25519_dalek::{Signer, SigningKey};
 
@@ -24,22 +25,22 @@ pub fn mining_solution(prev_block_hash: &Hash, pubkey: &PublicKey, nonce: &[u8])
     h.finalize().into()
 }
 
-/// Deterministic mining: derive signing keys from a master seed + nonce.
-pub(self) fn build_mining_tx_deterministic(
-    master_seed: [u8; 32],
+/// Mines a new transaction to a specified public key.
+pub fn build_mining_tx(
+    secret_key: &[u8; 32],
     prev_block_hash: &Hash,
     prev_tx_hash: &TransactionHash,
     lead_utxo: &Output,
-    max_attempts: usize,
+    range: Range<usize>,
 ) -> Option<(SigningKey, Transaction)> {
     // Mask is stored in previous minting output's data
     let mask = lead_utxo.data;
 
-    let signing_key = SigningKey::from_bytes(&master_seed);
+    let signing_key = SigningKey::from_bytes(secret_key);
     let verifying_key = signing_key.verifying_key();
     let pk_bytes = verifying_key.to_bytes();
 
-    for attempt in 0..max_attempts {
+    for attempt in range {
         let mut nonce = [0u8; 32];
         nonce[..8].copy_from_slice(&attempt.to_be_bytes());
         let solution = mining_solution(prev_block_hash, &pk_bytes, &nonce);
@@ -80,27 +81,9 @@ pub(self) fn build_mining_tx_deterministic(
     None
 }
 
-/// Generate a random master seed and call deterministic miner.
-pub fn build_mining_tx(
-    prev_block_hash: &Hash,
-    prev_tx_hash: &TransactionHash,
-    lead_utxo: &Output,
-    max_attempts: usize,
-) -> Option<(SigningKey, Transaction)> {
-    let mut csprng = OsRng;
-    let mut seed_bytes = [0u8; 32];
-    csprng.try_fill_bytes(&mut seed_bytes).ok()?;
-    build_mining_tx_deterministic(
-        seed_bytes,
-        prev_block_hash,
-        prev_tx_hash,
-        lead_utxo,
-        max_attempts,
-    )
-}
-
 /// Build the next block by mining a valid mining transaction and assembling the block.
 pub fn build_next_block<L: Indexer>(
+    secret_key: &[u8; 32],
     indexer: &L,
     max_attempts: usize,
 ) -> Option<(SigningKey, crate::block::Block)> {
@@ -111,10 +94,11 @@ pub fn build_next_block<L: Indexer>(
 
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let (signing_key, mining_tx) = build_mining_tx(
+        secret_key,
         &prev_block_hash,
         &lead_utxo_id.tx_hash,
         &lead_utxo,
-        max_attempts,
+        0..max_attempts,
     )?;
 
     // Create a new block.
@@ -147,12 +131,12 @@ mod tests {
         let prev_block_hash = [0u8; 32];
 
         // We only need a single attempt because the mask accepts any pubkey.
-        let result = build_mining_tx_deterministic(
-            [0u8; 32],
+        let result = build_mining_tx(
+            &[0u8; 32],
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
-            1,
+            0..1,
         );
         assert!(
             result.is_some(),
@@ -192,12 +176,12 @@ mod tests {
         let prev_tx_hash = funding_tx.hash();
         let prev_block_hash = [0u8; 32];
 
-        let tx_opt = build_mining_tx_deterministic(
-            [0u8; 32],
+        let tx_opt = build_mining_tx(
+            &[0u8; 32],
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
-            0,
+            0..1,
         );
         assert!(tx_opt.is_none(), "Expected None when max_attempts is zero");
     }
@@ -228,12 +212,12 @@ mod tests {
         let master_seed = [0u8; 32];
 
         let start = Instant::now();
-        let result = build_mining_tx_deterministic(
-            master_seed,
+        let result = build_mining_tx(
+            &master_seed,
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
-            max_attempts,
+            0..max_attempts,
         );
         let elapsed = start.elapsed();
 

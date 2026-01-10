@@ -7,19 +7,10 @@ edition = "2024"
 # Local workspace crates
 eupp-core = { path = "../eupp-core" }
 eupp-rpc = { path = "../eupp-rpc" }
-
-# RPC client
+ed25519-dalek = { version = "3.0.0-pre.3", features = ["rand_core"] }
 jsonrpsee = { version = "0.22", features = ["client"] }
-
-# Async runtime + utilities
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-
-# (De)serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Utilities
+# serde = { version = "1.0", features = ["derive"] }
+# serde_json = "1.0"
 hex = "0.4"
-
-# Optional - helpful for simple error handling in the CLI implementation
 anyhow = "1.0"

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
     Hash,
@@ -8,7 +8,6 @@ use crate::{
 
 #[derive(Clone)]
 pub(crate) struct UtxoEntry {
-    spent: bool,
     pub block_hash: Hash,
     pub output: Output,
 }
@@ -42,20 +41,20 @@ impl InMemoryIndexer {
         }
     }
 
-    fn apply_block_to_utxo_set(&mut self, block: &Block) -> Result<(), BlockError> {
-        let block_hash = block.header().hash();
-        for tx in &block.transactions {
-            for input in &tx.inputs {
+    fn apply_block_to_utxo_set(
+        &mut self,
+        block: &Block,
+        metadata: &BlockMetadata,
+    ) -> Result<(), BlockError> {
+        let block_hash = metadata.hash;
+        for (tx_index, tx) in block.transactions.iter().enumerate() {
+            for (input_index, input) in tx.inputs.iter().enumerate() {
+                // We skip the coinbase transaction's first input
+                if tx_index == 0 && input_index == 0 {
+                    continue;
+                }
                 let output_id = input.output_id;
-                if let Some(entry) = self.utxo_set.get_mut(&output_id) {
-                    // Double spending occurs when the same output is spent multiple times in the same branch
-                    if entry.spent && entry.block_hash != block.prev_block_hash {
-                        return Err(BlockError::TransactionError(TransactionError::DoubleSpend(
-                            output_id,
-                        )));
-                    }
-                    entry.spent = true;
-                } else {
+                if self.utxo_set.remove(&output_id).is_none() {
                     return Err(BlockError::TransactionError(
                         TransactionError::InvalidOutput(output_id),
                     ));
@@ -67,7 +66,6 @@ impl InMemoryIndexer {
                 self.utxo_set.insert(
                     OutputId::new(tx_id, i as u8),
                     UtxoEntry {
-                        spent: false,
                         block_hash,
                         output: output.clone(),
                     },
@@ -75,6 +73,21 @@ impl InMemoryIndexer {
             }
         }
         Ok(())
+    }
+
+    fn delete_branch(&mut self, tip: &Hash, root: &Hash) {
+        let blocks = self
+            .metadata_iter_from(tip)
+            .map(|meta| meta.hash)
+            .take_while(|hash| hash != root)
+            .collect::<HashSet<_>>();
+
+        for block in &blocks {
+            self.block_index.remove(block);
+        }
+
+        self.utxo_set
+            .retain(|_, entry| blocks.contains(&entry.block_hash));
     }
 }
 
@@ -126,16 +139,21 @@ impl Indexer for InMemoryIndexer {
         block.verify(self)?;
 
         // Update the UTXO Set (Spend inputs, add new outputs)
-        self.apply_block_to_utxo_set(&block)?;
+        self.apply_block_to_utxo_set(&block, &metadata)?;
 
-        // Update Tip if this chain is now heavier
-        if total_supply
-            >= self
-                .block_index
-                .get(&self.tip)
-                .map(|meta| meta.available_supply)
-                .unwrap_or(0)
+        // Update Tip if this chain is now heavier or if there's no block for the tip
+        if self.block_index.get(&self.tip).is_none()
+            || total_supply
+                > self
+                    .block_index
+                    .get(&self.tip)
+                    .map(|meta| meta.available_supply)
+                    .unwrap()
         {
+            if metadata.prev_block_hash != self.tip {
+                let tip = self.tip;
+                self.delete_branch(&tip, &metadata.prev_block_hash);
+            }
             // Update the tip to the new metadata hash.
             self.tip = metadata.hash;
         }

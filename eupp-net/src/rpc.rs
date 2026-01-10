@@ -64,6 +64,16 @@ where
         tx: Transaction,
     ) -> Result<TransactionHash, ErrorObjectOwned> {
         let tx_hash = tx.hash();
+        {
+            let lg = self.ledger.read().unwrap();
+            tx.verify(&*lg).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    -32600,
+                    format!("Transaction verification failed: {:?}", e),
+                    None::<()>,
+                )
+            })?;
+        }
 
         // Send to the network loop to be gossiped
         let _ = self.tx_sender.send(tx).await;

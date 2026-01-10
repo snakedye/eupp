@@ -110,6 +110,14 @@ impl fmt::Debug for Input {
 }
 
 impl Input {
+    pub fn new_unsigned(output_id: OutputId, public_key: PublicKey) -> Self {
+        Self {
+            output_id,
+            signature: [0; 64],
+            public_key,
+            witness: vec![],
+        }
+    }
     pub fn new(output_id: OutputId, public_key: PublicKey, signature: Signature) -> Self {
         Self {
             output_id,
@@ -130,6 +138,10 @@ impl Input {
             public_key,
             witness,
         }
+    }
+    pub fn with_signature(mut self, signature: Signature) -> Self {
+        self.signature = signature;
+        self
     }
 }
 
@@ -385,6 +397,7 @@ impl Transaction {
 
         for (i, input) in self.inputs.iter().enumerate() {
             let vm = Vm::new(indexer, i, self);
+
             // Lookup referenced utxo
             let utxo = indexer
                 .get_utxo(&input.output_id)
