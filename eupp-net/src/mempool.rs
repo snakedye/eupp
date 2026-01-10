@@ -12,6 +12,7 @@ pub trait Mempool: Send + Sync {
     fn add<L: Indexer>(&mut self, tx: Transaction, indexer: &L) -> Result<(), MempoolError>;
     fn get_transactions(&self) -> impl Iterator<Item = Transaction>;
     fn remove_transactions(&mut self, tx_hashes: impl IntoIterator<Item = TransactionHash>);
+    fn clear(&mut self);
 }
 
 pub struct SimpleMempool {
@@ -46,5 +47,9 @@ impl Mempool for SimpleMempool {
         for hash in tx_hashes {
             self.pending.remove(&hash);
         }
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
     }
 }

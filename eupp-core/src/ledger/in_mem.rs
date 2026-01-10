@@ -150,10 +150,6 @@ impl Indexer for InMemoryIndexer {
                     .map(|meta| meta.available_supply)
                     .unwrap()
         {
-            if metadata.prev_block_hash != self.tip {
-                let tip = self.tip;
-                self.delete_branch(&tip, &metadata.prev_block_hash);
-            }
             // Update the tip to the new metadata hash.
             self.tip = metadata.hash;
         }
