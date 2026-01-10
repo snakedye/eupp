@@ -39,7 +39,6 @@ use rpc::EuppRpcImpl;
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
 
@@ -60,11 +59,10 @@ pub struct EuppNode<L: Ledger, M: Mempool> {
     mempool: Arc<RwLock<M>>,
     secret_key: SecretKey,
 
-    // In-memory sync state
-    is_syncing: Arc<AtomicBool>,
     // A map of peers and their last advertised chain tip.
+    sync_target: Arc<RwLock<Option<PeerId>>>,
     peers_sync_state: HashMap<PeerId, PeerSyncState>,
-    sync_target: Option<PeerId>,
+
     // The queue of block hashes to be fetched from peers.
     block_fetch_queue: Vec<Hash>,
 }
@@ -75,11 +73,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             secret_key: SecretKey::generate(),
             ledger: Arc::new(RwLock::new(ledger)),
             mempool: Arc::new(RwLock::new(mempool)),
-            is_syncing: Arc::new(AtomicBool::new(false)),
             block_fetch_queue: Vec::new(),
             peers_sync_state: HashMap::new(),
-            sync_target: None,
+            sync_target: Arc::new(RwLock::new(None)),
         }
+    }
+
+    fn is_syncing(&self) -> bool {
+        self.sync_target.read().unwrap().is_some()
     }
 
     /// Handles incoming gossip messages.
@@ -104,7 +105,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                 }
             }
             GossipMessage::NewBlock(block) => {
-                if !self.is_syncing.load(Ordering::SeqCst) {
+                if !self.is_syncing() {
                     let added_res;
                     {
                         let mut lg = self.ledger.write().unwrap();
@@ -255,8 +256,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         SyncResponse::BlocksHash(hashes) => {
                             if hashes.len() <= 1 {
                                 println!("Syncing done.");
-                                self.is_syncing.store(false, Ordering::SeqCst);
-                                self.sync_target = None;
+                                *self.sync_target.write().unwrap() = None;
                                 return;
                             }
                             self.block_fetch_queue = hashes;
@@ -270,9 +270,8 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                             );
                         }
                         SyncResponse::Blocks(blocks) => {
-                            let (is_syncing, sync_peer) =
-                                (self.is_syncing.load(Ordering::SeqCst), self.sync_target);
-                            if is_syncing && Some(peer) == sync_peer {
+                            let sync_peer = *self.sync_target.read().unwrap();
+                            if Some(peer) == sync_peer {
                                 let mut lg = self.ledger.write().unwrap();
                                 for block in blocks.iter().rev() {
                                     match lg.add_block(block) {
@@ -285,8 +284,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                         // Terminate sync if there's an invalid proof of chain.
                                         Err(BlockError::ChallengeError) => {
                                             eprintln!("Invalid proof of work!");
-                                            self.is_syncing.store(false, Ordering::SeqCst);
-                                            self.sync_target = None;
+                                            *self.sync_target.write().unwrap() = None;
                                             return;
                                         }
                                         _ => {}
@@ -354,7 +352,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
     ) {
         println!("Broadcasting GetChainTip request");
         // Clear provisional sync target; we'll select the best peer after tip responses arrive.
-        self.sync_target = None;
+        *self.sync_target.write().unwrap() = None;
 
         // Broadcast GetChainTip over gossipsub
         let msg = GossipMessage::GetChainTip;
@@ -382,8 +380,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             "Initiating sync with peer {}, starting from their tip",
             peer_id,
         );
-        self.is_syncing.store(true, Ordering::SeqCst);
-        self.sync_target = Some(peer_id);
+        *self.sync_target.write().unwrap() = Some(peer_id);
         let lg = self.ledger.read().unwrap();
         let to = lg.get_last_block_metadata().map(|meta| meta.hash);
 
@@ -436,7 +433,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         tokio::spawn(start_rpc_server(Arc::clone(&self.ledger), rpc_tx_sender));
 
         let ledger = Arc::clone(&self.ledger);
-        let is_synching = Arc::clone(&self.is_syncing);
+        let sync_target_miner = Arc::clone(&self.sync_target);
         let mut secret_key = [0; 32];
         secret_key.copy_from_slice(self.secret_key.as_ref());
 
@@ -449,7 +446,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             // Sleep for 5 seconds before starting the loop
             tokio::time::sleep(Duration::from_secs(5)).await;
             loop {
-                if is_synching.load(Ordering::SeqCst) {
+                if sync_target_miner.read().unwrap().is_some() {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
@@ -513,7 +510,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                 _ = sync_check_interval.tick() => {
                     // When the sync check interval ticks, broadcast GetChainTip so peers can advertise.
                     // After a short gathering timeout we will pick the best peer and request block hashes.
-                    if !self.is_syncing.load(Ordering::SeqCst) {
+                    if !self.is_syncing() {
                         self.request_chain_tip_and_schedule_timeout(
                             &mut swarm,
                             topic.clone(),
