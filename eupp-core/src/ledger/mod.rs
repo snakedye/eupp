@@ -8,7 +8,7 @@ use super::{
     transaction::{Output, OutputId},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 /// Represents metadata for a block in the ledger.
 pub struct BlockMetadata {
     /// The unique identifier of this block
@@ -71,6 +71,11 @@ pub trait Indexer {
     /// Retrieves metadata for a block identified by its hash.
     fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata>;
 
+    /// Checks if a transaction output is spent.
+    fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
+        self.get_utxo(output_id).is_none()
+    }
+
     /// Fetches an unspent transaction output (UTXO) by its identifier.
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
 
@@ -79,6 +84,14 @@ pub trait Indexer {
 
     /// Retrieves metadata for the most recently added block.
     fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
+
+    /// Retrieves the hash of the block containing the given transaction.
+    fn get_transaction_block_hash(
+        &self,
+        tx_hash: &super::transaction::TransactionHash,
+    ) -> Option<Hash> {
+        self.get_utxo_block_hash(&OutputId::new(*tx_hash, 0))
+    }
 
     fn metadata_iter(&self) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
@@ -139,5 +152,91 @@ pub trait Ledger: Indexer {
             current_hash: *hash,
             ledger: self,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MockIterator {
+        blocks: HashMap<Hash, Block>,
+        metadata: HashMap<Hash, BlockMetadata>,
+    }
+
+    impl Indexer for MockIterator {
+        fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
+            let hash = block.header().hash();
+            let lead_utxo = OutputId::new([0; 32], 0);
+            self.blocks.insert(hash, block.clone());
+            self.metadata.insert(
+                hash,
+                BlockMetadata {
+                    hash,
+                    prev_block_hash: block.prev_block_hash,
+                    height: 0,
+                    available_supply: 0,
+                    locked_supply: 0,
+                    lead_utxo,
+                },
+            );
+            Ok(())
+        }
+
+        fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata> {
+            self.metadata.get(hash).cloned()
+        }
+
+        fn get_utxo(&self, _output_id: &OutputId) -> Option<Output> {
+            None
+        }
+
+        fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
+            None
+        }
+
+        fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
+            self.metadata.values().last().cloned()
+        }
+    }
+
+    impl Ledger for MockIterator {
+        fn get_block(&self, hash: &Hash) -> Option<Block> {
+            self.blocks.get(hash).cloned()
+        }
+    }
+
+    #[test]
+    fn test_block_iter() {
+        let mut mock = MockIterator::default();
+        let genesis_hash = Hash::default();
+        let block = Block::new(0, genesis_hash);
+        let block_hash = block.header().hash();
+        mock.add_block(&block).unwrap();
+
+        let mut iter = mock.block_iter_from(&block_hash);
+        assert_eq!(iter.next().unwrap().header().hash(), block_hash);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_block_metadata_iter() {
+        let mut mock = MockIterator::default();
+        let block_hash = [1; 32];
+        let metadata = BlockMetadata {
+            hash: block_hash,
+            prev_block_hash: [0; 32],
+            height: 0,
+            available_supply: 0,
+            locked_supply: 0,
+            lead_utxo: OutputId::new([0; 32], 0),
+        };
+        mock.metadata.insert(block_hash, metadata);
+
+        let mut iter = mock.metadata_iter_from(&block_hash);
+        assert_eq!(iter.next().unwrap().hash, block_hash);
+        assert_eq!(iter.next(), None);
     }
 }

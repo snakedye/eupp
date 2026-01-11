@@ -10,7 +10,7 @@ pub enum MempoolError {
 
 pub trait Mempool: Send + Sync {
     fn add<L: Indexer>(&mut self, tx: Transaction, indexer: &L) -> Result<(), MempoolError>;
-    fn get_transactions(&self) -> Vec<Transaction>;
+    fn get_transactions(&self) -> impl Iterator<Item = Transaction>;
     fn remove_transactions(&mut self, tx_hashes: impl IntoIterator<Item = TransactionHash>);
 }
 
@@ -38,8 +38,8 @@ impl Mempool for SimpleMempool {
         Ok(())
     }
 
-    fn get_transactions(&self) -> Vec<Transaction> {
-        self.pending.values().cloned().collect()
+    fn get_transactions(&self) -> impl Iterator<Item = Transaction> {
+        self.pending.values().cloned()
     }
 
     fn remove_transactions(&mut self, tx_hashes: impl IntoIterator<Item = TransactionHash>) {
