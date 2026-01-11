@@ -17,13 +17,13 @@ use super::{BlockMetadata, Indexer, Ledger};
 /// Represents an in-memory implementation of a blockchain `Indexer`.
 pub struct InMemoryIndexer {
     /// Block metadata index
-    pub(crate) block_index: HashMap<Hash, BlockMetadata>,
+    block_index: HashMap<Hash, BlockMetadata>,
 
     // The complete set of unspent transaction outputs (UTXOs)
-    pub(crate) utxo_set: BTreeMap<OutputId, UtxoEntry>,
+    utxo_set: BTreeMap<OutputId, UtxoEntry>,
 
     /// Points to the block with the Maximum Accumulated Supply (MAS)
-    pub(crate) tip: Hash,
+    tip: Hash,
 }
 
 /// Represents an in-memory implementation of a blockchain `Ledger`.
