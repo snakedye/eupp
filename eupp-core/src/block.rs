@@ -118,9 +118,10 @@ impl Block {
                 .and_then(|tx| tx.outputs.first())
                 .map(|o| o.amount)
                 .unwrap_or_default();
+            let fees = self.fees(indexer);
             let old_supply = prev_lead_utxo.amount;
             let max_reward = calculate_reward(mask);
-            let min_supply = old_supply.saturating_sub(max_reward);
+            let min_supply = (old_supply + fees).saturating_sub(max_reward);
             if new_supply < min_supply || new_supply > old_supply {
                 return Err(BlockError::SupplyError {
                     min: min_supply,
@@ -146,6 +147,15 @@ impl Block {
         self.transactions
             .iter()
             .try_for_each(|tx| tx.verify(indexer).map_err(BlockError::TransactionError))
+    }
+
+    /// Calculates the total fees.
+    pub fn fees<L: Indexer>(&self, indexer: &L) -> u32 {
+        self.transactions
+            .iter()
+            .skip(1) // The mining transaction is not included in the fees calculation.
+            .map(|tx| tx.fee(indexer))
+            .sum()
     }
 
     /// Returns the lead (mint) UTXO if present.

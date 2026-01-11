@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use blake2::{Blake2s256, Digest};
 
 use ed25519_dalek::{Signer, SigningKey};
@@ -26,13 +24,16 @@ pub fn mining_solution(prev_block_hash: &Hash, pubkey: &PublicKey, nonce: &[u8])
 }
 
 /// Mines a new transaction to a specified public key.
-pub fn build_mining_tx(
+pub fn build_mining_tx<R>(
     secret_key: &[u8; 32],
     prev_block_hash: &Hash,
     prev_tx_hash: &TransactionHash,
     lead_utxo: &Output,
-    range: Range<usize>,
-) -> Option<(SigningKey, Transaction)> {
+    range: R,
+) -> Option<(SigningKey, Transaction)>
+where
+    R: IntoIterator<Item = usize>,
+{
     // Mask is stored in previous minting output's data
     let mask = lead_utxo.data;
 
