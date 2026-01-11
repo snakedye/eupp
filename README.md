@@ -73,11 +73,23 @@ Miners can use a deterministic approach by deriving signing keys from a master s
 
 ### 4.3 Difficulty-Based Rewards
 
-The difficulty (`D`) is determined by the number of 1-bits in the mask. The reward grows exponentially to incentivize solving harder masks:
+The block reward $R(d)$ is calculated as an asymptotic curve where the reward starts at $m$ and approaches $M$ as difficulty $d$ increases.
 
-```
-R(D) = min(1000000, 2^(floor(D/4)))
-```
+$$R(d) = M - \left\lfloor \frac{M - m}{2^{\lfloor d / H \rfloor}} \cdot (0.978)^{d \pmod H} \right\rfloor$$
+
+#### Variables & Constants
+
+- **d**: The difficulty, defined as the population count (number of set bits) in the 32-byte mask.
+- **M**: `MAX_REWARD` (`1,000,000`).
+- **m**: `MIN_REWARD` (`1`).
+- **H**: `HALF_LIFE` (`32` bits).
+- **0.978**: The bitwise decay factor (derived from the $978/1000$ scaling).
+
+#### Logic
+The function calculates the "gap" between the current difficulty and the maximum possible reward:
+1.  **Macro Scaling**: Every $H$ (32) bits of difficulty halves the remaining gap ($2^{\lfloor d / H \rfloor}$).
+2.  **Micro Scaling**: For every individual bit ($d \pmod H$), the gap is reduced by approximately $2.2\%$ ($0.978$ multiplier) to create a smooth transition between half-life steps.
+3.  **Final Reward**: The resulting gap is subtracted from the `MAX_REWARD` and clamped to ensure it never falls below `MIN_REWARD`.
 
 ### 4.4 High-Frequency & Dynamic Fee Market Optimization
 
