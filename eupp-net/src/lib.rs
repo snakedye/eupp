@@ -1,19 +1,4 @@
-/*
-aupp/eupp-net/src/lib.rs
-
-Refactored sync flow:
-- Periodically broadcast `GossipMessage::GetChainTip` (unconditionally when the sync interval ticks).
-- After a short chain-tip gathering timeout, pick the peer with highest supply (based on ChainTip gossip)
-  and request `GetBlocksHash` via request-response to begin block sync.
-- ChainTip is now a gossip message (advertised over gossipsub) instead of a request-response event.
-
-Notes:
-- The periodic tick now always triggers a GetChainTip gossip broadcast; we no longer require a
-  provisional peer to be selected before broadcasting.
-- Internal timeout notification uses an mpsc channel to avoid pinning Sleep inside the select loop.
-*/
-
-pub mod behavior;
+mod behavior;
 pub mod mempool;
 pub mod protocol;
 pub mod rpc;
@@ -42,11 +27,13 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
 
-/// The size of chunks of blocks to request during synchronization.
+/// The number of blocks to fetch in a single synchronization chunk.
 const BLOCKS_CHUNK_SIZE: usize = 16;
 
+/// Represents the synchronization state of a peer, including its advertised supply.
 #[derive(Clone, Debug)]
 struct PeerSyncState {
+    /// The total supply advertised by the peer.
     supply: u32,
 }
 
@@ -55,6 +42,7 @@ enum InternalEvent {
     ChainTipTimeout,
 }
 
+/// Represents the main node in the Eupp network, managing the ledger, mempool, and networking behavior.
 pub struct EuppNode<L: Ledger, M: Mempool> {
     /// The ledger that maintains the blockchain state.
     ledger: Arc<RwLock<L>>,
@@ -76,6 +64,7 @@ pub struct EuppNode<L: Ledger, M: Mempool> {
 }
 
 impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
+    /// Creates a new instance of `EuppNode` with the given ledger and mempool.
     pub fn new(ledger: L, mempool: M) -> Self {
         Self {
             secret_key: SecretKey::generate(),
@@ -87,11 +76,12 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         }
     }
 
+    /// Checks if the node is currently in a synchronization state.
     fn is_syncing(&self) -> bool {
         self.sync_target.read().unwrap().is_some()
     }
 
-    /// Handles incoming gossip messages.
+    /// Handles incoming gossip messages and processes them based on their type.
     async fn handle_gossip_message(
         &mut self,
         message: gossipsub::Message,
@@ -199,7 +189,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         }
     }
 
-    /// Handles request-response protocol events for synchronization.
+    /// Handles synchronization events from the request-response protocol.
     async fn handle_sync_event(
         &mut self,
         event: request_response::Event<SyncRequest, SyncResponse>,
@@ -399,6 +389,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             .send_request(&peer_id, SyncRequest::GetBlocksHash { from: None, to });
     }
 
+    /// Runs the main event loop for the node, handling network events and synchronization.
     pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut swarm = SwarmBuilder::with_new_identity()
             .with_tokio()
@@ -430,11 +421,11 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-        // Set up channels for mining and rpc
+        // Set up channels for mining and RPC communication
         let (block_sender, mut block_receiver) = mpsc::channel(10);
         let (rpc_tx_sender, mut rpc_tx_receiver) = mpsc::channel(32);
 
-        // Internal channel for background-to-main notifications (chain tip timeout)
+        // Internal channel for notifications like chain tip timeouts
         let (internal_tx, mut internal_rx) = mpsc::channel(8);
 
         // Spawn the RPC server
@@ -451,7 +442,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         );
 
         tokio::spawn(async move {
-            // Sleep for 5 seconds before starting the loop
+            // Delay to allow initial setup before starting the loop
             tokio::time::sleep(Duration::from_secs(5)).await;
             loop {
                 if sync_target_miner.read().unwrap().is_some() {
@@ -466,7 +457,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     })
                 };
                 let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await; // Retry after a short delay
                     continue;
                 };
                 let start = OsRng.try_next_u64().unwrap() as usize;
@@ -493,10 +484,11 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             }
         });
 
-        let mut sync_check_interval = tokio::time::interval(Duration::from_secs(7));
+        let mut sync_check_interval = tokio::time::interval(Duration::from_secs(7)); // Periodic sync check
         let chain_tip_to_blocks_timeout = Duration::from_secs(3);
 
         loop {
+            // Main event loop
             tokio::select! {
                 event = swarm.select_next_some() => match event {
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Mdns(event)) => {
@@ -516,8 +508,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     _ => {}
                 },
                 _ = sync_check_interval.tick() => {
-                    // When the sync check interval ticks, broadcast GetChainTip so peers can advertise.
-                    // After a short gathering timeout we will pick the best peer and request block hashes.
+                    // Broadcast GetChainTip periodically to gather peer chain tips
                     if !self.is_syncing() {
                         self.request_chain_tip_and_schedule_timeout(
                             &mut swarm,
@@ -530,8 +521,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                 Some(ev) = internal_rx.recv() => {
                     match ev {
                         InternalEvent::ChainTipTimeout => {
-                            // After the chain-tip gathering phase, pick the peer with highest supply
-                            // and start block-hash request if we're not syncing.
+                            // Pick the best peer after gathering chain tips and start syncing
                             if let Some((peer, _)) = self.find_sync_target() {
                                 println!("ChainTip gathering complete, initiating sync with {}", peer);
                                 self.initiate_sync(&mut swarm, peer);
@@ -539,14 +529,14 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         }
                     }
                 }
-                // Handle transactions submitted from the RPC
+                // Process transactions submitted via RPC
                 Some(tx) = rpc_tx_receiver.recv() => {
                     let mut mp = self.mempool.write().unwrap();
                     let ledger = self.ledger.read().unwrap();
                     match mp.add(tx.clone(), &*ledger) {
                         Ok(_) => {
                             println!("-> Gossiping Tx {} from RPC", hex::encode(tx.hash()));
-                            let msg = GossipMessage::Transaction(tx);
+                            let msg = GossipMessage::Transaction(tx); // Broadcast transaction via gossip
                             if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap()) {
                                 eprintln!("Failed to publish RPC tx: {:?}", e);
                             }
@@ -560,7 +550,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     {
                         let mp = self.mempool.read().unwrap();
                         let remaining = 1_000_000usize.saturating_sub(block.vsize());
-                        let selected = mp.get_transactions().scan(remaining, |remaining, tx| {
+                        let selected = mp.get_transactions().scan(remaining, |remaining, tx| { // Select transactions for the block
                             let tx_vsize = tx.vsize();
                             *remaining = remaining.saturating_sub(tx_vsize);
                             (*remaining > 0).then(|| tx)
@@ -577,7 +567,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                             let added_tx_hashes = block.transactions.iter().map(|tx| tx.hash());
                             mp.remove_transactions(added_tx_hashes);
 
-                            let msg = GossipMessage::NewBlock(block);
+                            let msg = GossipMessage::NewBlock(block); // Broadcast new block via gossip
                             let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap());
                         }
                         Err(BlockError::TransactionError(TransactionError::InvalidOutput(output))) => {
