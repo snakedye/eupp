@@ -181,9 +181,9 @@ mod tests {
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
-            0..1,
+            0..0,
         );
-        assert!(tx_opt.is_none(), "Expected None when max_attempts is zero");
+        assert_eq!(tx_opt, None, "Expected None when max_attempts is zero");
     }
 
     #[test]
