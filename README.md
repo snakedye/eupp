@@ -37,6 +37,14 @@ Each transaction input references a specific UTXO and provides the necessary cry
 
 The input structure ensures that only the rightful owner of a UTXO can spend it, while also supporting extensibility for programmable spending logic.
 
+### 2.4 The Lead UTXO Model
+
+The entire unmined supply of the network is held in a single, rotating "Lead UTXO."
+
+- **Sequentiality**: Every block must spend the Lead UTXO created by the previous block.
+- **Auditability**: Total circulating supply is always exactly `Initial Supply - Current Lead UTXO Balance`. 
+- **Fee Recycling**: Transaction fees are added back into the Lead UTXO balance, ensuring that the "mining reservoir" is replenished by the economy, allowing for a sustainable, infinite lifecycle.
+
 ## 3. Programmability: The EUPP VM
 
 EUPP supports three logic versions. While **v1** is a standard P2PK script where the spender reveals a **pk** to match a hash commitment, **v2** introduces a programmable bytecode environment, and **v3** extends this functionality with Segregated Witness (SegWit) support.
@@ -91,12 +99,21 @@ The function calculates the "gap" between the current difficulty and the maximum
 2.  **Micro Scaling**: For every individual bit ($d \pmod H$), the gap is reduced by approximately $2.2\%$ ($0.978$ multiplier) to create a smooth transition between half-life steps.
 3.  **Final Reward**: The resulting gap is subtracted from the `MAX_REWARD` and clamped to ensure it never falls below `MIN_REWARD`.
 
-### 4.4 High-Frequency & Dynamic Fee Market Optimization
+### 4.4 Market-Negotiated Equilibrium
 
-The decoupling of Proof of Work from the block's transaction set enables EUPP to function as a high-frequency clearing house with a highly efficient fee market:
+Because the miner of Block $N$ sets the difficulty for Block $N+1$, the network operates on a value-driven equilibrium:
+- **High Activity**: Users pay higher fees to be included in the sequential Lead UTXO transition.
+- **Miner Response**: Miners set higher difficulties to claim higher asymptotic rewards and secure the high-value chain.
+- **System Stability**: Block times naturally fluctuate based on the difficulty chosen by the market, rather than a hardcoded protocol constant.
 
-* **Zero-Latency Hashing**: Unlike sequential systems (e.g., Bitcoin) where adding a transaction changes the Merkle Root and invalidates current hashing progress, EUPP allows miners to run hashing hardware at 100% capacity continuously. Transaction selection occurs in parallel, removing the "hashing penalty" for being inclusive.
-* **Just-In-Time (JIT) Fee Selection**: Miners can find a valid `nonce` first and then "fill" the block with the most profitable transactions from the mempool at the exact millisecond before broadcasting. This ensures that blocks always reflect the most current, highest-value state of the fee market.
-* **Reduced "Empty Block" Pressure**: In traditional PoW, miners often broadcast empty blocks to avoid the "dead time" spent validating a previous block's transactions before starting a new hash search. In EUPP, the parallel nature of block construction allows miners to start hashing the next height immediately while their node assembles the transaction list in the background, minimizing the necessity of empty blocks.
-* **Dynamic Transaction Heartbeat**: The Chained Mask difficulty is adjusted block-by-block by the previous miner. This allows the network to potentially respond to high-frequency traffic bursts by adjusting difficulty and reward incentives dynamically through the transaction graph itself.
-* **Confirmation Pipeline**: While construction is parallel, cryptographic security follows a "one-block lag". Block  transactions are effectively "sealed" by the PoW of Block , creating a pipelined validation structure optimized for high-throughput stream processing.
+### 4.5 Technical Architecture
+
+#### Supply Preservation
+
+Block validation enforces strict supply preservation. A block is only valid if the new Lead UTXO balance ($S_{next}$) satisfies:
+$$S_{next} = S_{prev} + \sum \text{Fees} - \text{Reward}$$
+This allows nodes to verify the entire block's economic integrity by auditing a single UTXO transition.
+
+#### Virtual Size (vsize)
+
+To prevent ledger bloat and spam, blocks are limited to a virtual size of 1,000,000 bytes. Without a fee market, miners have no incentive to include transactions; implementing fees aligns miner incentives with network utility.
