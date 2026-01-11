@@ -42,6 +42,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
 
+/// The size of chunks of blocks to request during synchronization.
 const BLOCKS_CHUNK_SIZE: usize = 16;
 
 #[derive(Clone, Debug)]
@@ -55,15 +56,22 @@ enum InternalEvent {
 }
 
 pub struct EuppNode<L: Ledger, M: Mempool> {
+    /// The ledger that maintains the blockchain state.
     ledger: Arc<RwLock<L>>,
+
+    /// The mempool that holds transactions waiting to be included in a block.
     mempool: Arc<RwLock<M>>,
+
+    /// The secret key used for cryptographic operations, such as signing transactions or blocks.
     secret_key: SecretKey,
 
-    // A map of peers and their last advertised chain tip.
+    /// The current peer selected as the synchronization target, if any.
     sync_target: Arc<RwLock<Option<PeerId>>>,
+
+    /// A map that tracks the synchronization state of peers.
     peers_sync_state: HashMap<PeerId, PeerSyncState>,
 
-    // The queue of block hashes to be fetched from peers.
+    /// A queue of block hashes that need to be fetched from peers during synchronization.
     block_fetch_queue: Vec<Hash>,
 }
 
