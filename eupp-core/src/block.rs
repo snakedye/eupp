@@ -121,8 +121,9 @@ impl Block {
             let fees = self.fees(indexer);
             let old_supply = prev_lead_utxo.amount;
             let max_reward = calculate_reward(mask);
-            let min_supply = (old_supply + fees).saturating_sub(max_reward);
-            if new_supply < min_supply || new_supply > old_supply {
+            let max_supply = old_supply + fees;
+            let min_supply = max_supply.saturating_sub(max_reward);
+            if new_supply < min_supply || new_supply > max_supply {
                 return Err(BlockError::SupplyError {
                     min: min_supply,
                     actual: new_supply,
