@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::{
     Hash,
     block::{Block, BlockError},
-    transaction::{Output, OutputId, TransactionError, Version},
+    transaction::{Output, OutputId, TransactionError},
 };
 
 #[derive(Clone)]
@@ -75,7 +75,7 @@ impl InMemoryIndexer {
         Ok(())
     }
 
-    fn delete_branch(&mut self, tip: &Hash, root: &Hash) {
+    fn uproot(&mut self, tip: &Hash, root: &Hash) {
         let blocks = self
             .metadata_iter_from(tip)
             .map(|meta| meta.hash)
@@ -143,15 +143,21 @@ impl Indexer for InMemoryIndexer {
         // Update the UTXO Set (Spend inputs, add new outputs)
         self.apply_block_to_utxo_set(&block, &metadata)?;
 
+        let current_prev_metadata = self.block_index.get(&self.tip);
+
         // Update Tip if this chain is now heavier or if there's no block for the tip
         if self.block_index.get(&self.tip).is_none()
             || total_supply
-                > self
-                    .block_index
-                    .get(&self.tip)
+                > current_prev_metadata
                     .map(|meta| meta.available_supply)
                     .unwrap()
         {
+            if let Some(root) = current_prev_metadata
+                .map(|meta| meta.prev_block_hash)
+                .filter(|hash| block.prev_block_hash.eq(hash))
+            {
+                self.uproot(&self.tip.clone(), &root);
+            }
             // Update the tip to the new metadata hash.
             self.tip = metadata.hash;
         }
@@ -172,11 +178,17 @@ impl Indexer for InMemoryIndexer {
 
     fn get_utxos(&self, query: &super::Query) -> Vec<(OutputId, Output)> {
         // Only works for V1 outputs
-        let set = &query.addresses;
+        let addresses = query.addresses();
+        // This is to only fetch UTXOs in the canonical branch.
+        let blocks: HashSet<_> = self
+            .metadata_iter()
+            .map(|meta| meta.hash)
+            .take_while(|hash| Some(hash) != query.from.as_ref())
+            .collect();
         self.utxo_set
             .iter()
             .filter(|(_, entry)| {
-                set.contains(&entry.output.commitment) && entry.output.version == Version::V1
+                addresses.contains(&entry.output.commitment) && blocks.contains(&entry.block_hash)
             })
             .map(|(id, entry)| (*id, entry.output))
             .collect()

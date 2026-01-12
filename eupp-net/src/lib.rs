@@ -255,13 +255,13 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                                 hex::encode(block.header().hash())
                                             );
                                         }
-                                        // Terminate sync if there's an invalid proof of chain.
+                                        // Terminate sync if there's an invalid proof of work.
                                         Err(BlockError::ChallengeError) => {
                                             eprintln!("Invalid proof of work!");
                                             *self.sync_target.write().unwrap() = None;
                                             return;
                                         }
-                                        Err(err) => println!("Failed to sync {:?}", err),
+                                        _ => {}
                                     }
                                 }
                                 // If there are no pending blocks, send a request to continue syncing
@@ -324,7 +324,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         internal_tx: mpsc::Sender<InternalEvent>,
         timeout: Duration,
     ) {
-        println!("Broadcasting GetChainTip request");
+        // println!("Broadcasting GetChainTip request");
         // Clear provisional sync target; we'll select the best peer after tip responses arrive.
         *self.sync_target.write().unwrap() = None;
 
@@ -446,7 +446,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                 .await
                 .unwrap();
                 if let Some((_key, mining_tx)) = result {
-                    println!("Mining Transaction: {}", hex::encode(mining_tx.hash()));
+                    // println!("Mining Transaction: {}", hex::encode(mining_tx.hash()));
                     let mut block = Block::new(0, prev_block_hash);
                     block.transactions.push(mining_tx);
                     if block_sender.send(block).await.is_err() {
@@ -508,9 +508,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         Ok(_) => {
                             println!("-> Gossiping Tx {} from RPC", hex::encode(tx.hash()));
                             let msg = GossipMessage::Transaction(tx); // Broadcast transaction via gossip
-                            if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap()) {
-                                eprintln!("Failed to publish RPC tx: {:?}", e);
-                            }
+                            let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap());
                         }
                         Err(e) => {
                             eprintln!("Failed to add RPC tx to mempool: {:?}", e);
