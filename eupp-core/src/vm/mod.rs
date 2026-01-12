@@ -11,6 +11,7 @@ use blake2::Digest;
 use ed25519_dalek::Verifier;
 use op::Op;
 use scanner::Scanner;
+use serde::Serialize;
 use stack::{Stack, StackIter};
 
 use super::transaction::{Input, Output, Transaction, sighash};
@@ -69,7 +70,7 @@ pub const fn check_sig_script() -> &'static [u8] {
 }
 
 /// VM-level execution error kinds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExecError {
     pub(self) op: u8,
     pub(self) trace: Vec<u8>,
@@ -647,6 +648,10 @@ mod tests {
 
         fn get_utxo(&self, id: &OutputId) -> Option<Output> {
             self.utxos.get(id).copied()
+        }
+
+        fn get_utxos(&self, _query: &crate::ledger::Query) -> Vec<(OutputId, Output)> {
+            vec![]
         }
 
         fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {

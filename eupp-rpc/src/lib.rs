@@ -1,6 +1,7 @@
 use eupp_core::{
     Hash,
-    transaction::{Transaction, TransactionHash},
+    ledger::Query,
+    transaction::{Output, OutputId, Transaction, TransactionHash},
 };
 use jsonrpsee::{proc_macros::rpc, types::ErrorObjectOwned};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,8 @@ pub struct NetworkInfo {
     pub tip_height: u64,
     pub available_supply: u64,
 }
+
+pub type OutputEntry = (OutputId, Output);
 
 #[rpc(server, client, namespace = "eupp")]
 pub trait EuppRpc {
@@ -31,4 +34,8 @@ pub trait EuppRpc {
         &self,
         tx: Transaction,
     ) -> Result<TransactionHash, ErrorObjectOwned>;
+
+    /// Returns the UTXOs matching the query.
+    #[method(name = "getUtxosForAddresses")]
+    async fn get_utxos(&self, query: Query) -> Result<Vec<OutputEntry>, ErrorObjectOwned>;
 }

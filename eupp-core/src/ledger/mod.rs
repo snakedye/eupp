@@ -1,6 +1,8 @@
 mod in_mem;
+mod query;
 
 pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
+pub use query::Query;
 
 use crate::block::BlockHeader;
 
@@ -94,6 +96,8 @@ pub trait Indexer {
 
     /// Fetches an unspent transaction output (UTXO) by its identifier.
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
+
+    fn get_utxos(&self, query: &Query) -> Vec<(OutputId, Output)>;
 
     /// Fetches the block hash of a UTXO by its identifier.
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
@@ -208,6 +212,10 @@ mod tests {
 
         fn get_utxo(&self, _output_id: &OutputId) -> Option<Output> {
             None
+        }
+
+        fn get_utxos(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+            vec![]
         }
 
         fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {

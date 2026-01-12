@@ -3,8 +3,9 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use ed25519_dalek::{Signer, SigningKey};
-use eupp_core::Hash;
-use eupp_core::transaction::{Input, Output, OutputId, Transaction, sighash};
+use eupp_core::ledger::Query;
+use eupp_core::transaction::{Input, Output, Transaction, sighash};
+use eupp_core::{Hash, commitment};
 use eupp_rpc::EuppRpcClient;
 use hex;
 use jsonrpsee::http_client::HttpClientBuilder;
@@ -20,14 +21,6 @@ struct Args {
     /// The secret key to sign the transaction with (hex-encoded).
     #[arg(long)]
     secret_key: String,
-
-    /// The hash of the transaction to spend (hex-encoded).
-    #[arg(long)]
-    tx_id: String,
-
-    /// The index of the output to spend in the transaction.
-    #[arg(long)]
-    index: u8,
 
     /// The public key of the recipient (hex-encoded). If not provided, sends back to self.
     #[arg(long)]
@@ -58,17 +51,14 @@ async fn main() -> Result<()> {
             .map_err(|_| anyhow::anyhow!("Invalid secret key length, expected 32 bytes"))?,
     );
     let public_key = signing_key.verifying_key().to_bytes();
+    let data = [0_u8; 32];
+    let address = commitment(&public_key, Some(data.as_slice()));
 
-    let prev_tx_hash = hex::decode(args.tx_id)?;
-    let prev_output_index = args.index;
-
-    let output_id = OutputId::new(
-        prev_tx_hash
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid tx_id length, expected 32 bytes"))?,
-        prev_output_index,
-    );
-    let input = Input::new_unsigned(output_id, public_key);
+    // Fetch UTXOs
+    let query = Query::new().with_address(address);
+    let utxos = http_client.get_utxos(query).await.unwrap();
+    let balance: u64 = utxos.iter().map(|(_, output)| output.amount).sum();
+    println!("Address balance: {}", balance);
 
     // Determine recipient
     let recipient_pubkey = if let Some(remote_pubkey_hex) = args.remote_pubkey {
@@ -80,13 +70,21 @@ async fn main() -> Result<()> {
     };
 
     // Create a single output sending the specified amount with dummy data.
-    let data: Hash = [3u8; 32];
+    let data: Hash = [0u8; 32];
     let to_remote = Output::new_v1(args.amount, &recipient_pubkey, &data);
-    let outputs = vec![to_remote];
-    let sighash = sighash([&output_id], &outputs);
+    let to_self = Output::new_v1(balance - args.amount, &public_key, &data);
+    let outputs = vec![to_remote, to_self];
+
+    // Construct the signature
+    let sighash = sighash(utxos.iter().map(|(output_id, _)| output_id), &outputs);
     let signature = signing_key.sign(&sighash);
 
-    let tx = Transaction::new(vec![input.with_signature(signature.to_bytes())], outputs);
+    // Create inputs
+    let inputs = utxos
+        .iter()
+        .map(|(output_id, _)| Input::new(*output_id, public_key, signature.to_bytes()))
+        .collect();
+    let tx = Transaction::new(inputs, outputs);
 
     // Print transaction hash locally
     let tx_hash = tx.hash();

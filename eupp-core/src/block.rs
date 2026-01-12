@@ -9,6 +9,9 @@ use super::{
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
 
+/// The maximum block size.
+pub const MAX_BLOCK_SIZE: usize = 1_000_000;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub version: u8,
@@ -129,22 +132,24 @@ impl Block {
                     actual: new_supply,
                 });
             }
-            let total_in = self.transactions[0]
+
+            // We verify the supply preservation on the mining transaction.
+            let total_input = self.transactions[0]
                 .inputs
                 .iter()
                 .filter_map(|input| indexer.get_utxo(&input.output_id))
                 .map(|output| output.amount)
                 .sum();
-            let total_out = self.transactions[0]
+            let total_output = self.transactions[0]
                 .outputs
                 .iter()
                 .map(|output| output.amount)
                 .sum();
-            if total_out > total_in + fees {
+            if total_output > total_input + fees {
                 return Err(BlockError::TransactionError(
                     crate::transaction::TransactionError::InvalidBalance {
-                        total_input: total_in,
-                        total_output: total_out,
+                        total_input,
+                        total_output,
                     },
                 ));
             }
@@ -160,7 +165,7 @@ impl Block {
 
         let vsize = self.vsize();
         // Check if the block virtual size exceeds 1 megabyte
-        if vsize > 1_000_000 {
+        if vsize > MAX_BLOCK_SIZE {
             return Err(BlockError::InvalidBlockSize(vsize));
         }
 

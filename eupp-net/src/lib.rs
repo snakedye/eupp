@@ -261,7 +261,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                             *self.sync_target.write().unwrap() = None;
                                             return;
                                         }
-                                        _ => {}
+                                        Err(err) => println!("Failed to sync {:?}", err),
                                     }
                                 }
                                 // If there are no pending blocks, send a request to continue syncing

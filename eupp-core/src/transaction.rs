@@ -59,15 +59,15 @@ pub struct Output {
     /// Protocol version used for the output.
     pub(crate) version: Version,
     /// Amount of the output.
-    pub(crate) amount: u64,
+    pub amount: u64,
     /// Data associated with the output.
-    pub(crate) data: Hash,
+    pub data: Hash,
     /// The hash of the public key.
-    pub(crate) commitment: Hash,
+    pub commitment: Hash,
 }
 
 /// Error type for transaction validation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),

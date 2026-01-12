@@ -3,10 +3,10 @@ use tokio::sync::mpsc;
 
 use async_trait::async_trait;
 use eupp_core::{
-    ledger::Ledger,
+    ledger::{Ledger, Query},
     transaction::{Transaction, TransactionHash},
 };
-use eupp_rpc::{EuppRpcServer, NetworkInfo};
+use eupp_rpc::{EuppRpcServer, NetworkInfo, OutputEntry};
 use jsonrpsee::types::ErrorObjectOwned;
 
 /// The server-side implementation of the `EuppRpc`.
@@ -67,11 +67,7 @@ where
         {
             let lg = self.ledger.read().unwrap();
             tx.verify(&*lg).map_err(|e| {
-                ErrorObjectOwned::owned(
-                    -32600,
-                    format!("Transaction verification failed: {:?}", e),
-                    None::<()>,
-                )
+                ErrorObjectOwned::owned(-32600, "Transaction verification failed", Some(e))
             })?;
         }
 
@@ -79,5 +75,10 @@ where
         let _ = self.tx_sender.send(tx).await;
 
         Ok(tx_hash)
+    }
+
+    async fn get_utxos(&self, query: Query) -> Result<Vec<OutputEntry>, ErrorObjectOwned> {
+        let lg = self.ledger.read().unwrap();
+        Ok(lg.get_utxos(&query))
     }
 }

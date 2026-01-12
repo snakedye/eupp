@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::{
     Hash,
     block::{Block, BlockError},
-    transaction::{Output, OutputId, TransactionError},
+    transaction::{Output, OutputId, TransactionError, Version},
 };
 
 #[derive(Clone)]
@@ -170,6 +170,18 @@ impl Indexer for InMemoryIndexer {
             .map(|entry| entry.output.clone())
     }
 
+    fn get_utxos(&self, query: &super::Query) -> Vec<(OutputId, Output)> {
+        // Only works for V1 outputs
+        let set = &query.addresses;
+        self.utxo_set
+            .iter()
+            .filter(|(_, entry)| {
+                set.contains(&entry.output.commitment) && entry.output.version == Version::V1
+            })
+            .map(|(id, entry)| (*id, entry.output))
+            .collect()
+    }
+
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
         self.utxo_set.get(output_id).map(|entry| entry.block_hash)
     }
@@ -202,6 +214,10 @@ impl Indexer for FullInMemoryLedger {
 
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
         self.indexer.get_utxo(output_id)
+    }
+
+    fn get_utxos(&self, query: &super::Query) -> Vec<(OutputId, Output)> {
+        self.indexer.get_utxos(query)
     }
 
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
