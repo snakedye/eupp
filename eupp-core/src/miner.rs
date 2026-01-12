@@ -54,11 +54,11 @@ where
             };
             // Calculate block reward
             let reward = calculate_reward(&mask);
+            let new_supply = lead_utxo.amount.saturating_sub(reward);
 
             // Build outputs: new mint (carry forward mask) and miner reward
-            let new_mint_output =
-                Output::new_v0(lead_utxo.amount.saturating_sub(reward), &mask, &nonce);
-            let miner_reward_output = Output::new_v1(reward, &pk_bytes, &[0; 32]);
+            let new_mint_output = Output::new_v0(new_supply, &mask, &nonce);
+            let miner_reward_output = Output::new_v1(reward.min(new_supply), &pk_bytes, &[0; 32]);
             let outputs = vec![new_mint_output, miner_reward_output];
 
             // Compute sighash

@@ -45,9 +45,9 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
 }
 
 /// Calculate block reward using an asymptotic curve.
-pub fn calculate_reward(mask: &[u8; 32]) -> u32 {
-    const MAX_REWARD: u32 = 1_000_000;
-    const MIN_REWARD: u32 = 1;
+pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
+    const MAX_REWARD: u64 = 1_000_000;
+    const MIN_REWARD: u64 = 1;
     // Every 32 bits halves the distance to the cap.
     const HALF_LIFE: u32 = 32;
 
@@ -78,7 +78,7 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u32 {
     // Using fixed-point: gap = gap * (100 - 2) / 100 for each remainder bit
     let gap = (0..remainder_bits).fold(range / divisor, |gap, _| (gap * 978) / 1000);
 
-    let final_reward = MAX_REWARD.saturating_sub(gap as u32);
+    let final_reward = MAX_REWARD.saturating_sub(gap as u64);
 
     final_reward.max(MIN_REWARD)
 }

@@ -102,6 +102,7 @@ pub struct Vm<'a, L> {
 enum StackValue<'a> {
     U8(u8),
     U32(u32),
+    U64(u64),
     Bytes(&'a [u8]),
     Stream {
         iter: StackIter<'a, StackValue<'a>>,
@@ -113,7 +114,14 @@ enum StackValue<'a> {
 pub enum OwnedStackValue {
     U8(u8),
     U32(u32),
+    U64(u64),
     Bytes(Vec<u8>),
+}
+
+impl<'a> From<u64> for StackValue<'a> {
+    fn from(value: u64) -> Self {
+        StackValue::U64(value)
+    }
 }
 
 impl<'a> From<u32> for StackValue<'a> {
@@ -135,11 +143,20 @@ impl<'a> From<u8> for StackValue<'a> {
 }
 
 impl<'a> StackValue<'a> {
+    fn to_int(&self) -> Option<u64> {
+        match self {
+            StackValue::U8(b) => Some(*b as u64),
+            StackValue::U32(int) => Some(*int as u64),
+            StackValue::U64(int) => Some(*int as u64),
+            _ => None,
+        }
+    }
     /// Returns the length of the stack value in bytes.
     fn len(&self) -> usize {
         match self {
             StackValue::U8(_) => 1,
             StackValue::U32(_) => 4,
+            StackValue::U64(_) => 8,
             StackValue::Bytes(bytes) => bytes.len(),
             StackValue::Stream { iter, .. } => iter.map(|value| value.len()).sum(),
         }
@@ -148,6 +165,7 @@ impl<'a> StackValue<'a> {
         match self {
             StackValue::U8(value) => OwnedStackValue::U8(*value),
             StackValue::U32(value) => OwnedStackValue::U32(*value),
+            StackValue::U64(value) => OwnedStackValue::U64(*value),
             StackValue::Bytes(slice) => OwnedStackValue::Bytes(slice.to_vec()),
             StackValue::Stream { .. } => OwnedStackValue::Bytes(self.to_bytes()),
         }
@@ -157,6 +175,7 @@ impl<'a> StackValue<'a> {
             StackValue::U8(value) => vec![*value],
             StackValue::Bytes(bytes) => bytes.to_vec(),
             StackValue::U32(int) => int.to_be_bytes().to_vec(),
+            StackValue::U64(int) => int.to_be_bytes().to_vec(),
             StackValue::Stream { iter, len } => {
                 let mut bytes = Vec::new();
                 for value in iter.take(*len) {
@@ -188,6 +207,12 @@ impl<'a> StackValue<'a> {
                 slice[..len].copy_from_slice(&bytes[..len]);
                 len
             }
+            StackValue::U64(int) => {
+                let bytes = int.to_be_bytes();
+                let len = bytes.len().min(slice.len());
+                slice[..len].copy_from_slice(&bytes[..len]);
+                len
+            }
             StackValue::Stream { iter, len } => {
                 let mut written = 0;
                 for value in iter.take(*len) {
@@ -204,7 +229,7 @@ impl<'a> StackValue<'a> {
 
 impl Default for OwnedStackValue {
     fn default() -> Self {
-        Self::U32(0)
+        Self::U8(0)
     }
 }
 
@@ -346,7 +371,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 // The opcode should contain the index of the output to push.
                 Op::OutAmt(idx) => {
                     let output = self.get_outputs()[idx as usize];
-                    return self.exec(scanner, stack.push(StackValue::U32(output.amount)));
+                    return self.exec(scanner, stack.push(output.amount.into()));
                 }
                 Op::OutData(idx) => {
                     let output = self.get_outputs()[idx as usize];
@@ -445,6 +470,9 @@ impl<'a, L: Indexer> Vm<'a, L> {
                             StackValue::U32(data) => {
                                 blake2::Blake2s256::digest(&data.to_be_bytes())
                             }
+                            StackValue::U64(data) => {
+                                blake2::Blake2s256::digest(&data.to_be_bytes())
+                            }
                             StackValue::Stream { .. } => {
                                 blake2::Blake2s256::digest(&value.to_bytes())
                             }
@@ -469,21 +497,9 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 // Pops a,b pushes 1 if b>a (consistent with earlier spec)
                 Op::Greater => match stack.pop() {
                     Some((a, parent1)) => match parent1.pop() {
-                        Some((b, parent2)) => match (a, b) {
-                            (StackValue::U8(a), StackValue::U8(b)) => {
+                        Some((b, parent2)) => match (a.to_int(), b.to_int()) {
+                            (Some(a), Some(b)) => {
                                 let res = (b > a) as u8;
-                                return self.exec(scanner, parent2.push(res.into()));
-                            }
-                            (StackValue::U32(a), StackValue::U32(b)) => {
-                                let res = (b > a) as u8;
-                                return self.exec(scanner, parent2.push(res.into()));
-                            }
-                            (StackValue::U8(a), StackValue::U32(b)) => {
-                                let res = (b > a as u32) as u8;
-                                return self.exec(scanner, parent2.push(res.into()));
-                            }
-                            (StackValue::U32(a), StackValue::U8(b)) => {
-                                let res = (b as u32 > a) as u8;
                                 return self.exec(scanner, parent2.push(res.into()));
                             }
                             _ => return Err(ExecError::new(op, &stack)),
@@ -535,17 +551,8 @@ impl<'a, L: Indexer> Vm<'a, L> {
                     match stack.pop() {
                         Some((a, parent1)) => match parent1.pop() {
                             Some((b, parent2)) => {
-                                let sum = match (a, b) {
-                                    (StackValue::U32(a), StackValue::U32(b)) => b.wrapping_add(a),
-                                    (StackValue::U8(a), StackValue::U8(b)) => {
-                                        (b as u32).wrapping_add(a as u32)
-                                    }
-                                    (StackValue::U8(a), StackValue::U32(b)) => {
-                                        b.wrapping_add(a as u32)
-                                    }
-                                    (StackValue::U32(a), StackValue::U8(b)) => {
-                                        (b as u32).wrapping_add(a)
-                                    }
+                                let sum = match (a.to_int(), b.to_int()) {
+                                    (Some(a), Some(b)) => (b).wrapping_add(a),
                                     _ => return Err(ExecError::new(op, &stack)),
                                 };
                                 return self.exec(scanner, parent2.push(sum.into()));
@@ -560,17 +567,8 @@ impl<'a, L: Indexer> Vm<'a, L> {
                     match stack.pop() {
                         Some((a, parent1)) => match parent1.pop() {
                             Some((b, parent2)) => {
-                                let sum = match (a, b) {
-                                    (StackValue::U32(a), StackValue::U32(b)) => b.wrapping_sub(a),
-                                    (StackValue::U8(a), StackValue::U8(b)) => {
-                                        (b as u32).wrapping_sub(a as u32)
-                                    }
-                                    (StackValue::U8(a), StackValue::U32(b)) => {
-                                        b.wrapping_sub(a as u32)
-                                    }
-                                    (StackValue::U32(a), StackValue::U8(b)) => {
-                                        (b as u32).wrapping_sub(a)
-                                    }
+                                let sum = match (a.to_int(), b.to_int()) {
+                                    (Some(a), Some(b)) => b.wrapping_sub(a),
                                     _ => return Err(ExecError::new(op, &stack)),
                                 };
                                 return self.exec(scanner, parent2.push(sum.into()));
@@ -699,7 +697,7 @@ mod tests {
         let transaction = default_transaction();
         let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 123, OP_DUP, OP_ADD];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(246)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(246)));
     }
 
     #[test]
@@ -717,10 +715,7 @@ mod tests {
         let transaction = default_transaction();
         let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 200, OP_PUSH_BYTE, 123, OP_SWAP, OP_SUB];
-        assert_eq!(
-            vm.run(&code),
-            Ok(OwnedStackValue::U32(200u32.wrapping_sub(123)))
-        );
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(200 - 123)));
     }
 
     #[test]
@@ -759,7 +754,7 @@ mod tests {
         let transaction = Transaction::new(vec![input], vec![]);
         let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_SELF_AMT];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(100)));
     }
 
     #[test]
@@ -827,7 +822,7 @@ mod tests {
 
         let vm = create_vm(&indexer, 0, &transaction);
         let code = [u8::from(Op::OutAmt(0)), 0];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(200)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(200)));
     }
 
     #[test]
@@ -884,6 +879,7 @@ mod tests {
             prev_block_hash: [0; 32],
             height: 50,
             available_supply: 100_000,
+            merkle_root: [0; 32],
             locked_supply: 0,
             lead_utxo: OutputId::new([0; 32], 0),
         });
@@ -891,10 +887,8 @@ mod tests {
         let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_PUSH_SUPPLY];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(100_000)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(100_000)));
         let code = [OP_SELF_HEIGHT];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(50)));
-        let code = [OP_PUSH_HEIGHT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(50)));
     }
 
@@ -905,10 +899,8 @@ mod tests {
         let vm = create_vm(&indexer, 0, &transaction);
 
         let code = [OP_PUSH_SUPPLY];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(0)));
         let code = [OP_SELF_HEIGHT];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
-        let code = [OP_PUSH_HEIGHT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
     }
 
@@ -1068,7 +1060,7 @@ mod tests {
             val2[3],
             OP_ADD,
         ];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(30)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(30)));
     }
 
     #[test]
@@ -1077,7 +1069,7 @@ mod tests {
         let transaction = default_transaction();
         let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 30, OP_PUSH_BYTE, 10, OP_SUB];
-        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(20)));
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(20)));
     }
 
     #[test]
@@ -1160,7 +1152,7 @@ mod tests {
         let vm = create_vm(&indexer, 0, &transaction);
         let script = p2pkh();
 
-        assert_eq!(vm.run(script), Ok(OwnedStackValue::U32(0)));
+        assert_eq!(vm.run(script), Ok(OwnedStackValue::U8(0)));
     }
 
     #[test]

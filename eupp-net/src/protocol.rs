@@ -1,6 +1,6 @@
-use eupp_core::Hash;
 use eupp_core::block::Block;
 use eupp_core::transaction::Transaction;
+use eupp_core::{Hash, block::BlockHeader};
 use serde::{Deserialize, Serialize};
 
 /// Messages broadcast over gossipsub for all peers to see.
@@ -28,20 +28,20 @@ pub enum GossipMessage {
     GetChainTip,
 
     /// Advertise the peer's current chain tip: latest block hash and total supply.
-    ChainTip { hash: Hash, supply: u32 },
+    ChainTip { hash: Hash, supply: u64 },
 }
 
 /// Requests sent directly to a peer for synchronization purposes.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SyncRequest {
     /// Request a chunk of blocks in a given range.
-    GetBlocks {
+    GetBlock {
         from: Option<Hash>,
         to: Option<Hash>,
     },
 
-    /// Request the hashes of blocks in a given range.
-    GetBlocksHash {
+    /// Request the header of blocks in a given range.
+    GetBlockHeader {
         from: Option<Hash>,
         to: Option<Hash>,
     },
@@ -53,6 +53,6 @@ pub enum SyncResponse {
     /// A chunk of blocks in response to `GetBlocks`.
     Blocks(Vec<Block>),
 
-    /// A chunk of block hashes in response to `GetBlocksHash`.
-    BlocksHash(Vec<Hash>),
+    /// A chunk of block header in response to `GetBlocksHash`.
+    BlockHeaders(Vec<BlockHeader>),
 }

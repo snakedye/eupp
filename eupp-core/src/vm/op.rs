@@ -391,7 +391,6 @@ mod tests {
         assert_eq!(parsed_out_comm, Op::OutComm(0));
         assert_eq!(ph, Op::Height);
     }
-
     #[test]
     fn unknown_byte_returns_err() {
         // pick some unused opcode

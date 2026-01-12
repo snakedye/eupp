@@ -59,7 +59,7 @@ pub struct Output {
     /// Protocol version used for the output.
     pub(crate) version: Version,
     /// Amount of the output.
-    pub(crate) amount: u32,
+    pub(crate) amount: u64,
     /// Data associated with the output.
     pub(crate) data: Hash,
     /// The hash of the public key.
@@ -79,7 +79,7 @@ pub enum TransactionError {
     Execution(ExecError),
 
     /// Total outputs exceed total inputs.
-    InvalidBalance { total_input: u32, total_output: u32 },
+    InvalidBalance { total_input: u64, total_output: u64 },
 
     /// Witness script is too large.
     InvalidWitnessSize,
@@ -251,7 +251,7 @@ impl<'de> serde::Deserialize<'de> for Output {
         #[derive(serde::Deserialize)]
         struct OutputHelper {
             version: u8,
-            amount: u32,
+            amount: u64,
             data: String,
             commitment: String,
         }
@@ -292,7 +292,7 @@ impl serde::Serialize for Output {
 }
 
 impl Output {
-    pub fn new_v0(amount: u32, mask: &Hash, nonce: &Hash) -> Self {
+    pub fn new_v0(amount: u64, mask: &Hash, nonce: &Hash) -> Self {
         Self {
             version: Version::V0,
             amount,
@@ -300,7 +300,7 @@ impl Output {
             commitment: *nonce, // The solution for the previous challenge
         }
     }
-    pub fn new_v1(amount: u32, public_key: &PublicKey, data: &Hash) -> Self {
+    pub fn new_v1(amount: u64, public_key: &PublicKey, data: &Hash) -> Self {
         let commitment = commitment(public_key, Some(data.as_slice()));
         Self {
             version: Version::V1,
@@ -310,7 +310,7 @@ impl Output {
         }
     }
 
-    pub fn new_v2(amount: u32, public_key: &PublicKey, script: &Hash) -> Self {
+    pub fn new_v2(amount: u64, public_key: &PublicKey, script: &Hash) -> Self {
         let commitment = commitment(public_key, Some(script.as_slice()));
         Self {
             version: Version::V2,
@@ -321,7 +321,7 @@ impl Output {
     }
 
     pub fn new_v3(
-        amount: u32,
+        amount: u64,
         public_key: &PublicKey,
         data: &[u8; 32],
         witness_script: &[u8],
@@ -385,7 +385,7 @@ impl Transaction {
 
     /// Verifies the transaction against the indexer.
     pub fn verify<L: Indexer>(&self, indexer: &L) -> Result<(), TransactionError> {
-        let mut total_input_amount = 0_u32;
+        let mut total_input_amount = 0_u64;
         let prev_block = indexer.get_last_block_metadata();
         let reward = self
             .inputs
@@ -435,9 +435,12 @@ impl Transaction {
                 }
             }
         }
+        if reward.is_none() {
+            return Ok(());
+        }
 
         let total_output_amount = self.outputs.iter().map(|output| output.amount).sum();
-        if prev_block.is_some() && reward.is_none() && total_output_amount > total_input_amount {
+        if prev_block.is_some() && total_output_amount > total_input_amount {
             return Err(TransactionError::InvalidBalance {
                 total_input: total_input_amount,
                 total_output: total_output_amount,
@@ -447,8 +450,8 @@ impl Transaction {
     }
 
     /// Calculates the transaction fee as sum(inputs) - sum(outputs).
-    pub fn fee<L: Indexer>(&self, indexer: &L) -> u32 {
-        let total_input_amount: u32 = self
+    pub fn fee<L: Indexer>(&self, indexer: &L) -> u64 {
+        let total_input_amount: u64 = self
             .inputs
             .iter()
             .filter_map(|input| indexer.get_utxo(&input.output_id))

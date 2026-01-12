@@ -6,8 +6,7 @@ that require them (e.g. `OP_PUSH_1`, `OP_PUSH_U32`).
 */
 
 use super::op::{
-    OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_BYTES, OP_PUSH_SUPPLY, OP_PUSH_U32,
-    OP_SPLIT, Op,
+    OP_OUT_AMT, OP_OUT_COMM, OP_OUT_DATA, OP_PUSH_BYTE, OP_PUSH_BYTES, OP_PUSH_U32, OP_SPLIT, Op,
 };
 
 /// An iterator that reads opcodes (and their payloads) from a byte slice.
@@ -77,7 +76,6 @@ impl<'a> Iterator for Scanner<'a> {
                     None
                 }
             },
-            OP_PUSH_SUPPLY => Some(Op::Supply),
             OP_OUT_AMT => match self.read_u8() {
                 Some(v) => Some(Op::OutAmt(v)),
                 None => {

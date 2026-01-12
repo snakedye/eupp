@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.
-    // A mask requiring ~2.5 bytes of zeros for a valid PoW solution.
+    // A mask requiring 2 bytes of zeros for a valid PoW solution.
     let mut mask = [0_u8; 32];
     mask[0] = 0xFF;
     mask[1] = 0xFF;
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
-        outputs: vec![Output::new_v0(1_000_000, &mask, &[0; 32])],
+        outputs: vec![Output::new_v0(std::u64::MAX, &mask, &[0; 32])],
     };
     let mut genesis_block = Block::new(0, [0u8; 32]);
     genesis_block.transactions.push(coinbase_tx);

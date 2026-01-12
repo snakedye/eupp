@@ -32,6 +32,10 @@ struct Args {
     /// The public key of the recipient (hex-encoded). If not provided, sends back to self.
     #[arg(long)]
     remote_pubkey: Option<String>,
+
+    /// The amount to send in the transaction.
+    #[arg(long)]
+    amount: u64,
 }
 
 #[tokio::main]
@@ -75,16 +79,14 @@ async fn main() -> Result<()> {
         public_key
     };
 
-    // Create a single output sending 11 units with dummy data.
+    // Create a single output sending the specified amount with dummy data.
     let data: Hash = [3u8; 32];
-    let output = Output::new_v1(11, &recipient_pubkey, &data);
-    let sighash = sighash([&output_id], Some(&output));
+    let to_remote = Output::new_v1(args.amount, &recipient_pubkey, &data);
+    let outputs = vec![to_remote];
+    let sighash = sighash([&output_id], &outputs);
     let signature = signing_key.sign(&sighash);
 
-    let tx = Transaction::new(
-        vec![input.with_signature(signature.to_bytes())],
-        vec![output],
-    );
+    let tx = Transaction::new(vec![input.with_signature(signature.to_bytes())], outputs);
 
     // Print transaction hash locally
     let tx_hash = tx.hash();
@@ -98,7 +100,7 @@ async fn main() -> Result<()> {
     match http_client.send_raw_transaction(tx).await {
         Ok(broadcasted_hash) => {
             println!(
-                "Transaction broadcasted successfully. Node returned hash: {}",
+                "Transaction {} broadcasted successfully.",
                 hex::encode(broadcasted_hash)
             );
         }

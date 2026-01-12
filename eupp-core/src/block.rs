@@ -30,7 +30,7 @@ pub enum BlockError {
     InvalidBlockSize(usize),
     ChallengeError,
     InvalidVersion(u8),
-    SupplyError { min: u32, actual: u32 },
+    SupplyError { min: u64, actual: u64 },
     TransactionError(super::transaction::TransactionError),
 }
 
@@ -122,15 +122,34 @@ impl Block {
             let old_supply = prev_lead_utxo.amount;
             let max_reward = calculate_reward(mask);
             let max_supply = old_supply + fees;
-            let min_supply = max_supply.saturating_sub(max_reward);
+            let min_supply = old_supply.saturating_sub(max_reward);
             if new_supply < min_supply || new_supply > max_supply {
                 return Err(BlockError::SupplyError {
                     min: min_supply,
                     actual: new_supply,
                 });
             }
+            let total_in = self.transactions[0]
+                .inputs
+                .iter()
+                .filter_map(|input| indexer.get_utxo(&input.output_id))
+                .map(|output| output.amount)
+                .sum();
+            let total_out = self.transactions[0]
+                .outputs
+                .iter()
+                .map(|output| output.amount)
+                .sum();
+            if total_out > total_in + fees {
+                return Err(BlockError::TransactionError(
+                    crate::transaction::TransactionError::InvalidBalance {
+                        total_input: total_in,
+                        total_output: total_out,
+                    },
+                ));
+            }
 
-            // Verify that the new lead utxo is v1 only
+            // Verify that the new lead utxo is v0 only
             let new_lead_output = self.transactions.first().and_then(|tx| tx.outputs.first());
             if let Some(output) = new_lead_output {
                 if !matches!(output.version, super::transaction::Version::V0) {
@@ -151,7 +170,7 @@ impl Block {
     }
 
     /// Calculates the total fees.
-    pub fn fees<L: Indexer>(&self, indexer: &L) -> u32 {
+    pub fn fees<L: Indexer>(&self, indexer: &L) -> u64 {
         self.transactions
             .iter()
             .skip(1) // The mining transaction is not included in the fees calculation.
@@ -278,7 +297,7 @@ mod tests {
         block
     }
 
-    fn mining_transaction(new_supply: u32, tx_hash: Hash, public_key: PublicKey) -> Transaction {
+    fn mining_transaction(new_supply: u64, tx_hash: Hash, public_key: PublicKey) -> Transaction {
         let output_id = OutputId::new(tx_hash, 0);
         let mut transaction = Transaction::new(vec![], vec![]);
         transaction

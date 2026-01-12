@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub struct NetworkInfo {
     pub tip_hash: Hash,
     pub tip_height: u64,
-    pub available_supply: u32,
+    pub available_supply: u64,
 }
 
 #[rpc(server, client, namespace = "eupp")]

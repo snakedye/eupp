@@ -2,6 +2,8 @@ mod in_mem;
 
 pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
 
+use crate::block::BlockHeader;
+
 use super::{
     Hash,
     block::{Block, BlockError},
@@ -21,13 +23,16 @@ pub struct BlockMetadata {
     pub height: u32,
 
     /// The MAS Metric: Sum of all rewards from Genesis to this block.
-    pub available_supply: u32,
+    pub available_supply: u64,
 
     /// The MAS Metric: Sum of all locked rewards from Genesis to this block.
-    pub locked_supply: u32,
+    pub locked_supply: u64,
 
     /// The output id of the lead utxo
     pub lead_utxo: OutputId,
+
+    /// The merkle root of the transaction tree.
+    pub merkle_root: Hash,
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +47,17 @@ pub struct BlockIter<'a, L: ?Sized> {
 pub struct BlockMetadataIter<'a, I: ?Sized> {
     current_hash: Hash,
     indexer: &'a I,
+}
+
+impl BlockMetadata {
+    /// Return a `BlockHeader`.
+    pub fn header(&self) -> BlockHeader {
+        BlockHeader {
+            version: 0,
+            prev_block_hash: self.prev_block_hash,
+            merkle_root: self.merkle_root,
+        }
+    }
 }
 
 impl<'a, I: Indexer> Iterator for BlockMetadataIter<'a, I> {
@@ -176,6 +192,7 @@ mod tests {
                 BlockMetadata {
                     hash,
                     prev_block_hash: block.prev_block_hash,
+                    merkle_root: [0; 32],
                     height: 0,
                     available_supply: 0,
                     locked_supply: 0,
@@ -230,6 +247,7 @@ mod tests {
             prev_block_hash: [0; 32],
             height: 0,
             available_supply: 0,
+            merkle_root: [0; 32],
             locked_supply: 0,
             lead_utxo: OutputId::new([0; 32], 0),
         };
