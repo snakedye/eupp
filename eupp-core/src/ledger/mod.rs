@@ -60,10 +60,20 @@ impl BlockMetadata {
     /// Return a `BlockHeader`.
     pub fn header(&self) -> BlockHeader {
         BlockHeader {
-            version: 0,
+            version: self.version,
             prev_block_hash: self.prev_block_hash,
             merkle_root: self.merkle_root,
         }
+    }
+
+    /// Calculates the consensus weight of the chain tip.
+    /// Favors "Dense" chains (high supply extraction per block height).
+    pub fn consensus_score(&self) -> u128 {
+        let s = self.available_supply as u128;
+        let h = (self.height as u128).max(1); // Avoid division by zero
+
+        // (Supply^2 / Height) favors high-difficulty blocks over low-difficulty grinding
+        (s * s) / h
     }
 }
 

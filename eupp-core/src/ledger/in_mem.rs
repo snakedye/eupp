@@ -165,9 +165,9 @@ impl Indexer for InMemoryIndexer {
 
         // Update Tip if this chain is now heavier or if there's no block for the tip
         if self.block_index.get(&self.tip).is_none()
-            || total_supply
+            || metadata.consensus_score()
                 > current_prev_metadata
-                    .map(|meta| meta.available_supply)
+                    .map(|meta| meta.consensus_score())
                     .unwrap()
         {
             if let Some(root) = current_prev_metadata
