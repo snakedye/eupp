@@ -7,7 +7,7 @@ use eupp_core::{
     transaction::{Transaction, TransactionHash},
 };
 use eupp_rpc::{EuppRpcServer, NetworkInfo, OutputEntry};
-use jsonrpsee::types::ErrorObjectOwned;
+use jsonrpsee::types::{ErrorObjectOwned, error::INTERNAL_ERROR_CODE};
 
 /// The server-side implementation of the `EuppRpc`.
 pub struct EuppRpcImpl<L> {
@@ -30,18 +30,15 @@ where
         let lg = self.ledger.read().unwrap();
         let metadata = lg.get_last_block_metadata();
 
-        match metadata {
-            Some(meta) => Ok(NetworkInfo {
+        metadata
+            .map(|meta| NetworkInfo {
                 tip_hash: meta.hash,
                 tip_height: meta.height as u64,
                 available_supply: meta.available_supply,
-            }),
-            None => Ok(NetworkInfo {
-                tip_hash: Default::default(),
-                tip_height: 0,
-                available_supply: 0,
-            }),
-        }
+            })
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(INTERNAL_ERROR_CODE, "No block found", None::<()>)
+            })
     }
 
     async fn get_confirmations(&self, tx_hash: TransactionHash) -> Result<u64, ErrorObjectOwned> {

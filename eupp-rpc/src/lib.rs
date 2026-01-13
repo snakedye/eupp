@@ -6,10 +6,14 @@ use eupp_core::{
 use jsonrpsee::{proc_macros::rpc, types::ErrorObjectOwned};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Contains basic information about the current state of the network.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NetworkInfo {
+    /// The hash of the current tip block.
     pub tip_hash: Hash,
+    /// The height of the current tip block.
     pub tip_height: u64,
+    /// The currently available supply of coins.
     pub available_supply: u64,
 }
 

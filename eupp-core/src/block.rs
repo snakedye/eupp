@@ -26,14 +26,21 @@ pub struct BlockHeader {
     pub merkle_root: Hash,
 }
 
+/// Represents errors that can occur when validating blocks.
 #[derive(Debug, Clone, PartialEq)]
 /// Represents errors that can occur when validating blocks.
 pub enum BlockError {
+    /// The previous block hash is invalid or not found.
     InvalidBlockHash(String),
+    /// The block size exceeds the maximum allowed size.
     InvalidBlockSize(usize),
+    /// The mining challenge was not solved correctly.
     ChallengeError,
+    /// The lead UTXO version is invalid.
     InvalidVersion(u8),
+    /// The supply in the block is outside the allowed range.
     SupplyError { min: u64, actual: u64 },
+    /// An error occurred in one of the block's transactions.
     TransactionError(super::transaction::TransactionError),
 }
 
@@ -62,6 +69,7 @@ impl BlockHeader {
 }
 
 impl Block {
+    /// Create a new `Block`.
     pub fn new(version: u8, prev_block_hash: Hash) -> Self {
         Self {
             version,
@@ -79,6 +87,7 @@ impl Block {
         }
     }
 
+    /// Verifies that the `Block` is valid.
     pub fn verify<L: Indexer>(&self, indexer: &L) -> Result<(), BlockError> {
         // We only check if there's a previous block
         // Otherwise this block is the genesis block and we don't need to verify it

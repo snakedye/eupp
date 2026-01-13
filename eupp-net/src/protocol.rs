@@ -4,16 +4,6 @@ use eupp_core::{Hash, block::BlockHeader};
 use serde::{Deserialize, Serialize};
 
 /// Messages broadcast over gossipsub for all peers to see.
-///
-/// We now use gossip for chain-tip advertising:
-/// - `GossipMessage::GetChainTip` is a broadcast request asking peers to advertise
-///   their current chain tip via gossip.
-/// - `GossipMessage::ChainTip` is a broadcast containing a peer's current tip hash
-///   and total supply. This replaces the previous `SyncResponse::ChainTip` which
-///   was sent via the request-response protocol.
-///
-/// Peers still use the request-response protocol for direct sync operations:
-/// `GetBlocks` / `GetBlocksHash` and `Blocks` / `BlocksHash`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GossipMessage {
     /// Broadcast a transaction to peers.
@@ -35,13 +25,13 @@ pub enum GossipMessage {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SyncRequest {
     /// Request a chunk of blocks in a given range.
-    GetBlock {
+    GetBlocks {
         from: Option<Hash>,
         to: Option<Hash>,
     },
 
     /// Request the header of blocks in a given range.
-    GetBlockHeader {
+    GetBlockHeaders {
         from: Option<Hash>,
         to: Option<Hash>,
     },

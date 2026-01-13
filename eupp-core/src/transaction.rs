@@ -7,7 +7,10 @@ use std::fmt;
 
 pub type TransactionHash = Hash;
 
+/// Maximum allowed size for witness data in bytes.
 const MAX_WITNESS_SIZE: usize = 1024;
+
+/// Maximum allowed number of inputs or outputs in a transaction.
 const MAX_ALLOWED: usize = u8::MAX as usize;
 
 /// A blockchain transaction.

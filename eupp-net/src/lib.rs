@@ -177,7 +177,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     request_response::Message::Request {
                         request, channel, ..
                     } => match request {
-                        SyncRequest::GetBlockHeader { from, to } => {
+                        SyncRequest::GetBlockHeaders { from, to } => {
                             if let Ok(lg) = self.ledger.read() {
                                 let iter = match from {
                                     Some(from) => lg.metadata_iter_from(&from),
@@ -199,7 +199,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 }
                             }
                         }
-                        SyncRequest::GetBlock { from, to } => {
+                        SyncRequest::GetBlocks { from, to } => {
                             if let Ok(lg) = self.ledger.read() {
                                 let (block_iter, metadata_iter) = match from {
                                     Some(from) => {
@@ -237,7 +237,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                             // This will start the block fetch process
                             let _ = swarm.behaviour_mut().sync.send_request(
                                 &peer,
-                                SyncRequest::GetBlock {
+                                SyncRequest::GetBlocks {
                                     from: Some([0; 32]),
                                     to: None,
                                 },
@@ -269,7 +269,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     let to = blocks.first().map(|block| block.header().hash());
                                     let _ = swarm.behaviour_mut().sync.send_request(
                                         &peer,
-                                        SyncRequest::GetBlockHeader { from: None, to },
+                                        SyncRequest::GetBlockHeaders { from: None, to },
                                     );
                                     return;
                                 }
@@ -282,7 +282,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                     let _ = swarm
                                         .behaviour_mut()
                                         .sync
-                                        .send_request(&peer, SyncRequest::GetBlock { from, to });
+                                        .send_request(&peer, SyncRequest::GetBlocks { from, to });
                                     self.block_fetch_queue.truncate(
                                         self.block_fetch_queue
                                             .len()
@@ -357,7 +357,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         let _ = swarm
             .behaviour_mut()
             .sync
-            .send_request(&peer_id, SyncRequest::GetBlockHeader { from: None, to });
+            .send_request(&peer_id, SyncRequest::GetBlockHeaders { from: None, to });
     }
 
     /// Runs the main event loop for the node, handling network events and synchronization.

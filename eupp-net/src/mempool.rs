@@ -9,10 +9,15 @@ pub enum MempoolError {
     VerificationFailed(TransactionError),
 }
 
+/// Trait for mempools, providing basic transaction management.
 pub trait Mempool: Send + Sync {
+    /// Add a transaction to the mempool after verification.
     fn add<L: Indexer>(&mut self, tx: Transaction, indexer: &L) -> Result<(), MempoolError>;
+    /// Returns an iterator over transactions currently in the mempool.
     fn get_transactions(&self) -> impl Iterator<Item = Cow<Transaction>>;
+    /// Removes transactions from the mempool by their hashes.
     fn remove_transactions(&mut self, tx_hashes: impl IntoIterator<Item = TransactionHash>);
+    /// Clears all transactions from the mempool.
     fn clear(&mut self) {
         let txs: Vec<_> = self.get_transactions().map(|tx| tx.hash()).collect();
         self.remove_transactions(txs);
@@ -20,7 +25,7 @@ pub trait Mempool: Send + Sync {
 }
 
 pub struct SimpleMempool {
-    pub pending: HashMap<TransactionHash, Transaction>,
+    pending: HashMap<TransactionHash, Transaction>,
 }
 
 impl SimpleMempool {

@@ -72,14 +72,16 @@ pub const fn check_sig_script() -> &'static [u8] {
 /// VM-level execution error kinds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExecError {
-    pub(self) op: u8,
+    pub(self) op: String,
+    pub(self) code: u8,
     pub(self) trace: Vec<u8>,
 }
 
 impl ExecError {
     fn new(op: Op, trace: &VmStack) -> Self {
         Self {
-            op: op.into(),
+            op: op.to_string(),
+            code: op.into(),
             trace: trace
                 .iter()
                 .map(|v| v.to_bytes())
@@ -99,6 +101,7 @@ pub struct Vm<'a, L> {
     indexer: &'a L,
 }
 
+/// Represents a value on the VM stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StackValue<'a> {
     U8(u8),
@@ -111,6 +114,7 @@ enum StackValue<'a> {
     },
 }
 
+/// Represents an owned value on the VM stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnedStackValue {
     U8(u8),
@@ -1087,7 +1091,7 @@ mod tests {
         let transaction = default_transaction();
         let vm = create_vm(&indexer, 0, &transaction);
         let code = [OP_PUSH_BYTE, 0, OP_VERIFY, OP_TRUE];
-        assert_eq!(vm.run(&code).unwrap_err().op, OP_VERIFY);
+        assert_eq!(vm.run(&code).unwrap_err().code, OP_VERIFY);
     }
 
     #[test]
@@ -1177,7 +1181,7 @@ mod tests {
         let vm = create_vm(&indexer, 0, &transaction);
         let script = p2pkh();
 
-        assert_eq!(vm.run(&script).unwrap_err().op, OP_VERIFY);
+        assert_eq!(vm.run(&script).unwrap_err().code, OP_VERIFY);
     }
 
     #[test]
@@ -1210,7 +1214,7 @@ mod tests {
         }
 
         // Expect a stack overflow error due to excessive concatenation
-        assert_eq!(vm.run(&code).unwrap_err().op, OP_CAT);
+        assert_eq!(vm.run(&code).unwrap_err().code, OP_CAT);
     }
 
     #[test]

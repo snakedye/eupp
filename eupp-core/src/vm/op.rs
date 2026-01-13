@@ -290,6 +290,50 @@ impl From<Op<'_>> for u8 {
     }
 }
 
+impl<'a> core::fmt::Display for Op<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Op::False => write!(f, "False"),
+            Op::True => write!(f, "True"),
+            Op::Dup => write!(f, "Dup"),
+            Op::Drop => write!(f, "Drop"),
+            Op::Swap => write!(f, "Swap"),
+            Op::PushU32(value) => write!(f, "PushU32({})", value),
+            Op::PushByte(value) => write!(f, "PushByte({})", value),
+            Op::PushBytes(bytes) => write!(f, "PushBytes({:?})", bytes),
+            Op::SelfAmt => write!(f, "SelfAmt"),
+            Op::SelfData => write!(f, "SelfData"),
+            Op::SelfComm => write!(f, "SelfComm"),
+            Op::OutAmt(index) => write!(f, "OutAmt({})", index),
+            Op::OutData(index) => write!(f, "OutData({})", index),
+            Op::OutComm(index) => write!(f, "OutComm({})", index),
+            Op::Supply => write!(f, "Supply"),
+            Op::Height => write!(f, "Height"),
+            Op::SelfHeight => write!(f, "SelfHeight"),
+            Op::PushPk => write!(f, "PushPk"),
+            Op::PushSig => write!(f, "PushSig"),
+            Op::CheckSig => write!(f, "CheckSig"),
+            Op::HashB2 => write!(f, "HashB2"),
+            Op::Equal => write!(f, "Equal"),
+            Op::Greater => write!(f, "Greater"),
+            Op::Cat => write!(f, "Cat"),
+            Op::Add => write!(f, "Add"),
+            Op::Sub => write!(f, "Sub"),
+            Op::Split(index) => write!(f, "Split({})", index),
+            Op::ReadU64 => write!(f, "ReadU64"),
+            Op::ReadU32 => write!(f, "ReadU32"),
+            Op::ReadByte => write!(f, "ReadByte"),
+            Op::Verify => write!(f, "Verify"),
+            Op::Return => write!(f, "Return"),
+            Op::If => write!(f, "If"),
+            Op::EndIf => write!(f, "EndIf"),
+            Op::SighashAll => write!(f, "SighashAll"),
+            Op::SighashOut => write!(f, "SighashOut"),
+            Op::PushWitness => write!(f, "PushWitness"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
