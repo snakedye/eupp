@@ -435,7 +435,7 @@ impl Transaction {
                 }
             }
         }
-        if reward.is_none() {
+        if reward.is_some() {
             return Ok(());
         }
 
@@ -739,7 +739,7 @@ mod tests {
             utxo_id,
             signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
         );
-        let new_outputs = vec![Output::new_v0(150, &data, &mask)]; // Any commitment will work with the mask chosen before
+        let new_outputs = vec![Output::new_v1(150, &data, &mask)]; // Any commitment will work with the mask chosen before
         let sighash = sighash(&[utxo_id], &new_outputs);
         let signature = signing_key.sign(&sighash).to_bytes();
 
@@ -751,7 +751,7 @@ mod tests {
         // Now verification should fail due to mismatched input and output totals
         match spending_tx.verify(&indexer) {
             Err(TransactionError::InvalidBalance { .. }) => {}
-            other => panic!("Expected InsufficientInputAmount error, got: {:?}", other),
+            other => panic!("Expected InvalidBalance error, got: {:?}", other),
         }
     }
 

@@ -47,30 +47,44 @@ impl InMemoryIndexer {
         metadata: &BlockMetadata,
     ) -> Result<(), BlockError> {
         let block_hash = metadata.hash;
-        for (tx_index, tx) in block.transactions.iter().enumerate() {
-            for (input_index, input) in tx.inputs.iter().enumerate() {
-                // We skip the coinbase transaction's first input
-                if tx_index == 0 && input_index == 0 {
-                    continue;
-                }
-                let output_id = input.output_id;
-                if self.utxo_set.remove(&output_id).is_none() {
-                    return Err(BlockError::TransactionError(
-                        TransactionError::InvalidOutput(output_id),
-                    ));
-                }
+
+        // Check for double spending within the block
+        let mut spent_utxos = HashSet::new();
+        for input in block
+            .transactions
+            .iter()
+            .flat_map(|txs| txs.inputs.iter())
+            // We skip the coinbase transaction's first input
+            .skip(1)
+        {
+            let output_id = input.output_id;
+            if spent_utxos.contains(&output_id) {
+                return Err(BlockError::TransactionError(TransactionError::DoubleSpend(
+                    output_id,
+                )));
             }
-            // Add new UTXOs
+            spent_utxos.insert(output_id);
+        }
+        // Remove spent UTXOs
+        for output_id in spent_utxos.iter() {
+            self.utxo_set.remove(output_id);
+        }
+
+        // Add new UTXOs
+        for (i, tx_id, output) in block.transactions.iter().flat_map(|tx| {
             let tx_id = tx.hash();
-            for (i, output) in tx.outputs.iter().enumerate() {
-                self.utxo_set.insert(
-                    OutputId::new(tx_id, i as u8),
-                    UtxoEntry {
-                        block_hash,
-                        output: output.clone(),
-                    },
-                );
-            }
+            tx.outputs
+                .iter()
+                .enumerate()
+                .map(move |(i, output)| (i, tx_id, output))
+        }) {
+            self.utxo_set.insert(
+                OutputId::new(tx_id, i as u8),
+                UtxoEntry {
+                    block_hash,
+                    output: output.clone(),
+                },
+            );
         }
         Ok(())
     }
