@@ -159,7 +159,7 @@ impl<'a> StackValue<'a> {
             StackValue::U32(_) => 4,
             StackValue::U64(_) => 8,
             StackValue::Bytes(bytes) => bytes.len(),
-            StackValue::Stream { iter, .. } => iter.map(|value| value.len()).sum(),
+            StackValue::Stream { iter, len } => iter.take(*len).map(|value| value.len()).sum(),
         }
     }
     fn to_owned(&self) -> OwnedStackValue {
@@ -172,19 +172,9 @@ impl<'a> StackValue<'a> {
         }
     }
     fn to_bytes(&self) -> Vec<u8> {
-        match self {
-            StackValue::U8(value) => vec![*value],
-            StackValue::Bytes(bytes) => bytes.to_vec(),
-            StackValue::U32(int) => int.to_be_bytes().to_vec(),
-            StackValue::U64(int) => int.to_be_bytes().to_vec(),
-            StackValue::Stream { iter, len } => {
-                let mut bytes = Vec::new();
-                for value in iter.take(*len) {
-                    bytes.extend(value.to_bytes());
-                }
-                bytes
-            }
-        }
+        let mut vec = vec![0; self.len()];
+        self.copy_from_self(&mut vec);
+        vec
     }
 
     fn copy_from_self(&self, slice: &mut [u8]) -> usize {
@@ -478,19 +468,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 }
                 Op::HashB2 => match stack.pop() {
                     Some((value, parent)) => {
-                        let hash = match value {
-                            StackValue::U8(data) => blake2::Blake2s256::digest(&[data]),
-                            StackValue::Bytes(data) => blake2::Blake2s256::digest(data),
-                            StackValue::U32(data) => {
-                                blake2::Blake2s256::digest(&data.to_be_bytes())
-                            }
-                            StackValue::U64(data) => {
-                                blake2::Blake2s256::digest(&data.to_be_bytes())
-                            }
-                            StackValue::Stream { .. } => {
-                                blake2::Blake2s256::digest(&value.to_bytes())
-                            }
-                        };
+                        let hash = blake2::Blake2s256::digest(&value.to_bytes());
                         let hash_bytes: [u8; 32] = hash.try_into().unwrap();
                         return self.exec(scanner, parent.push(StackValue::Bytes(&hash_bytes)));
                     }

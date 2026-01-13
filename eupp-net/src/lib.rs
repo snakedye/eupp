@@ -520,29 +520,45 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         let selected = mp.get_transactions().scan(remaining, |remaining, tx| { // Select transactions for the block
                             let tx_vsize = tx.vsize();
                             *remaining = remaining.saturating_sub(tx_vsize);
-                            (*remaining > 0).then(|| tx)
+                            (*remaining > 0).then(|| tx.into_owned())
                         });
                         block.transactions.extend(selected);
                     }
 
                     let mut lg = self.ledger.write().unwrap();
-                    match lg.add_block(&block) {
-                        Ok(_) => {
-                            println!("-> Send Block via gossip {}", hex::encode(block.header().hash()));
+                    loop {
+                        match lg.add_block(&block) {
+                            Ok(_) => {
+                                println!(
+                                    "-> Send Block via gossip {}",
+                                    hex::encode(block.header().hash())
+                                );
 
-                            let mut mp = self.mempool.write().unwrap();
-                            let added_tx_hashes = block.transactions.iter().map(|tx| tx.hash());
-                            mp.remove_transactions(added_tx_hashes);
+                                // Remove transactions included in the block from the mempool
+                                let mut mp = self.mempool.write().unwrap();
+                                let added_tx_hashes = block.transactions.iter().map(Transaction::hash);
+                                mp.remove_transactions(added_tx_hashes);
 
-                            let msg = GossipMessage::NewBlock(block); // Broadcast new block via gossip
-                            let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap());
-                        }
-                        Err(BlockError::TransactionError(TransactionError::InvalidOutput(output))) => {
-                            let mut mp = self.mempool.write().unwrap();
-                            mp.remove_transactions([output.tx_hash]);
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to add block to ledger: {:?}", err);
+                                // Broadcast new block via gossip
+                                let msg = GossipMessage::NewBlock(block);
+                                let _ = swarm
+                                    .behaviour_mut()
+                                    .gossipsub
+                                    .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                                break;
+                            }
+                            Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id)))
+                            | Err(BlockError::TransactionError(TransactionError::DoubleSpend(output_id))) => {
+                                // Remove offending transaction from the mempool
+                                let mut mp = self.mempool.write().unwrap();
+                                mp.remove_transactions([output_id.tx_hash]);
+                            }
+                            Err(err) => {
+                                // Clear mempool on other errors and log
+                                self.mempool.write().unwrap().clear();
+                                eprintln!("Failed to add block to ledger: {:?}", err);
+                                break;
+                            }
                         }
                     }
                 }
