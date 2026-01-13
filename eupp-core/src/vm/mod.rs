@@ -346,6 +346,19 @@ impl<'a, L: Indexer> Vm<'a, L> {
                     }
                     None => Err(ExecError::new(op, &stack)),
                 },
+                Op::ReadU64 => match stack.pop() {
+                    Some((value, parent)) => {
+                        let mut buffer = [0u8; 8];
+                        let bytes_written = value.copy_from_self(&mut buffer);
+                        if bytes_written < 8 {
+                            Err(ExecError::new(op, &stack))
+                        } else {
+                            let value = u64::from_be_bytes(buffer);
+                            self.exec(scanner, parent.push(value.into()))
+                        }
+                    }
+                    None => Err(ExecError::new(op, &stack)),
+                },
 
                 // indexer / transaction related (placeholders or small integrations)
                 Op::SelfAmt => {
@@ -628,7 +641,7 @@ mod tests {
     };
     use ed25519_dalek::{Signer, SigningKey};
     use op::r#const::*;
-    use std::collections::HashMap;
+    use std::{borrow::Cow, collections::HashMap, u64};
 
     // A mock indexer for testing purposes.
     #[derive(Default, Clone)]
@@ -642,24 +655,27 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_block_metadata(&self, _hash: &Hash) -> Option<BlockMetadata> {
-            self.block_meta.clone()
+        fn get_block_metadata(&self, _hash: &Hash) -> Option<Cow<BlockMetadata>> {
+            self.block_meta.as_ref().map(Cow::Borrowed)
         }
 
         fn get_utxo(&self, id: &OutputId) -> Option<Output> {
             self.utxos.get(id).copied()
         }
 
-        fn get_utxos(&self, _query: &crate::ledger::Query) -> Vec<(OutputId, Output)> {
-            vec![]
+        fn query_utxos<'a>(
+            &'a self,
+            _query: &'a crate::ledger::Query,
+        ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
+            unimplemented!()
         }
 
         fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
             self.block_meta.as_ref().map(|meta| meta.hash)
         }
 
-        fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
-            self.block_meta.clone()
+        fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+            self.block_meta.as_ref().map(Cow::Borrowed)
         }
     }
 
@@ -880,6 +896,7 @@ mod tests {
     fn test_op_supply_height() {
         let mut indexer = MockLedger::default();
         indexer.block_meta = Some(BlockMetadata {
+            version: 0,
             hash: [0; 32],
             prev_block_hash: [0; 32],
             height: 50,
@@ -1264,6 +1281,25 @@ mod tests {
         ];
 
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(12345678)));
+    }
+    #[test]
+    fn test_op_read_u64() {
+        let indexer = MockLedger::default();
+        let transaction = default_transaction();
+        let vm = create_vm(&indexer, 0, &transaction);
+
+        let code = [
+            OP_PUSH_U32,
+            u8::MAX,
+            u8::MAX,
+            u8::MAX,
+            u8::MAX,
+            OP_DUP,
+            OP_CAT, // Combine bytes into a single slice
+            OP_READ_U64,
+        ];
+
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(u64::MAX)));
     }
 
     #[test]

@@ -213,7 +213,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 let blocks = block_iter
                                     .zip(metadata_iter)
                                     .take_while(|(_, meta)| Some(meta.hash) != halt)
-                                    .map(|(block, _)| block)
+                                    .map(|(block, _)| block.into_owned())
                                     .collect();
 
                                 if let Err(e) = swarm
@@ -300,11 +300,9 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
 
     /// Identifies the best peer to sync with from the known peer states.
     fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)> {
-        let local_supply = self
-            .ledger
-            .read()
-            .ok()
-            .and_then(|lg| lg.get_last_block_metadata())
+        let lg = self.ledger.read().ok()?;
+        let local_supply = lg
+            .get_last_block_metadata()
             .map(|m| m.available_supply)
             .unwrap_or(0);
 

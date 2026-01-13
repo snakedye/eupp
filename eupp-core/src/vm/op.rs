@@ -57,6 +57,7 @@ pub mod r#const {
     pub const OP_SPLIT: u8 = 0x73; // Splits a slice into two at a given index (u8).
     pub const OP_READ_U32: u8 = 0x74; // Reads a byte slice from the stack and casts it into a u32.
     pub const OP_READ_BYTE: u8 = 0x75; // Reads a byte slice from the stack and casts it into a single byte.
+    pub const OP_READ_U64: u8 = 0x76; // Reads a byte slice from the stack and casts it into a u32.
 
     // Control Flow
     pub const OP_VERIFY: u8 = 0x80; // Pops top item. If 0 (False), the entire transaction is invalid.
@@ -141,6 +142,8 @@ pub enum Op<'a> {
     Sub,
     /// Splits a slice into two at a given index (u8).
     Split(u8),
+    /// Reads a byte slice from the stack and casts it into a u32.
+    ReadU64,
     /// Reads a byte slice from the stack and casts it into a u32.
     ReadU32,
     /// Reads a byte slice from the stack and casts it into a single byte.
@@ -230,6 +233,7 @@ impl core::convert::TryFrom<u8> for Op<'_> {
             OP_END_IF => Ok(Op::EndIf),
             OP_SPLIT => Ok(Op::Split(0)),
             OP_READ_U32 => Ok(Op::ReadU32),
+            OP_READ_U64 => Ok(Op::ReadU64),
             OP_READ_BYTE => Ok(Op::ReadByte),
 
             other => Err(OpDecodeError(other)),
@@ -279,6 +283,7 @@ impl From<Op<'_>> for u8 {
             Op::SighashOut => OP_SIGHASH_OUT,
             Op::PushWitness => OP_PUSH_WITNESS,
             Op::Split(_) => OP_SPLIT,
+            Op::ReadU64 => OP_READ_U64,
             Op::ReadU32 => OP_READ_U32,
             Op::ReadByte => OP_READ_BYTE,
         }

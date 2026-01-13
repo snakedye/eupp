@@ -7,15 +7,15 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Query {
     /// Optional hash indicating the starting point for the query.
-    pub from: Option<Hash>,
-    /// Set of address hashes to include in the query.
+    pub to: Option<Hash>,
+    /// Set of commitment hashes to include in the query.
     pub addresses: HashSet<Hash>,
 }
 
 impl Query {
     pub fn new() -> Query {
         Self {
-            from: None,
+            to: None,
             addresses: HashSet::new(),
         }
     }
@@ -24,7 +24,7 @@ impl Query {
         self
     }
     pub fn from(&self) -> Option<&Hash> {
-        self.from.as_ref()
+        self.to.as_ref()
     }
     pub fn addresses(&self) -> &HashSet<Hash> {
         &self.addresses

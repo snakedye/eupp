@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap, HashSet},
+};
 
 use crate::{
     Hash,
@@ -142,6 +145,7 @@ impl Indexer for InMemoryIndexer {
 
         let header = block.header();
         let metadata = BlockMetadata {
+            version: header.version,
             hash: header.hash(),
             prev_block_hash: block.prev_block_hash,
             available_supply: total_supply,
@@ -180,8 +184,8 @@ impl Indexer for InMemoryIndexer {
         Ok(())
     }
 
-    fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata> {
-        self.block_index.get(hash).cloned()
+    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
+        self.block_index.get(hash).map(Cow::Borrowed)
     }
 
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
@@ -190,30 +194,34 @@ impl Indexer for InMemoryIndexer {
             .map(|entry| entry.output.clone())
     }
 
-    fn get_utxos(&self, query: &super::Query) -> Vec<(OutputId, Output)> {
-        // Only works for V1 outputs
-        let addresses = query.addresses();
+    fn query_utxos<'a>(
+        &'a self,
+        query: &'a super::Query,
+    ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
         // This is to only fetch UTXOs in the canonical branch.
         let blocks: HashSet<_> = self
             .metadata_iter()
             .map(|meta| meta.hash)
-            .take_while(|hash| Some(hash) != query.from.as_ref())
+            .take_while(|hash| Some(hash) != query.to.as_ref())
             .collect();
-        self.utxo_set
-            .iter()
-            .filter(|(_, entry)| {
-                addresses.contains(&entry.output.commitment) && blocks.contains(&entry.block_hash)
-            })
-            .map(|(id, entry)| (*id, entry.output))
-            .collect()
+        Box::new(
+            self.utxo_set
+                .iter()
+                .filter(move |(_, entry)| {
+                    let addresses = query.addresses();
+                    addresses.contains(&entry.output.commitment)
+                        && blocks.contains(&entry.block_hash)
+                })
+                .map(|(id, entry)| (*id, entry.output)),
+        )
     }
 
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
         self.utxo_set.get(output_id).map(|entry| entry.block_hash)
     }
 
-    fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
-        self.block_index.get(&self.tip).cloned()
+    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+        self.block_index.get(&self.tip).map(Cow::Borrowed)
     }
 }
 
@@ -234,7 +242,7 @@ impl Indexer for FullInMemoryLedger {
         Ok(())
     }
 
-    fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata> {
+    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
         self.indexer.get_block_metadata(hash)
     }
 
@@ -242,21 +250,24 @@ impl Indexer for FullInMemoryLedger {
         self.indexer.get_utxo(output_id)
     }
 
-    fn get_utxos(&self, query: &super::Query) -> Vec<(OutputId, Output)> {
-        self.indexer.get_utxos(query)
+    fn query_utxos<'a>(
+        &'a self,
+        query: &'a super::Query,
+    ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
+        self.indexer.query_utxos(query)
     }
 
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
         self.indexer.get_utxo_block_hash(output_id)
     }
 
-    fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
+    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
         self.indexer.get_last_block_metadata()
     }
 }
 
 impl Ledger for FullInMemoryLedger {
-    fn get_block(&self, hash: &Hash) -> Option<Block> {
-        self.blocks.get(hash).cloned()
+    fn get_block(&self, hash: &Hash) -> Option<Cow<Block>> {
+        self.blocks.get(hash).map(Cow::Borrowed)
     }
 }

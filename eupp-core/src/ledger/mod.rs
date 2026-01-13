@@ -1,6 +1,8 @@
 mod in_mem;
 mod query;
 
+use std::borrow::Cow;
+
 pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
 pub use query::Query;
 
@@ -15,6 +17,9 @@ use super::{
 #[derive(Debug, Clone, PartialEq)]
 /// Represents metadata for a block in the ledger.
 pub struct BlockMetadata {
+    /// The block's version
+    pub version: u8,
+
     /// The unique identifier of this block
     pub hash: Hash,
 
@@ -63,7 +68,7 @@ impl BlockMetadata {
 }
 
 impl<'a, I: Indexer> Iterator for BlockMetadataIter<'a, I> {
-    type Item = BlockMetadata;
+    type Item = Cow<'a, BlockMetadata>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.indexer
@@ -87,7 +92,7 @@ pub trait Indexer {
     fn add_block(&mut self, block: &Block) -> Result<(), BlockError>;
 
     /// Retrieves metadata for a block identified by its hash.
-    fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata>;
+    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>>;
 
     /// Checks if a transaction output is spent.
     fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
@@ -97,13 +102,17 @@ pub trait Indexer {
     /// Fetches an unspent transaction output (UTXO) by its identifier.
     fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
 
-    fn get_utxos(&self, query: &Query) -> Vec<(OutputId, Output)>;
+    /// Returns an iterator over all UTXOs matching the given query.
+    fn query_utxos<'a>(
+        &'a self,
+        query: &'a Query,
+    ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a>;
 
     /// Fetches the block hash of a UTXO by its identifier.
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
 
     /// Retrieves metadata for the most recently added block.
-    fn get_last_block_metadata(&self) -> Option<BlockMetadata>;
+    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>>;
 
     /// Retrieves the hash of the block containing the given transaction.
     fn get_transaction_block_hash(
@@ -132,7 +141,7 @@ pub trait Indexer {
 }
 
 impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
-    type Item = Block;
+    type Item = Cow<'a, Block>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.ledger
@@ -142,8 +151,7 @@ impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         let height = self
             .ledger
-            .metadata_iter()
-            .next()
+            .get_last_block_metadata()
             .map(|meta| meta.height as usize);
         (height.unwrap_or_default(), height)
     }
@@ -153,7 +161,7 @@ impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
 /// It extends Indexer to provide access to full block data.
 pub trait Ledger: Indexer {
     /// Retrieves a full block by its hash.
-    fn get_block(&self, hash: &Hash) -> Option<Block>;
+    fn get_block(&self, hash: &Hash) -> Option<Cow<Block>>;
 
     /// Returns an iterator over blocks starting from the tip to oldest.
     fn block_iter(&self) -> BlockIter<Self> {
@@ -194,6 +202,7 @@ mod tests {
             self.metadata.insert(
                 hash,
                 BlockMetadata {
+                    version: block.version,
                     hash,
                     prev_block_hash: block.prev_block_hash,
                     merkle_root: [0; 32],
@@ -206,30 +215,33 @@ mod tests {
             Ok(())
         }
 
-        fn get_block_metadata(&self, hash: &Hash) -> Option<BlockMetadata> {
-            self.metadata.get(hash).cloned()
+        fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
+            self.metadata.get(hash).map(Cow::Borrowed)
         }
 
         fn get_utxo(&self, _output_id: &OutputId) -> Option<Output> {
             None
         }
 
-        fn get_utxos(&self, _query: &Query) -> Vec<(OutputId, Output)> {
-            vec![]
+        fn query_utxos<'a>(
+            &'a self,
+            _query: &'a Query,
+        ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
+            unimplemented!()
         }
 
         fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
             None
         }
 
-        fn get_last_block_metadata(&self) -> Option<BlockMetadata> {
-            self.metadata.values().last().cloned()
+        fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+            self.metadata.values().next().map(Cow::Borrowed)
         }
     }
 
     impl Ledger for MockIterator {
-        fn get_block(&self, hash: &Hash) -> Option<Block> {
-            self.blocks.get(hash).cloned()
+        fn get_block(&self, hash: &Hash) -> Option<Cow<Block>> {
+            self.blocks.get(hash).map(Cow::Borrowed)
         }
     }
 
@@ -251,6 +263,7 @@ mod tests {
         let mut mock = MockIterator::default();
         let block_hash = [1; 32];
         let metadata = BlockMetadata {
+            version: 0,
             hash: block_hash,
             prev_block_hash: [0; 32],
             height: 0,

@@ -79,6 +79,6 @@ where
 
     async fn get_utxos(&self, query: Query) -> Result<Vec<OutputEntry>, ErrorObjectOwned> {
         let lg = self.ledger.read().unwrap();
-        Ok(lg.get_utxos(&query))
+        Ok(lg.query_utxos(&query).collect())
     }
 }
