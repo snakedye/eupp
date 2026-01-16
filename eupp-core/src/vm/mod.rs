@@ -310,7 +310,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                     }
                 }
 
-                // Immediate pushes (scanner already produces `Op::Push(u32)` or `Op::PushByte`)
+                // Immediate pushes
                 Op::PushU32(n) => return self.exec(scanner, stack.push(n.into())),
                 Op::PushByte(b) => return self.exec(scanner, stack.push(b.into())),
                 Op::PushBytes(bytes) => return self.exec(scanner, stack.push(bytes.into())),
@@ -378,15 +378,15 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 }
                 // The opcode should contain the index of the output to push.
                 Op::OutAmt(idx) => {
-                    let output = self.get_outputs()[idx as usize];
+                    let output = &self.get_outputs()[idx as usize];
                     return self.exec(scanner, stack.push(output.amount.into()));
                 }
                 Op::OutData(idx) => {
-                    let output = self.get_outputs()[idx as usize];
+                    let output = &self.get_outputs()[idx as usize];
                     return self.exec(scanner, stack.push(StackValue::Bytes(&output.data)));
                 }
                 Op::OutComm(idx) => {
-                    let output = self.get_outputs()[idx as usize];
+                    let output = &self.get_outputs()[idx as usize];
                     return self.exec(scanner, stack.push(StackValue::Bytes(&output.commitment)));
                 }
 
