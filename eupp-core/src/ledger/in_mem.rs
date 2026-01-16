@@ -95,6 +95,10 @@ impl InMemoryIndexer {
         Ok(())
     }
 
+    /// Removes all block metadata and UTXOs from the indexer that are descendants of `root`.
+    ///
+    /// This is typically used to "uproot" a forked branch from the canonical chain, cleaning up
+    /// any blocks and UTXOs that are no longer part of the main chain after a reorganization.
     fn uproot(&mut self, tip: &Hash, root: &Hash) {
         let blocks = self
             .metadata_iter_from(tip)
@@ -117,7 +121,7 @@ impl Indexer for InMemoryIndexer {
         let height;
         let available_supply;
         let prev_block = self.block_index.get(&block.prev_block_hash);
-        let prev_locked_supply = prev_block.map_or(0, |meta| meta.locked_supply);
+        let prev_locked_supply = prev_block.map_or(0, |meta| meta.locked_supply(self));
         let prev_cumulative_work = prev_block.map_or(U256::zero(), |meta| meta.cumulative_work);
         let locked_supply = block.lead_utxo().map_or(0, |utxo| utxo.amount);
         let block_difficulty = prev_block
@@ -129,12 +133,10 @@ impl Indexer for InMemoryIndexer {
 
         // Get the previous block metadata
         if !self.block_index.is_empty() {
-            let prev_meta = self.block_index.get(&block.prev_block_hash).ok_or(
-                BlockError::InvalidBlockHash(format!(
-                    "Previous block hash not found: {}",
-                    hex::encode(&block.prev_block_hash)
-                )),
-            )?;
+            let prev_meta = prev_block.ok_or(BlockError::InvalidBlockHash(format!(
+                "Previous block hash not found: {}",
+                hex::encode(&block.prev_block_hash)
+            )))?;
 
             let reward = prev_locked_supply - locked_supply;
             available_supply = prev_meta.available_supply + reward;
@@ -156,7 +158,6 @@ impl Indexer for InMemoryIndexer {
             merkle_root: header.merkle_root,
             cumulative_work: prev_cumulative_work + block_work,
             available_supply,
-            locked_supply,
             height,
         };
 

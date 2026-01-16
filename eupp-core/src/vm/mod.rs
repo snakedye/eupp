@@ -885,7 +885,6 @@ mod tests {
             height: 50,
             available_supply: 100_000,
             merkle_root: [0; 32],
-            locked_supply: 0,
             cumulative_work: U256::zero(),
             lead_utxo: OutputId::new([0; 32], 0),
         });

@@ -33,13 +33,10 @@ pub struct BlockMetadata {
     /// The MAS Metric: Sum of all rewards from Genesis to this block.
     pub available_supply: u64,
 
-    /// The MAS Metric: Sum of all locked rewards from Genesis to this block.
-    pub locked_supply: u64,
-
-    /// The output id of the lead utxo
+    /// The `OutputId` of the lead utxo
     pub lead_utxo: OutputId,
 
-    /// The cumulative work on this blockchain
+    /// The cumulative work on this blockchain.
     pub cumulative_work: U256,
 
     /// The merkle root of the transaction tree.
@@ -68,6 +65,12 @@ impl BlockMetadata {
             prev_block_hash: self.prev_block_hash,
             merkle_root: self.merkle_root,
         }
+    }
+    /// Return the locked supply on the blockchain.
+    pub fn locked_supply(&self, indexer: &impl Indexer) -> u64 {
+        indexer
+            .get_utxo(&self.lead_utxo)
+            .map_or(0, |utxo| utxo.amount)
     }
 }
 
@@ -213,7 +216,6 @@ mod tests {
                     height: 0,
                     cumulative_work: U256::zero(),
                     available_supply: 0,
-                    locked_supply: 0,
                     lead_utxo,
                 },
             );
@@ -274,7 +276,6 @@ mod tests {
             height: 0,
             available_supply: 0,
             merkle_root: [0; 32],
-            locked_supply: 0,
             cumulative_work: U256::zero(),
             lead_utxo: OutputId::new([0; 32], 0),
         };

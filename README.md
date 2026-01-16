@@ -10,30 +10,30 @@ The protocol operates on a Modified UTXO architecture where the state is a colle
 
 ### 2.1 Transaction Structure
 
-* **Capacity:** The protocol enforces a limit of 256 inputs and 256 outputs per transaction to ensure efficient processing and prevent excessive computational overhead.  
-* **Balance:** Transactions must satisfy the conservation rule, expressed as `sum(inputs) >= sum(outputs)` where **n** is the number of inputs and **m** is the number of outputs. 
+- **Capacity:** The protocol enforces a limit of 256 inputs and 256 outputs per transaction to ensure efficient processing and prevent excessive computational overhead.  
+- **Balance:** Transactions must satisfy the conservation rule, expressed as `sum(inputs) >= sum(outputs)` where **n** is the number of inputs and **m** is the number of outputs. 
 This ensures that no new value is created within the transaction, maintaining the integrity of the ledger.
-* **Pruning:** To optimize the state and reduce unnecessary data retention, outputs with a value of 0 are considered redundant and can be safely removed from the active UTXO set. This mechanism helps mitigate state bloat and ensures the scalability of the protocol over time.
+- **Pruning:** To optimize the state and reduce unnecessary data retention, outputs with a value of 0 are considered redundant and can be safely removed from the active UTXO set. This mechanism helps mitigate state bloat and ensures the scalability of the protocol over time.
 
 ### 2.2 Output Structure
 
 Every UTXO consists of four distinct fields:
 
-* **Version (1 byte):** Specifies the spending logic.  
-* **Amount (4 bytes):** Represents the stored value in the output.  
-* **Data (32 bytes):** Contains contextual state or VM bytecode, which can be used for programmable spending conditions.  
-* **Commitment (32 bytes):** A cryptographic commitment that can serve as a locking mechanism.
+- **Version (1 byte):** Specifies the spending logic.  
+- **Amount (4 bytes):** Represents the stored value in the output.  
+- **Data (32 bytes):** Contains contextual state or VM bytecode, which can be used for programmable spending conditions.  
+- **Commitment (32 bytes):** A cryptographic commitment that can serve as a locking mechanism.
 
 ### 2.3 Input Structure
 
 Each transaction input references a specific UTXO and provides the necessary cryptographic proof to unlock it. The structure is defined as follows:
 
-* **Output ID:** A reference to the UTXO being spent, consisting of:
-  * **Transaction Hash (32 bytes):** The hash of the transaction containing the UTXO.
-  * **Index (1 byte):** The position of the UTXO in the transaction's output list.
-* **Public Key (32 bytes):** The Ed25519 public key corresponding to the private key used for signing.
-* **Signature (64 bytes):** A cryptographic signature proving ownership of the referenced UTXO.
-* **Witness (Variable):** Optional data used for advanced spending conditions or VM execution.
+- **Output ID:** A reference to the UTXO being spent, consisting of:
+  - **Transaction Hash (32 bytes):** The hash of the transaction containing the UTXO.
+  - **Index (1 byte):** The position of the UTXO in the transaction's output list.
+- **Public Key (32 bytes):** The Ed25519 public key corresponding to the private key used for signing.
+- **Signature (64 bytes):** A cryptographic signature proving ownership of the referenced UTXO.
+- **Witness (Variable):** Optional data used for advanced spending conditions or VM execution.
 
 The input structure ensures that only the rightful owner of a UTXO can spend it, while also supporting extensibility for programmable spending logic.
 
