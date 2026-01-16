@@ -116,8 +116,10 @@ impl Block {
                         crate::transaction::TransactionError::InvalidOutput(input.output_id),
                     ))?;
 
-            let mask = &prev_lead_utxo.data;
-            let nonce = &this_lead_utxo.commitment;
+            let (mask, nonce) = prev_lead_utxo
+                .mask()
+                .zip(this_lead_utxo.nonce())
+                .ok_or_else(|| BlockError::InvalidVersion(prev_lead_utxo.version as u8))?;
             let solution = mining_solution(&prev_block_hash, &input.public_key, nonce);
             if !matches_mask(mask, &solution) {
                 return Err(BlockError::ChallengeError);

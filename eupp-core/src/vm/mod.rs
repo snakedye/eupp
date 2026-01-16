@@ -624,6 +624,7 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use op::r#const::*;
     use std::{borrow::Cow, collections::HashMap, u64};
+    use u256::U256;
 
     // A mock indexer for testing purposes.
     #[derive(Default, Clone)]
@@ -885,6 +886,7 @@ mod tests {
             available_supply: 100_000,
             merkle_root: [0; 32],
             locked_supply: 0,
+            cumulative_work: U256::zero(),
             lead_utxo: OutputId::new([0; 32], 0),
         });
         let transaction = default_transaction();

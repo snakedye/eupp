@@ -5,6 +5,7 @@ use std::borrow::Cow;
 
 pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
 pub use query::Query;
+use u256::U256;
 
 use crate::block::BlockHeader;
 
@@ -38,6 +39,9 @@ pub struct BlockMetadata {
     /// The output id of the lead utxo
     pub lead_utxo: OutputId,
 
+    /// The cumulative work on this blockchain
+    pub cumulative_work: U256,
+
     /// The merkle root of the transaction tree.
     pub merkle_root: Hash,
 }
@@ -64,16 +68,6 @@ impl BlockMetadata {
             prev_block_hash: self.prev_block_hash,
             merkle_root: self.merkle_root,
         }
-    }
-
-    /// Calculates the consensus weight of the chain tip.
-    /// Favors "Dense" chains (high supply extraction per block height).
-    pub fn consensus_score(&self) -> u128 {
-        let s = self.available_supply as u128;
-        let h = (self.height as u128).max(1); // Avoid division by zero
-
-        // (Supply^2 / Height) favors high-difficulty blocks over low-difficulty grinding
-        (s * s) / h
     }
 }
 
@@ -217,6 +211,7 @@ mod tests {
                     prev_block_hash: block.prev_block_hash,
                     merkle_root: [0; 32],
                     height: 0,
+                    cumulative_work: U256::zero(),
                     available_supply: 0,
                     locked_supply: 0,
                     lead_utxo,
@@ -280,6 +275,7 @@ mod tests {
             available_supply: 0,
             merkle_root: [0; 32],
             locked_supply: 0,
+            cumulative_work: U256::zero(),
             lead_utxo: OutputId::new([0; 32], 0),
         };
         mock.metadata.insert(block_hash, metadata);

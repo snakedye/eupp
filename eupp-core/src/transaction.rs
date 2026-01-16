@@ -337,6 +337,20 @@ impl Output {
             commitment,
         }
     }
+
+    pub fn mask(&self) -> Option<&Hash> {
+        match self.version {
+            Version::V0 => Some(&self.data),
+            _ => None,
+        }
+    }
+
+    pub fn nonce(&self) -> Option<&Hash> {
+        match self.version {
+            Version::V0 => Some(&self.commitment),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Debug for Transaction {
