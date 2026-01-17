@@ -1,3 +1,32 @@
+/*! This module provides the foundational structures and traits for managing and interacting
+with a blockchain ledger. It includes definitions for block metadata, iterators for traversing
+the blockchain, and traits for indexing and accessing blockchain data.
+
+# Key Components
+
+- `BlockMetadata`: Represents metadata for a block in the ledger, including its hash, height,
+  cumulative work, and other properties.
+- `BlockIter` and `BlockMetadataIter`: Iterators for traversing blocks and block metadata
+  from the tip of the chain to the genesis block.
+- `Indexer` and `Ledger` Traits: Define the interfaces for indexing and accessing blockchain
+  data, including UTXOs, block metadata, and full block data.
+
+# Traits
+
+- `Indexer`: Provides optimized views of the blockchain state, such as the UTXO set and block
+  metadata. It includes methods for adding blocks, querying UTXOs, and retrieving block metadata.
+- `Ledger`: Extends the `Indexer` trait to include access to full block data and iterators
+  over blocks.
+
+# Iterators
+
+- `BlockIter`: Iterates over full blocks in the blockchain, starting from the tip.
+- `BlockMetadataIter`: Iterates over block metadata, starting from the tip.
+
+This module is designed to be extensible and provides the building blocks for implementing
+custom blockchain indexing and ledger systems.
+*/
+
 mod in_mem;
 mod query;
 
@@ -5,6 +34,7 @@ use std::borrow::Cow;
 
 pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
 pub use query::Query;
+use u256::U256;
 
 use crate::block::BlockHeader;
 
@@ -32,11 +62,11 @@ pub struct BlockMetadata {
     /// The MAS Metric: Sum of all rewards from Genesis to this block.
     pub available_supply: u64,
 
-    /// The MAS Metric: Sum of all locked rewards from Genesis to this block.
-    pub locked_supply: u64,
-
-    /// The output id of the lead utxo
+    /// The `OutputId` of the lead utxo
     pub lead_utxo: OutputId,
+
+    /// The cumulative work on this blockchain.
+    pub cumulative_work: U256,
 
     /// The merkle root of the transaction tree.
     pub merkle_root: Hash,
@@ -65,15 +95,11 @@ impl BlockMetadata {
             merkle_root: self.merkle_root,
         }
     }
-
-    /// Calculates the consensus weight of the chain tip.
-    /// Favors "Dense" chains (high supply extraction per block height).
-    pub fn consensus_score(&self) -> u128 {
-        let s = self.available_supply as u128;
-        let h = (self.height as u128).max(1); // Avoid division by zero
-
-        // (Supply^2 / Height) favors high-difficulty blocks over low-difficulty grinding
-        (s * s) / h
+    /// Return the locked supply on the blockchain.
+    pub fn locked_supply(&self, indexer: &impl Indexer) -> u64 {
+        indexer
+            .get_utxo(&self.lead_utxo)
+            .map_or(0, |utxo| utxo.amount)
     }
 }
 
@@ -217,8 +243,8 @@ mod tests {
                     prev_block_hash: block.prev_block_hash,
                     merkle_root: [0; 32],
                     height: 0,
+                    cumulative_work: U256::zero(),
                     available_supply: 0,
-                    locked_supply: 0,
                     lead_utxo,
                 },
             );
@@ -279,7 +305,7 @@ mod tests {
             height: 0,
             available_supply: 0,
             merkle_root: [0; 32],
-            locked_supply: 0,
+            cumulative_work: U256::zero(),
             lead_utxo: OutputId::new([0; 32], 0),
         };
         mock.metadata.insert(block_hash, metadata);

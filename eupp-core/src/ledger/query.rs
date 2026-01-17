@@ -13,19 +13,26 @@ pub struct Query {
 }
 
 impl Query {
+    /// Creates a new empty `Query` with no starting hash and no addresses.
     pub fn new() -> Query {
         Self {
             to: None,
             addresses: HashSet::new(),
         }
     }
+
+    /// Adds an address (commitment hash) to the query.
     pub fn with_address(mut self, address: Hash) -> Self {
         self.addresses.insert(address);
         self
     }
+
+    /// Returns an optional reference to the starting hash for the query, if set.
     pub fn from(&self) -> Option<&Hash> {
         self.to.as_ref()
     }
+
+    /// Returns a reference to the set of addresses (commitment hashes) in the query.
     pub fn addresses(&self) -> &HashSet<Hash> {
         &self.addresses
     }

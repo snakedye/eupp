@@ -1,3 +1,35 @@
+/*!
+This module defines the structure and validation logic for blocks in a blockchain.
+
+A block is a fundamental unit in the blockchain, containing a list of transactions,
+a reference to the previous block, and a header with metadata. The module also includes
+utilities for calculating Merkle roots, verifying Merkle proofs, and validating blocks
+against various rules.
+
+# Key Components
+
+- `Block`: Represents a block in the blockchain, containing transactions and metadata.
+- `BlockHeader`: Contains metadata about the block, such as its version, previous block hash, and Merkle root.
+- `BlockError`: Enumerates possible errors that can occur during block validation.
+- `Leaf` and `Direction`: Represent nodes in the Merkle tree and their direction (left or right).
+
+# Features
+
+- Block validation, including checks for:
+  - Validity of the previous block hash.
+  - Correctness of the mining challenge.
+  - Supply preservation and reward limits.
+  - Transaction validity.
+- Calculation of Merkle roots and proofs for transactions.
+- Utilities for verifying Merkle proofs.
+
+# Usage
+
+This module is designed to be used in a blockchain implementation where blocks are
+validated and added to the chain. It assumes the presence of an `Indexer` trait for
+accessing blockchain data and a `Transaction` structure for representing transactions.
+*/
+
 use crate::miner::mining_solution;
 
 use super::{
@@ -9,20 +41,28 @@ use super::{
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
 
-/// The maximum block size.
+/// The maximum block size in vbytes.
 pub const MAX_BLOCK_SIZE: usize = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A block in the blockchain.
 pub struct Block {
+    /// The version of the block, used to indicate protocol changes.
     pub version: u8,
+    /// The hash of the previous block in the blockchain.
     pub prev_block_hash: Hash,
+    /// A list of transactions included in the block.
     pub transactions: Vec<Transaction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// The header of a block, offering an overview of the block.
 pub struct BlockHeader {
+    /// The version of the block, used to indicate protocol changes.
     pub version: u8,
+    /// The hash of the previous block in the blockchain.
     pub prev_block_hash: Hash,
+    /// The Merkle root of the transactions in the block.
     pub merkle_root: Hash,
 }
 
@@ -116,8 +156,10 @@ impl Block {
                         crate::transaction::TransactionError::InvalidOutput(input.output_id),
                     ))?;
 
-            let mask = &prev_lead_utxo.data;
-            let nonce = &this_lead_utxo.commitment;
+            let (mask, nonce) = prev_lead_utxo
+                .mask()
+                .zip(this_lead_utxo.nonce())
+                .ok_or_else(|| BlockError::InvalidVersion(prev_lead_utxo.version as u8))?;
             let solution = mining_solution(&prev_block_hash, &input.public_key, nonce);
             if !matches_mask(mask, &solution) {
                 return Err(BlockError::ChallengeError);

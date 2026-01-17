@@ -3,9 +3,12 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
 };
 
+use u256::U256;
+
 use crate::{
     Hash,
     block::{Block, BlockError},
+    mask_difficulty,
     transaction::{Output, OutputId, TransactionError},
 };
 
@@ -92,6 +95,10 @@ impl InMemoryIndexer {
         Ok(())
     }
 
+    /// Removes all block metadata and UTXOs from the indexer that are descendants of `root`.
+    ///
+    /// This is typically used to "uproot" a forked branch from the canonical chain, cleaning up
+    /// any blocks and UTXOs that are no longer part of the main chain after a reorganization.
     fn uproot(&mut self, tip: &Hash, root: &Hash) {
         let blocks = self
             .metadata_iter_from(tip)
@@ -112,46 +119,45 @@ impl Indexer for InMemoryIndexer {
     fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
         // Initialize variables
         let height;
-        let total_supply;
-        let prev_locked_supply = self
-            .block_index
-            .get(&block.prev_block_hash)
-            .map(|meta| meta.locked_supply)
-            .unwrap_or_default();
-        let locked_supply = block
-            .lead_utxo()
-            .map(|utxo| utxo.amount)
-            .unwrap_or_default();
+        let available_supply;
+        let prev_block = self.block_index.get(&block.prev_block_hash);
+        let prev_locked_supply = prev_block.map_or(0, |meta| meta.locked_supply(self));
+        let prev_cumulative_work = prev_block.map_or(U256::zero(), |meta| meta.cumulative_work);
+        let locked_supply = block.lead_utxo().map_or(0, |utxo| utxo.amount);
+        let block_difficulty = prev_block
+            .and_then(|meta| self.get_utxo(&meta.lead_utxo))
+            .and_then(|utxo| utxo.mask().copied())
+            .as_ref()
+            .map_or(0, mask_difficulty);
+        let block_work = U256::from(1) << block_difficulty as usize;
 
         // Get the previous block metadata
         if !self.block_index.is_empty() {
-            let prev_meta = self.block_index.get(&block.prev_block_hash).ok_or(
-                BlockError::InvalidBlockHash(format!(
-                    "Previous block hash not found: {}",
-                    hex::encode(&block.prev_block_hash)
-                )),
-            )?;
+            let prev_meta = prev_block.ok_or(BlockError::InvalidBlockHash(format!(
+                "Previous block hash not found: {}",
+                hex::encode(&block.prev_block_hash)
+            )))?;
 
             let reward = prev_locked_supply - locked_supply;
-            total_supply = prev_meta.available_supply + reward;
+            available_supply = prev_meta.available_supply + reward;
 
             // Update height
             height = prev_meta.height + 1;
         // We make an exception for the genesis block, which has no previous block.
         } else {
             height = 0;
-            total_supply = 0;
+            available_supply = 0;
         }
 
         let header = block.header();
         let metadata = BlockMetadata {
             version: header.version,
             hash: header.hash(),
-            prev_block_hash: block.prev_block_hash,
-            available_supply: total_supply,
+            prev_block_hash: header.prev_block_hash,
             lead_utxo: OutputId::new(block.transactions[0].hash(), 0),
             merkle_root: header.merkle_root,
-            locked_supply,
+            cumulative_work: prev_cumulative_work + block_work,
+            available_supply,
             height,
         };
 
@@ -165,10 +171,10 @@ impl Indexer for InMemoryIndexer {
 
         // Update Tip if this chain is now heavier or if there's no block for the tip
         if self.block_index.get(&self.tip).is_none()
-            || metadata.consensus_score()
+            || metadata.cumulative_work
                 > current_prev_metadata
-                    .map(|meta| meta.consensus_score())
-                    .unwrap()
+                    .map(|meta| meta.cumulative_work)
+                    .unwrap_or(U256::zero())
         {
             if let Some(root) = current_prev_metadata
                 .map(|meta| meta.prev_block_hash)

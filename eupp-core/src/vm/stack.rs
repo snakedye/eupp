@@ -65,11 +65,17 @@ impl<'a, T: Debug> Debug for Stack<'a, T> {
 pub struct StackIter<'a, T>(&'a Stack<'a, T>);
 
 impl<'a, T> StackIter<'a, T> {
+    /// Creates a new `StackIter` from a reference to a `Stack`.
     pub fn new(stack: &'a Stack<T>) -> Self {
         Self(stack)
     }
+    /// Returns a reference to the underlying `Stack`.
     pub fn stack(&self) -> &Stack<T> {
         self.0
+    }
+    /// Returns a `TakeStackIter` that yields at most `len` elements from this iterator.
+    pub fn take(self, len: usize) -> TakeStackIter<'a, T> {
+        TakeStackIter { iter: self, len }
     }
 }
 
@@ -92,6 +98,26 @@ impl<'a, T> Iterator for StackIter<'a, T> {
                 self.0 = *next;
                 Some(data)
             }
+        }
+    }
+}
+
+/// An iterator that yields at most `len` elements from a [`StackIter`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TakeStackIter<'a, T> {
+    iter: StackIter<'a, T>,
+    len: usize,
+}
+
+impl<'a, T> Iterator for TakeStackIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.len == 0 {
+            None
+        } else {
+            self.len -= 1;
+            self.iter.next()
         }
     }
 }

@@ -12,7 +12,7 @@ use ed25519_dalek::Verifier;
 use op::Op;
 use scanner::Scanner;
 use serde::Serialize;
-use stack::{Stack, StackIter};
+use stack::{Stack, TakeStackIter};
 
 use super::transaction::{Input, Output, Transaction, sighash};
 
@@ -108,10 +108,7 @@ enum StackValue<'a> {
     U32(u32),
     U64(u64),
     Bytes(&'a [u8]),
-    Stream {
-        iter: StackIter<'a, StackValue<'a>>,
-        len: usize,
-    },
+    Stream(TakeStackIter<'a, StackValue<'a>>),
 }
 
 /// Represents an owned value on the VM stack.
@@ -163,7 +160,7 @@ impl<'a> StackValue<'a> {
             StackValue::U32(_) => 4,
             StackValue::U64(_) => 8,
             StackValue::Bytes(bytes) => bytes.len(),
-            StackValue::Stream { iter, len } => iter.take(*len).map(|value| value.len()).sum(),
+            StackValue::Stream(iter) => iter.map(|value| value.len()).sum(),
         }
     }
     fn to_owned(&self) -> OwnedStackValue {
@@ -208,9 +205,9 @@ impl<'a> StackValue<'a> {
                 slice[..len].copy_from_slice(&bytes[..len]);
                 len
             }
-            StackValue::Stream { iter, len } => {
+            StackValue::Stream(iter) => {
                 let mut written = 0;
-                for value in iter.take(*len) {
+                for value in *iter {
                     if written >= slice.len() {
                         break;
                     }
@@ -310,7 +307,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                     }
                 }
 
-                // Immediate pushes (scanner already produces `Op::Push(u32)` or `Op::PushByte`)
+                // Immediate pushes
                 Op::PushU32(n) => return self.exec(scanner, stack.push(n.into())),
                 Op::PushByte(b) => return self.exec(scanner, stack.push(b.into())),
                 Op::PushBytes(bytes) => return self.exec(scanner, stack.push(bytes.into())),
@@ -378,15 +375,15 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 }
                 // The opcode should contain the index of the output to push.
                 Op::OutAmt(idx) => {
-                    let output = self.get_outputs()[idx as usize];
+                    let output = &self.get_outputs()[idx as usize];
                     return self.exec(scanner, stack.push(output.amount.into()));
                 }
                 Op::OutData(idx) => {
-                    let output = self.get_outputs()[idx as usize];
+                    let output = &self.get_outputs()[idx as usize];
                     return self.exec(scanner, stack.push(StackValue::Bytes(&output.data)));
                 }
                 Op::OutComm(idx) => {
-                    let output = self.get_outputs()[idx as usize];
+                    let output = &self.get_outputs()[idx as usize];
                     return self.exec(scanner, stack.push(StackValue::Bytes(&output.commitment)));
                 }
 
@@ -395,6 +392,14 @@ impl<'a, L: Indexer> Vm<'a, L> {
                     let supply = self
                         .indexer
                         .get_last_block_metadata()
+                        .map_or(0, |meta| meta.available_supply);
+                    return self.exec(scanner, stack.push(supply.into()));
+                }
+                Op::SelfSupply => {
+                    let supply = self
+                        .indexer
+                        .get_utxo_block_hash(&self.get_input().output_id)
+                        .and_then(|hash| self.indexer.get_block_metadata(&hash))
                         .map_or(0, |meta| meta.available_supply);
                     return self.exec(scanner, stack.push(supply.into()));
                 }
@@ -513,10 +518,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                             }
                             return self.exec(
                                 scanner,
-                                parent2.push(StackValue::Stream {
-                                    iter: stack.iter(),
-                                    len: 2,
-                                }),
+                                parent2.push(StackValue::Stream(stack.iter().take(2))),
                             );
                         }
                     }
@@ -624,6 +626,7 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use op::r#const::*;
     use std::{borrow::Cow, collections::HashMap, u64};
+    use u256::U256;
 
     // A mock indexer for testing purposes.
     #[derive(Default, Clone)]
@@ -884,7 +887,7 @@ mod tests {
             height: 50,
             available_supply: 100_000,
             merkle_root: [0; 32],
-            locked_supply: 0,
+            cumulative_work: U256::zero(),
             lead_utxo: OutputId::new([0; 32], 0),
         });
         let transaction = default_transaction();
@@ -906,6 +909,37 @@ mod tests {
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(0)));
         let code = [OP_SELF_HEIGHT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
+    }
+
+    #[test]
+    fn test_op_self_supply() {
+        let mut indexer = MockLedger::default();
+        indexer.block_meta = Some(BlockMetadata {
+            version: 0,
+            hash: [0; 32],
+            prev_block_hash: [0; 32],
+            height: 50,
+            available_supply: 100_000,
+            merkle_root: [0; 32],
+            cumulative_work: U256::zero(),
+            lead_utxo: OutputId::new([0; 32], 0),
+        });
+
+        let output_id = OutputId::new(TransactionHash::default(), 0);
+        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let utxo = Output {
+            version: Version::V1,
+            amount: 100,
+            commitment: [0; 32],
+            data: [0; 32],
+        };
+        indexer.utxos.insert(output_id, utxo);
+
+        let transaction = Transaction::new(vec![input], vec![]);
+        let vm = create_vm(&indexer, 0, &transaction);
+
+        let code = [OP_SELF_SUPPLY];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(100_000)));
     }
 
     #[test]

@@ -6,8 +6,13 @@ pub mod miner;
 pub mod transaction;
 pub mod vm;
 
+/// 32-byte Ed25519 public key
 pub type PublicKey = [u8; 32];
+
+/// 32-byte hash (e.g., Blake2s256 output)
 pub type Hash = [u8; 32];
+
+/// 64-byte Ed25519 signature
 pub type Signature = [u8; 64];
 
 /// Trait for calculating the virtual size of a type.

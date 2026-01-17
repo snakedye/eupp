@@ -866,6 +866,7 @@ dependencies = [
  "hex",
  "rand 0.9.2",
  "serde",
+ "u256",
 ]
 
 [[package]]
@@ -3795,6 +3796,12 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
+
+[[package]]
+name = "u256"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "525b9343eaa3c244a4af0fc3c93725f6e6804d250a7a316461780c28fafcba08"
 
 [[package]]
 name = "unicode-ident"
