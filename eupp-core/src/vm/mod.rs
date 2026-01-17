@@ -395,6 +395,14 @@ impl<'a, L: Indexer> Vm<'a, L> {
                         .map_or(0, |meta| meta.available_supply);
                     return self.exec(scanner, stack.push(supply.into()));
                 }
+                Op::SelfSupply => {
+                    let supply = self
+                        .indexer
+                        .get_utxo_block_hash(&self.get_input().output_id)
+                        .and_then(|hash| self.indexer.get_block_metadata(&hash))
+                        .map_or(0, |meta| meta.available_supply);
+                    return self.exec(scanner, stack.push(supply.into()));
+                }
                 Op::Height => {
                     let height = self
                         .indexer
@@ -901,6 +909,37 @@ mod tests {
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(0)));
         let code = [OP_SELF_HEIGHT];
         assert_eq!(vm.run(&code), Ok(OwnedStackValue::U32(0)));
+    }
+
+    #[test]
+    fn test_op_self_supply() {
+        let mut indexer = MockLedger::default();
+        indexer.block_meta = Some(BlockMetadata {
+            version: 0,
+            hash: [0; 32],
+            prev_block_hash: [0; 32],
+            height: 50,
+            available_supply: 100_000,
+            merkle_root: [0; 32],
+            cumulative_work: U256::zero(),
+            lead_utxo: OutputId::new([0; 32], 0),
+        });
+
+        let output_id = OutputId::new(TransactionHash::default(), 0);
+        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let utxo = Output {
+            version: Version::V1,
+            amount: 100,
+            commitment: [0; 32],
+            data: [0; 32],
+        };
+        indexer.utxos.insert(output_id, utxo);
+
+        let transaction = Transaction::new(vec![input], vec![]);
+        let vm = create_vm(&indexer, 0, &transaction);
+
+        let code = [OP_SELF_SUPPLY];
+        assert_eq!(vm.run(&code), Ok(OwnedStackValue::U64(100_000)));
     }
 
     #[test]

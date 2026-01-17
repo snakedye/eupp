@@ -10,7 +10,7 @@ The protocol operates on a Modified UTXO architecture where the state is a colle
 
 ### 2.1 Transaction Structure
 
-- **Capacity:** The protocol enforces a limit of 255 inputs and 255 outputs per transaction to ensure efficient processing and prevent excessive computational overhead.
+- **Capacity:** The protocol enforces a limit of 256 inputs and 256 outputs per transaction to ensure efficient processing and prevent excessive computational overhead.
 - **Balance:** Transactions must satisfy the conservation rule, expressed as `sum(inputs) >= sum(outputs)`. This ensures that no new value is created within a regular transaction, maintaining the integrity of the ledger.
 - **Pruning:** To incentivize state optimization, the virtual size of outputs with a value of 0 is halved. This encourages the consolidation of dust outputs and helps mitigate state bloat over time.
 

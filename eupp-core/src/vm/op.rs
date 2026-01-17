@@ -36,6 +36,7 @@ pub mod r#const {
 
     // Blockchain State
     pub const OP_PUSH_SUPPLY: u8 = 0x40; // Push current total supply onto the stack.
+    pub const OP_SELF_SUPPLY: u8 = 0x43; // Push the supply of the UTXO being spent onto the stack.
     pub const OP_PUSH_HEIGHT: u8 = 0x41; // Push current block height onto the stack.
     pub const OP_SELF_HEIGHT: u8 = 0x42; // Pushes the block height of the UTXO onto the stack.
 
@@ -112,10 +113,12 @@ pub enum Op<'a> {
     OutComm(u8),
     /// Pushes the current total supply of the currency onto the stack.
     Supply,
-    /// Pushes the height of the UTXO's block onto the stack.
-    SelfHeight,
+    /// Pushes the supply of the UTXO being spent onto the stack.
+    SelfSupply,
     /// Pushes the current block height onto the stack.
     Height,
+    /// Pushes the height of the UTXO's block onto the stack.
+    SelfHeight,
 
     // Public Key and Signature
     /// Pushes the 32-byte Public Key from the input.
@@ -212,6 +215,7 @@ impl core::convert::TryFrom<u8> for Op<'_> {
             OP_PUSH_SUPPLY => Ok(Op::Supply),
             OP_PUSH_HEIGHT => Ok(Op::Height),
             OP_SELF_HEIGHT => Ok(Op::SelfHeight),
+            OP_SELF_SUPPLY => Ok(Op::SelfSupply),
 
             OP_PUSH_PK => Ok(Op::PushPk),
             OP_PUSH_SIG => Ok(Op::PushSig),
@@ -262,6 +266,7 @@ impl From<Op<'_>> for u8 {
             Op::Supply => OP_PUSH_SUPPLY,
             Op::Height => OP_PUSH_HEIGHT,
             Op::SelfHeight => OP_SELF_HEIGHT,
+            Op::SelfSupply => OP_SELF_SUPPLY,
 
             Op::PushPk => OP_PUSH_PK,
             Op::PushSig => OP_PUSH_SIG,
@@ -310,6 +315,7 @@ impl<'a> core::fmt::Display for Op<'a> {
             Op::Supply => write!(f, "Supply"),
             Op::Height => write!(f, "Height"),
             Op::SelfHeight => write!(f, "SelfHeight"),
+            Op::SelfSupply => write!(f, "SelfSupply"),
             Op::PushPk => write!(f, "PushPk"),
             Op::PushSig => write!(f, "PushSig"),
             Op::CheckSig => write!(f, "CheckSig"),
@@ -355,7 +361,9 @@ mod tests {
             Op::OutData(0),
             Op::OutComm(0),
             Op::Supply,
+            Op::SelfSupply,
             Op::Height,
+            Op::SelfHeight,
             Op::PushPk,
             Op::PushSig,
             Op::CheckSig,

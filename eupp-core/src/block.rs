@@ -28,26 +28,6 @@ against various rules.
 This module is designed to be used in a blockchain implementation where blocks are
 validated and added to the chain. It assumes the presence of an `Indexer` trait for
 accessing blockchain data and a `Transaction` structure for representing transactions.
-
-# Example
-
-```rust
-use crate::block::{Block, BlockError};
-use crate::ledger::InMemoryIndexer;
-use crate::transaction::{Transaction, Output};
-
-let mut indexer = InMemoryIndexer::new();
-let genesis_block = Block::new(0, [0; 32]);
-indexer.add_block(&genesis_block).unwrap();
-
-let mut block = Block::new(1, genesis_block.header().hash());
-block.transactions.push(Transaction::new(vec![], vec![Output::new_v0(50, &[0; 32], &[0; 32])]));
-
-match block.verify(&indexer) {
-    Ok(_) => println!("Block is valid"),
-    Err(e) => println!("Block validation failed: {:?}", e),
-}
-```
 */
 
 use crate::miner::mining_solution;

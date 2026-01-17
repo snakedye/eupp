@@ -23,7 +23,7 @@ pub type TransactionHash = Hash;
 const MAX_WITNESS_SIZE: usize = 1024;
 
 /// Maximum allowed number of inputs or outputs in a transaction.
-const MAX_ALLOWED: usize = u8::MAX as usize;
+const MAX_ALLOWED: usize = 256;
 
 /// A blockchain transaction.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
