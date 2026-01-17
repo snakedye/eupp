@@ -1,3 +1,17 @@
+/*! Mining logic for minting new coins and building blocks.
+
+This module provides functions for mining new transactions and assembling blocks
+in a proof-of-work style system. It includes:
+- Mining solution computation based on a previous block hash, public key, and nonce.
+- Mining transaction construction that spends the previous minting output and rewards the miner.
+- Block assembly by including a valid mining transaction.
+- Utilities for mask-based mining difficulty and reward calculation.
+
+The mining process attempts to find a nonce such that the hash of the previous block,
+the miner's public key, and the nonce matches a difficulty mask. Upon success, a new
+minting output and a miner reward output are created and included in a new block.
+*/
+
 use blake2::{Blake2s256, Digest};
 
 use ed25519_dalek::{Signer, SigningKey};

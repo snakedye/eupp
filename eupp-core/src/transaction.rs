@@ -1,3 +1,14 @@
+/*! Transaction module for blockchain operations.
+
+This module defines the core data structures and logic for representing,
+serializing, hashing, and verifying blockchain transactions. It includes
+types for transactions, inputs, outputs, output identifiers, and protocol
+versions, as well as error types for transaction validation.
+
+The module is designed to be used with a blockchain ledger/indexer and
+supports extensible script and witness validation for advanced transaction types.
+*/
+
 use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
 use super::{Hash, PublicKey, commitment, ledger::Indexer};
 use super::{Signature, VirtualSize};
@@ -5,6 +16,7 @@ use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// The hash of a transaction.
 pub type TransactionHash = Hash;
 
 /// Maximum allowed size for witness data in bytes.
@@ -295,6 +307,13 @@ impl serde::Serialize for Output {
 }
 
 impl Output {
+    /// Creates a new V0 output.
+    ///
+    /// # Arguments
+    ///
+    /// * `amount` - The amount for the output.
+    /// * `mask` - The mask for the next challenge.
+    /// * `nonce` - The solution for the previous challenge.
     pub fn new_v0(amount: u64, mask: &Hash, nonce: &Hash) -> Self {
         Self {
             version: Version::V0,
@@ -303,6 +322,14 @@ impl Output {
             commitment: *nonce, // The solution for the previous challenge
         }
     }
+
+    /// Creates a new V1 output (P2PKH style).
+    ///
+    /// # Arguments
+    ///
+    /// * `amount` - The amount for the output.
+    /// * `public_key` - The public key for the output.
+    /// * `data` - Associated data for the output.
     pub fn new_v1(amount: u64, public_key: &PublicKey, data: &Hash) -> Self {
         let commitment = commitment(public_key, Some(data.as_slice()));
         Self {
@@ -313,6 +340,13 @@ impl Output {
         }
     }
 
+    /// Creates a new V2 output (P2SH style).
+    ///
+    /// # Arguments
+    ///
+    /// * `amount` - The amount for the output.
+    /// * `public_key` - The public key for the output.
+    /// * `script` - The script hash for the output.
     pub fn new_v2(amount: u64, public_key: &PublicKey, script: &Hash) -> Self {
         let commitment = commitment(public_key, Some(script.as_slice()));
         Self {
@@ -323,6 +357,14 @@ impl Output {
         }
     }
 
+    /// Creates a new V3 output (SegWit style).
+    ///
+    /// # Arguments
+    ///
+    /// * `amount` - The amount for the output.
+    /// * `public_key` - The public key for the output.
+    /// * `data` - Associated data for the output (typically a hash).
+    /// * `witness_script` - The witness script for the output.
     pub fn new_v3(
         amount: u64,
         public_key: &PublicKey,
@@ -338,6 +380,7 @@ impl Output {
         }
     }
 
+    /// Returns the mask for V0 outputs, or `None` for other versions.
     pub fn mask(&self) -> Option<&Hash> {
         match self.version {
             Version::V0 => Some(&self.data),
@@ -345,6 +388,7 @@ impl Output {
         }
     }
 
+    /// Returns the nonce for V0 outputs, or `None` for other versions.
     pub fn nonce(&self) -> Option<&Hash> {
         match self.version {
             Version::V0 => Some(&self.commitment),

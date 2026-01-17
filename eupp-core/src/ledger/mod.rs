@@ -1,3 +1,32 @@
+/*! This module provides the foundational structures and traits for managing and interacting
+with a blockchain ledger. It includes definitions for block metadata, iterators for traversing
+the blockchain, and traits for indexing and accessing blockchain data.
+
+# Key Components
+
+- `BlockMetadata`: Represents metadata for a block in the ledger, including its hash, height,
+  cumulative work, and other properties.
+- `BlockIter` and `BlockMetadataIter`: Iterators for traversing blocks and block metadata
+  from the tip of the chain to the genesis block.
+- `Indexer` and `Ledger` Traits: Define the interfaces for indexing and accessing blockchain
+  data, including UTXOs, block metadata, and full block data.
+
+# Traits
+
+- `Indexer`: Provides optimized views of the blockchain state, such as the UTXO set and block
+  metadata. It includes methods for adding blocks, querying UTXOs, and retrieving block metadata.
+- `Ledger`: Extends the `Indexer` trait to include access to full block data and iterators
+  over blocks.
+
+# Iterators
+
+- `BlockIter`: Iterates over full blocks in the blockchain, starting from the tip.
+- `BlockMetadataIter`: Iterates over block metadata, starting from the tip.
+
+This module is designed to be extensible and provides the building blocks for implementing
+custom blockchain indexing and ledger systems.
+*/
+
 mod in_mem;
 mod query;
 

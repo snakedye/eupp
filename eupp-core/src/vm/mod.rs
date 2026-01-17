@@ -12,7 +12,7 @@ use ed25519_dalek::Verifier;
 use op::Op;
 use scanner::Scanner;
 use serde::Serialize;
-use stack::{Stack, StackIter};
+use stack::{Stack, TakeStackIter};
 
 use super::transaction::{Input, Output, Transaction, sighash};
 
@@ -108,10 +108,7 @@ enum StackValue<'a> {
     U32(u32),
     U64(u64),
     Bytes(&'a [u8]),
-    Stream {
-        iter: StackIter<'a, StackValue<'a>>,
-        len: usize,
-    },
+    Stream(TakeStackIter<'a, StackValue<'a>>),
 }
 
 /// Represents an owned value on the VM stack.
@@ -163,7 +160,7 @@ impl<'a> StackValue<'a> {
             StackValue::U32(_) => 4,
             StackValue::U64(_) => 8,
             StackValue::Bytes(bytes) => bytes.len(),
-            StackValue::Stream { iter, len } => iter.take(*len).map(|value| value.len()).sum(),
+            StackValue::Stream(iter) => iter.map(|value| value.len()).sum(),
         }
     }
     fn to_owned(&self) -> OwnedStackValue {
@@ -208,9 +205,9 @@ impl<'a> StackValue<'a> {
                 slice[..len].copy_from_slice(&bytes[..len]);
                 len
             }
-            StackValue::Stream { iter, len } => {
+            StackValue::Stream(iter) => {
                 let mut written = 0;
-                for value in iter.take(*len) {
+                for value in *iter {
                     if written >= slice.len() {
                         break;
                     }
@@ -513,10 +510,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                             }
                             return self.exec(
                                 scanner,
-                                parent2.push(StackValue::Stream {
-                                    iter: stack.iter(),
-                                    len: 2,
-                                }),
+                                parent2.push(StackValue::Stream(stack.iter().take(2))),
                             );
                         }
                     }
