@@ -1,7 +1,17 @@
 use eupp_core::block::Block;
-use eupp_core::transaction::Transaction;
-use eupp_core::{Hash, block::BlockHeader};
+use eupp_core::transaction::{Output, OutputId, Transaction, TransactionHash};
+use eupp_core::{Hash, block::BlockHeader, ledger::Query};
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct NetworkInfo {
+    /// The hash of the current tip block.
+    pub tip_hash: Hash,
+    /// The height of the current tip block.
+    pub tip_height: u64,
+    /// The currently available supply of coins.
+    pub available_supply: u64,
+}
 
 /// Messages broadcast over gossipsub for all peers to see.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -43,6 +53,39 @@ pub enum SyncResponse {
     /// A chunk of blocks in response to `GetBlocks`.
     Blocks(Vec<Block>),
 
-    /// A chunk of block header in response to `GetBlocksHash`.
+    /// A chunk of block headers in response to `GetBlockHeaders`.
     BlockHeaders(Vec<BlockHeader>),
+}
+
+/// RPC requests sent directly to a peer (over libp2p request/response).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RpcRequest {
+    /// Return basic network info (tip hash, height, available supply).
+    GetNetworkInfo,
+
+    /// Return confirmations for a given transaction hash.
+    GetConfirmations { tx_hash: TransactionHash },
+
+    /// Query UTXOs matching `Query`.
+    GetUtxos { query: Query },
+
+    /// Broadcast a raw transaction to the network.
+    /// Expect a `TransactionHash` in the response on success.
+    SendRawTransaction { tx: Transaction },
+}
+
+/// RPC responses for `RpcRequest`.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum RpcResponse {
+    /// Response to `GetNetworkInfo`.
+    NetworkInfo(NetworkInfo),
+
+    /// Response to `GetConfirmations`.
+    Confirmations(u64),
+
+    /// All matched UTXOs in one response: pairs of (OutputId, Output).
+    Utxos(Vec<(OutputId, Output)>),
+
+    /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
+    TransactionHash(TransactionHash),
 }

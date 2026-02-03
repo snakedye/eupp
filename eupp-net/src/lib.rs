@@ -1,16 +1,18 @@
 mod behavior;
 pub mod mempool;
 pub mod protocol;
-pub mod rpc;
+// RPC is now implemented over libp2p request/response (jsonrpsee server removed)
 
 use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::mempool::Mempool;
-use crate::protocol::{GossipMessage, SyncRequest, SyncResponse};
+use crate::protocol::{
+    GossipMessage, NetworkInfo, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
+};
 use eupp_core::block::{BlockError, BlockHeader};
 use eupp_core::ledger::Ledger;
 use eupp_core::transaction::{Transaction, TransactionError};
 use eupp_core::{VirtualSize, block::Block, miner};
-use eupp_rpc::EuppRpcServer;
+
 use futures::StreamExt;
 use libp2p::identity::ed25519::SecretKey;
 use libp2p::{
@@ -20,12 +22,11 @@ use libp2p::{
 };
 use rand::TryRngCore;
 use rand::rngs::OsRng;
-use rpc::EuppRpcImpl;
+
 use std::collections::HashMap;
-use std::error::Error;
-use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use tokio::{sync::mpsc, time::Duration};
+// Note: NetworkInfo is defined in `crate::protocol::NetworkInfo` (do not use eupp-rpc here)
 
 /// The number of blocks to fetch in a single synchronization chunk.
 const BLOCKS_CHUNK_SIZE: usize = 16;
@@ -298,6 +299,96 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         }
     }
 
+    /// Handles incoming RPC request/response events (libp2p request/response).
+    async fn handle_rpc_event(
+        &mut self,
+        event: request_response::Event<RpcRequest, RpcResponse>,
+        swarm: &mut Swarm<EuppBehaviour>,
+        topic: gossipsub::IdentTopic,
+    ) {
+        match event {
+            request_response::Event::Message {
+                peer: _, message, ..
+            } => {
+                match message {
+                    request_response::Message::Request {
+                        request, channel, ..
+                    } => match request {
+                        RpcRequest::GetNetworkInfo => {
+                            if let Ok(lg) = self.ledger.read() {
+                                let info = lg
+                                    .get_last_block_metadata()
+                                    .map(|meta| NetworkInfo {
+                                        tip_hash: meta.hash,
+                                        tip_height: meta.height as u64,
+                                        available_supply: meta.available_supply,
+                                    })
+                                    .unwrap_or_default();
+
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .rpc
+                                    .send_response(channel, RpcResponse::NetworkInfo(info))
+                                {
+                                    eprintln!("Failed to send NetworkInfo response: {:?}", e);
+                                }
+                            }
+                        }
+                        RpcRequest::GetConfirmations { tx_hash } => {
+                            if let Ok(lg) = self.ledger.read() {
+                                let tip_metadata = lg.get_last_block_metadata();
+                                let tx_block_hash = lg.get_transaction_block_hash(&tx_hash);
+                                let confirmations = match (tip_metadata, tx_block_hash) {
+                                    (Some(tip), Some(block_hash)) => {
+                                        let block_metadata =
+                                            lg.get_block_metadata(&block_hash).unwrap();
+                                        tip.height.saturating_sub(block_metadata.height) as u64
+                                    }
+                                    _ => 0u64,
+                                };
+                                if let Err(e) = swarm.behaviour_mut().rpc.send_response(
+                                    channel,
+                                    RpcResponse::Confirmations(confirmations),
+                                ) {
+                                    eprintln!("Failed to send Confirmations response: {:?}", e);
+                                }
+                            }
+                        }
+                        RpcRequest::GetUtxos { query } => {
+                            if let Ok(lg) = self.ledger.read() {
+                                let outputs = lg.query_utxos(&query).collect();
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .rpc
+                                    .send_response(channel, RpcResponse::Utxos(outputs))
+                                {
+                                    eprintln!("Failed to send Utxos response: {:?}", e);
+                                }
+                            }
+                        }
+                        RpcRequest::SendRawTransaction { tx } => {
+                            // Attempt to add to local mempool, then gossip.
+                            let tx_hash = tx.hash();
+                            println!("-> Gossiping Tx {} from RPC", hex::encode(tx_hash));
+                            let msg = GossipMessage::Transaction(tx);
+                            let _ = swarm
+                                .behaviour_mut()
+                                .gossipsub
+                                .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+
+                            let _ = swarm
+                                .behaviour_mut()
+                                .rpc
+                                .send_response(channel, RpcResponse::TransactionHash(tx_hash));
+                        }
+                    },
+                    request_response::Message::Response { .. } => { /* ignore responses for now */ }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Identifies the best peer to sync with from the known peer states.
     fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)> {
         let lg = self.ledger.read().ok()?;
@@ -384,6 +475,10 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         [(StreamProtocol::new("/eupp/sync/1"), ProtocolSupport::Full)],
                         Default::default(),
                     ),
+                    rpc: request_response::cbor::Behaviour::new(
+                        [(StreamProtocol::new("/eupp/rpc/1"), ProtocolSupport::Full)],
+                        Default::default(),
+                    ),
                 })
             })?
             .build();
@@ -394,13 +489,10 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
 
         // Set up channels for mining and RPC communication
         let (block_sender, mut block_receiver) = mpsc::channel(10);
-        let (rpc_tx_sender, mut rpc_tx_receiver) = mpsc::channel(32);
+        // let (rpc_tx_sender, mut rpc_tx_receiver) = mpsc::channel(32);
 
         // Internal channel for notifications like chain tip timeouts
         let (internal_tx, mut internal_rx) = mpsc::channel(8);
-
-        // Spawn the RPC server
-        tokio::spawn(start_rpc_server(Arc::clone(&self.ledger), rpc_tx_sender));
 
         let ledger = Arc::clone(&self.ledger);
         let sync_target_miner = Arc::clone(&self.sync_target);
@@ -473,6 +565,9 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Sync(event)) => {
                         self.handle_sync_event(event, &mut swarm).await;
                     }
+                    SwarmEvent::Behaviour(EuppBehaviourEvent::Rpc(event)) => {
+                        self.handle_rpc_event(event, &mut swarm, topic.clone()).await;
+                    }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Local node listening on: {address}");
                     }
@@ -495,21 +590,6 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                                 println!("ChainTip gathering complete, initiating sync with {}", peer);
                                 self.initiate_sync(&mut swarm, peer);
                             }
-                        }
-                    }
-                }
-                // Process transactions submitted via RPC
-                Some(tx) = rpc_tx_receiver.recv() => {
-                    let mut mp = self.mempool.write().unwrap();
-                    let ledger = self.ledger.read().unwrap();
-                    match mp.add(tx.clone(), &*ledger) {
-                        Ok(_) => {
-                            println!("-> Gossiping Tx {} from RPC", hex::encode(tx.hash()));
-                            let msg = GossipMessage::Transaction(tx); // Broadcast transaction via gossip
-                            let _ = swarm.behaviour_mut().gossipsub.publish(topic.clone(), bincode::serialize(&msg).unwrap());
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to add RPC tx to mempool: {:?}", e);
                         }
                     }
                 }
@@ -565,22 +645,4 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
             }
         }
     }
-}
-
-async fn start_rpc_server<L>(
-    ledger: Arc<RwLock<L>>,
-    tx_sender: mpsc::Sender<Transaction>,
-) -> Result<(), Box<dyn Error + Send + Sync>>
-where
-    L: Ledger + Send + Sync + 'static,
-{
-    let server = jsonrpsee::server::ServerBuilder::default()
-        .build("0.0.0.0:0".parse::<SocketAddr>()?)
-        .await?;
-    let local_addr = server.local_addr()?;
-    let rpc_module = EuppRpcImpl::new(ledger, tx_sender);
-    let handle = server.start(rpc_module.into_rpc());
-    println!("RPC server listening on {}", local_addr);
-    handle.stopped().await;
-    Ok(())
 }
