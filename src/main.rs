@@ -3,7 +3,7 @@ use eupp_core::{
     ledger::{FullInMemoryLedger, Indexer},
     transaction::{Output, Transaction},
 };
-use eupp_net::{EuppNode, mempool::SimpleMempool};
+use eupp_net::{EuppNode, config::Config, mempool::SimpleMempool};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,8 +41,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a mempool
     let mempool = SimpleMempool::new();
 
+    // Create a config
+    let config = Config::from_env()?;
+
     // Create and run the EuppNode
-    let mut node = EuppNode::new(ledger, mempool);
+    let mut node = EuppNode::new(config, ledger, mempool);
     println!("Launching network node...");
     node.run().await?;
 

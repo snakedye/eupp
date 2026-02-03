@@ -11,6 +11,10 @@ pub struct NetworkInfo {
     pub tip_height: u64,
     /// The currently available supply of coins.
     pub available_supply: u64,
+    /// The list of connected peers.
+    pub peers: Vec<String>,
+    /// The cummulative difficulty of the blockchain in the amount of bits used.
+    pub cummulative_difficulty: usize,
 }
 
 /// Messages broadcast over gossipsub for all peers to see.
