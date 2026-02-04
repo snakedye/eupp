@@ -56,7 +56,7 @@ pub struct EuppNode<L: Ledger, M: Mempool> {
     /// A queue of block hashes that need to be fetched from peers during synchronization.
     block_fetch_queue: Vec<BlockHeader>,
 
-    /// Node configuration (holds port, secret key bytes, mining flag, chunk size, etc.)
+    /// Node configuration
     config: Config,
 }
 

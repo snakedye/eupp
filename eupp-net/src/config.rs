@@ -1,14 +1,7 @@
 /*!
 Configuration loader for the network node.
 
-This module provides a `Config` struct which holds:
-- `port: Option<u16>` - optional listening port (env: `EUPP_PORT`)
-- `secret_key_bytes: [u8; 32]` - the node's ed25519 secret key bytes (env: `EUPP_SECRET_KEY`, hex)
-- `mining: bool` - whether mining is enabled (env: `EUPP_MINING`, accepts `1`, `true`, `yes`, `on`)
-- `block_chunk_size: usize` - number of blocks to fetch per sync request (env: `EUPP_BLOCK_CHUNK_SIZE`, defaults to `16`)
-
 Use `Config::from_env()` to construct a configuration from environment variables or a `.env` file.
-A convenience method `secret_key()` attempts to convert the stored bytes into a libp2p ed25519 `SecretKey`.
 */
 
 use std::env;
@@ -70,12 +63,6 @@ impl Config {
     /// - `EUPP_SECRET_KEY` - required hex-encoded 32-byte ed25519 secret key
     /// - `EUPP_MINING` - optional boolean (true/false). Accepts `1`, `true`, `yes`, `on`.
     /// - `EUPP_BLOCK_CHUNK_SIZE` - optional usize, defaults to 16
-    ///
-    /// Example `.env`:
-    /// EUPP_PORT=30333
-    /// EUPP_SECRET_KEY=4f3b... (64 hex chars)
-    /// EUPP_MINING=true
-    /// EUPP_BLOCK_CHUNK_SIZE=32
     pub fn from_env() -> Result<Self, ConfigError> {
         // Load .env if present, ignore errors
         let _ = dotenv::dotenv();
