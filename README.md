@@ -1,6 +1,6 @@
 # EUPP
 
-Experimental UTXO Payment Protocol (EUPP) — a minimal, research-oriented implementation of a UTXO-based ledger, a small stack-based VM, and a libp2p-based networking layer.
+Experimental UTXO Payment Protocol (EUPP) is a minimal implementation of a UTXO-based ledger.
 
 This repository is organized as a Cargo workspace with three crates:
 - [eupp](./) — top-level binary that boots a local node.
@@ -8,7 +8,7 @@ This repository is organized as a Cargo workspace with three crates:
 - [eupp-net](./eupp-net) — networking, mempool, and RPC protocol built on libp2p.
 - [eupp-cli](./eupp-cli) — a small CLI used to query peers and construct/sign/broadcast transactions.
 
-See [WHITEPAPER.md]() for design details and protocol rationale.
+See [WHITEPAPER.md](./WHITEPAPER.md) for design details and protocol rationale.
 
 ## Requirements
 
