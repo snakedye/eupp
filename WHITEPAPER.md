@@ -6,43 +6,34 @@
 
 ## 2. The UTXO Model & Transaction Rules
 
-The protocol operates on a Modified UTXO architecture where the state is a collection of spendable outputs.
+The protocol operates on a UTXO architecture where the state is a collection of spendable outputs.
 
 ### 2.1 Transaction Structure
 
-- **Capacity:** The protocol enforces a limit of 256 inputs and 256 outputs per transaction to ensure efficient processing and prevent excessive computational overhead.
-- **Balance:** Transactions must satisfy the conservation rule, expressed as `sum(inputs) >= sum(outputs)`. This ensures that no new value is created within a regular transaction, maintaining the integrity of the ledger.
-- **Pruning:** To incentivize state optimization, the virtual size of outputs with a value of 0 is halved. This encourages the consolidation of dust outputs and helps mitigate state bloat over time.
+Very much like Bitcoin, EUPP transactions consist of inputs and outputs. Each input spends a UTXO, while each output creates a new UTXO.
 
-### 2.2 Output Structure
+In order to spend a UTXO to the next transaction, each input must provide a valid signature that proves ownership of the UTXO while additionally satisfying the spending conditions of the output spent.
 
-Every UTXO consists of four distinct fields:
+> utxo_spending_diagram
 
-- **Version (1 byte):** Specifies the spending logic.
-- **Amount (8 bytes):** Represents the stored value in the output.
-- **Data (32 bytes):** Contains contextual state or VM bytecode, which can be used for programmable spending conditions.
-- **Commitment (32 bytes):** A cryptographic commitment that can serve as a locking mechanism.
+### 2.2 The Lead UTXO Model
 
-### 2.3 Input Structure
+A novel idea introduced in the EUPP protocol is the **Lead UTXO (LUTXO)** model.
 
-Each transaction input references a specific UTXO and provides the necessary cryptographic proof to unlock it. The structure is defined as follows:
+The **LUTXO** is a special UTXO that holds the entire unmined supply of the network.
 
-- **Output ID:** A reference to the UTXO being spent, consisting of:
-  - **Transaction Hash (32 bytes):** The hash of the transaction containing the UTXO.
-  - **Index (1 byte):** The position of the UTXO in the transaction's output list.
-- **Public Key (32 bytes):** The Ed25519 public key corresponding to the private key used for signing.
-- **Signature (64 bytes):** A cryptographic signature proving ownership of the referenced UTXO.
-- **Witness (Variable):** Optional data used for advanced spending conditions or VM execution.
+It is created by the first block to define the initial supply of the network and spent when miners claim the reward.
+When the **LUTXO** of the current block is spent, the following **LUTXO** is created by the miner with the following amount:
 
-The input structure ensures that only the rightful owner of a UTXO can spend it, while also supporting extensibility for programmable spending logic.
+$$S_{prev} - \text{Reward} \le S_{next} \le S_{prev} + \sum \text{Fees}$$ 
 
-### 2.4 The Lead UTXO Model
+This allows nodes to verify the block's economic integrity by auditing a single UTXO transition.
 
-The entire unmined supply of the network is held in a single, rotating "Lead UTXO."
+#### Fees
 
-- **Sequentiality**: Every block must spend the Lead UTXO created by the previous block.
-- **Auditability**: Total circulating supply is always exactly `Initial Supply - Current Lead UTXO Balance`.
-- **Fee Recycling**: Transaction fees from all non-mining transactions in a block are collected by the miner. The protocol allows these fees to be rolled into the new Lead UTXO, as its new amount is permitted to be as high as the previous amount plus the sum of all collected fees. This mechanism recycles value back into the primary supply pool, creating a sustainable economic loop where network usage directly replenishes the funds available for future mining rewards.
+Fees are defined as amount in inputs not spent in outputs. For example, if an input has a value of 100 and the output has a value of 90, the fee is 10.
+
+Transaction fees from all non-mining transactions in a block are collected by the miner. The protocol allows these fees to be rolled into the new **LUTXO**, as its new amount is permitted to be as high as the previous amount plus the sum of all collected fees. This mechanism recycles value back into the primary supply pool, creating a sustainable economic loop where network usage directly replenishes the funds available for future mining rewards.
 
 ## 3. Programmability: The EUPP VM
 
@@ -66,13 +57,13 @@ Consensus in EUPP is defined by the transaction graph itself rather than an exte
 
 ### 4.1 The Mask Mechanism
 
-1. **Lead UTXO:** The lead UTXO from the previous block defines the mining challenge for the current block.
-2. **The Mask:** The **data** field of this previous Lead UTXO acts as a bitmask for the current miner.
+1. **Lead UTXO:** The **LUTXO** from the previous block defines the mining challenge for the current block.
+2. **The Mask:** The **data** field of this previous **LUTXO** acts as a bitmask for the current miner.
 3. **Mining Condition:** A miner must find a solution such that the hash of the previous block, the miner's public key, and a nonce satisfies the mask condition:
    `Mask & hash(prev_block_hash, pubkey, nonce) == 0`
 4. **Commitment:** The miner includes the successful nonce as part of the commitment in the new **Lead UTXO** they create in the current block.
 
-To successfully mine the block, the miner must create a transaction that **spends** the previous block's **Lead UTXO**.
+To successfully mine the block, the miner must create a transaction that **spends** the previous block's **LUTXO** by including the successful nonce in the **commitment** field of the **LUTXO**.
 
 ### 4.2 Difficulty-Based Rewards
 
@@ -89,10 +80,13 @@ $$R(d) = M - \left\lfloor \frac{M - m}{2^{\lfloor d / H \rfloor}} \cdot (0.978)^
 - **0.978**: The bitwise decay factor (derived from the `978/1000` scaling).
 
 #### Logic
+
 The function calculates the "gap" between the current difficulty and the maximum possible reward:
 1.  **Macro Scaling**: Every $H$ (32) bits of difficulty halves the remaining gap ($2^{\lfloor d / H \rfloor}$).
 2.  **Micro Scaling**: For every individual bit ($d \pmod H$), the gap is reduced by approximately $2.2\%$ ($0.978$ multiplier) to create a smooth transition between half-life steps.
 3.  **Final Reward**: The resulting gap is subtracted from the `MAX_REWARD` and clamped to ensure it never falls below `MIN_REWARD`.
+
+> difficulty_curve_graph
 
 ### 4.3 Chain Selection: Heaviest Chain Rule
 
@@ -121,7 +115,6 @@ Block validation enforces strict supply preservation by constraining the value o
 
 $$S_{prev} - \text{Reward} \le S_{next} \le S_{prev} + \sum \text{Fees}$$ 
 
-This allows nodes to verify the block's economic integrity by auditing a single UTXO transition.
 
 #### Virtual Size (vsize)
 

@@ -1,6 +1,6 @@
-# EUPP
+# **Experimental UTXO Payment Protocol (EUPP)**
 
-Experimental UTXO Payment Protocol (EUPP) is a minimal implementation of a UTXO-based ledger.
+**EUPP** is a minimal implementation of a UTXO-based ledger.
 
 This repository is organized as a Cargo workspace with three crates:
 - [eupp](./) — top-level binary that boots a local node.
@@ -31,9 +31,7 @@ cargo build -p eupp --release
 
 ## Run a node
 
-The `eupp` binary boots a simple node, configured from environment variables or a `.env` file:
-
-> See `.env.template`.
+The `eupp` binary boots a simple node, configured from [environment variables](./.env.template) or a `.env` file:
 
 #### Quick start (single node)
 1. Generate a secret key (example using `openssl`):
