@@ -13,7 +13,7 @@ impl<'a, T> Stack<'a, T> {
         Stack::Root
     }
     /// Push a new item at the top of the list.
-    pub fn push(&self, data: T) -> Stack<T> {
+    pub fn push(&'a self, data: T) -> Stack<'a, T> {
         Stack::Parent(data, self)
     }
     /// Get the item at the top of the stack.
@@ -24,7 +24,7 @@ impl<'a, T> Stack<'a, T> {
         }
     }
     /// Replace the last item of the list.
-    pub fn replace(&self, data: T) -> Stack<T> {
+    pub fn replace(&'a self, data: T) -> Stack<'a, T> {
         match self {
             Self::Root => Stack::Parent(data, self),
             Self::Parent(_, parent) => Stack::Parent(data, *parent),
@@ -70,7 +70,7 @@ impl<'a, T> StackIter<'a, T> {
         Self(stack)
     }
     /// Returns a reference to the underlying `Stack`.
-    pub fn stack(&self) -> &Stack<T> {
+    pub fn stack(&'_ self) -> &'_ Stack<'a, T> {
         self.0
     }
     /// Returns a `TakeStackIter` that yields at most `len` elements from this iterator.
