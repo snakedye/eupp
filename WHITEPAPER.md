@@ -14,8 +14,6 @@ Very much like Bitcoin, EUPP transactions consist of inputs and outputs. Each in
 
 In order to spend a UTXO to the next transaction, each input must provide a valid signature that proves ownership of the UTXO while additionally satisfying the spending conditions of the output spent.
 
-> utxo_spending_diagram
-
 ### 2.2 The Lead UTXO Model
 
 A novel idea introduced in the EUPP protocol is the **Lead UTXO (LUTXO)** model.
@@ -85,8 +83,6 @@ The function calculates the "gap" between the current difficulty and the maximum
 1.  **Macro Scaling**: Every $H$ (32) bits of difficulty halves the remaining gap ($2^{\lfloor d / H \rfloor}$).
 2.  **Micro Scaling**: For every individual bit ($d \pmod H$), the gap is reduced by approximately $2.2\%$ ($0.978$ multiplier) to create a smooth transition between half-life steps.
 3.  **Final Reward**: The resulting gap is subtracted from the `MAX_REWARD` and clamped to ensure it never falls below `MIN_REWARD`.
-
-> difficulty_curve_graph
 
 ### 4.3 Chain Selection: Heaviest Chain Rule
 
