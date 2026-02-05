@@ -8,7 +8,9 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 
+use eupp_core::PublicKey;
 use hex;
+use libp2p::identity::ed25519::Keypair;
 
 /// Default number of blocks to fetch in a single synchronization chunk when not provided.
 const DEFAULT_BLOCK_CHUNK_SIZE: usize = 16;
@@ -134,6 +136,12 @@ impl Config {
     /// Retrieve the secret key.
     pub fn secret_key(&self) -> &[u8; 32] {
         &self.secret_key_bytes
+    }
+
+    pub fn public_key(&self) -> PublicKey {
+        let mut sk = self.secret_key_bytes;
+        let kp = Keypair::try_from_bytes(&mut sk).unwrap();
+        kp.public().to_bytes()
     }
 
     /// Convenience: return the effective block chunk size (already present on the struct,

@@ -61,7 +61,7 @@ pub enum SyncResponse {
     BlockHeaders(Vec<BlockHeader>),
 }
 
-/// RPC requests sent directly to a peer (over libp2p request/response).
+/// RPC requests sent directly to a peer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RpcRequest {
     /// Return basic network info (tip hash, height, available supply).
