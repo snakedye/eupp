@@ -4,6 +4,8 @@ use eupp_core::{
     transaction::{Output, Transaction},
 };
 use eupp_net::{EuppNode, config::Config, mempool::SimpleMempool};
+use std::net::SocketAddr;
+mod api;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,10 +46,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a config
     let config = Config::from_env()?;
 
-    // Create and run the EuppNode
-    let mut node = EuppNode::new(config, ledger, mempool);
-    println!("Launching network node...");
-    node.run().await?;
+    // Create the EuppNode (do not block the current task yet)
+    let node = EuppNode::new(config.clone(), ledger, mempool);
+
+    // Run the node in the current task. If it returns an error, log it.
+    if let Err(e) = node
+        .run(move |rpc_client| {
+            // Build the Axum router using the `api` module (routes wired to RpcClient).
+            // Wrap the RpcClient in an Arc and hand it to the router creator.
+            let app = api::router(rpc_client);
+
+            // Bind address (use port from config if present, otherwise 3000)
+            let bind_port = config.port.unwrap_or(3000);
+            let addr = SocketAddr::from(([0, 0, 0, 0], bind_port));
+            println!("Starting HTTP API on http://{}", addr);
+
+            // Spawn the HTTP server as a background task, and run the node in the main task.
+            let server = axum::Server::bind(&addr).serve(app.into_make_service());
+            let _server_handle = tokio::spawn(async move {
+                if let Err(e) = server.await {
+                    eprintln!("HTTP server error: {:?}", e);
+                }
+            });
+        })
+        .await
+    {
+        eprintln!("Node error: {:?}", e);
+    }
 
     Ok(())
 }

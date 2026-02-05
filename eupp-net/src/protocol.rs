@@ -61,7 +61,7 @@ pub enum SyncResponse {
     BlockHeaders(Vec<BlockHeader>),
 }
 
-/// RPC requests sent directly to a peer (over libp2p request/response).
+/// RPC requests sent directly to a peer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RpcRequest {
     /// Return basic network info (tip hash, height, available supply).
@@ -92,4 +92,7 @@ pub enum RpcResponse {
 
     /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
+
+    /// An error response indicating that the request could not be fulfilled.
+    Error(String),
 }

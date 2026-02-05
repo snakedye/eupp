@@ -12,3 +12,8 @@ eupp-net = { path = "./eupp-net" }
 tokio = { version = "1.0", features = ["full"] }
 blake2 = "0.10.6"
 hex = "0.4.3"
+
+# HTTP API and serialization dependencies used by the top-level binary
+axum = { version = "0.6", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
