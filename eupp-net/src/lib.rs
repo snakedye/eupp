@@ -82,20 +82,11 @@ pub struct EuppNode<L, M: Mempool> {
 
     /// Node configuration
     config: Config,
-
-    /// Internal RPC server sender.
-    rpc: tokio::sync::mpsc::Sender<RpcRequestMessage>,
-    _rpc_channel: tokio::sync::mpsc::Receiver<RpcRequestMessage>,
 }
 
 impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
     /// Creates a new instance of `EuppNode` with the given ledger and mempool.
     pub fn new(config: Config, ledger: L, mempool: M) -> Self {
-        // Create an initial internal RPC channel sender so the node always has a valid sender.
-        // The receiver will be created again in `run` and the sender replaced, which is fine —
-        // this provides a usable sender immediately after construction.
-        let (rpc_tx, _rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
-
         Self {
             config,
             ledger: Arc::new(RwLock::new(ledger)),
@@ -103,15 +94,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             block_fetch_queue: Vec::new(),
             peers_sync_state: HashMap::new(),
             sync_target: Arc::new(RwLock::new(None)),
-            rpc: rpc_tx,
-            _rpc_channel: _rpc_rx,
         }
-    }
-
-    /// Checks if the node is currently in a synchronization state.
-    pub fn rpc_client(&self) -> RpcClient {
-        // Return a client handle that shares the internal RPC sender.
-        RpcClient::new(self.rpc.clone())
     }
 
     fn is_syncing(&self) -> bool {
@@ -556,8 +539,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     }
 
     /// Runs the main event loop for the node, handling network events and synchronization.
-    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>>
+    pub async fn run<F>(mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
     where
+        F: FnOnce(RpcClient),
         L: Indexer,
     {
         let mut swarm = SwarmBuilder::with_new_identity()
@@ -597,10 +581,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         // Internal channel for notifications like chain tip timeouts
         let (internal_tx, mut internal_rx) = mpsc::channel(8);
 
-        // Internal RPC channel (internal request/response)
-        // let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
-        // Store sender in node so other components can create RpcClient instances.
-        // self.rpc = rpc_tx.clone();
+        // RPC client channel
+        let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
+        f(RpcClient::new(rpc_tx));
 
         let ledger = Arc::clone(&self.ledger);
         let sync_target_miner = Arc::clone(&self.sync_target);
@@ -688,7 +671,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 Some(block) = block_rx.recv() => {
                     self.handle_mined_block(block, &mut swarm, topic.clone());
                 }
-                Some((request, responder)) = self._rpc_channel.recv() => {
+                Some((request, responder)) = rpc_rx.recv() => {
                     // Handle internal RPC requests (this will respond via the oneshot responder)
                     self.handle_rpc_event(request, responder, &mut swarm, topic.clone()).await;
                 }

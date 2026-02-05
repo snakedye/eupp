@@ -49,31 +49,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the EuppNode (do not block the current task yet)
     let node = EuppNode::new(config.clone(), ledger, mempool);
 
-    // Obtain an RpcClient handle that can be cloned and used by the Axum handlers.
-    // Note: The node's run() method sets up the internal RPC channel before entering
-    // the main loop; the `rpc_client()` accessor returns a client that uses the node's
-    // internal mpsc sender. We clone this client and move it into the HTTP server.
-    let rpc_client = node.rpc_client();
-
-    // Build the Axum router using the `api` module (routes wired to RpcClient).
-    // Wrap the RpcClient in an Arc and hand it to the router creator.
-    let app = api::router(rpc_client);
-
-    // Bind address (use port from config if present, otherwise 3000)
-    let bind_port = config.port.unwrap_or(3000);
-    let addr = SocketAddr::from(([0, 0, 0, 0], bind_port));
-    println!("Starting HTTP API on http://{}", addr);
-
-    // Spawn the HTTP server as a background task, and run the node in the main task.
-    let server = axum::Server::bind(&addr).serve(app.into_make_service());
-    let _server_handle = tokio::spawn(async move {
-        if let Err(e) = server.await {
-            eprintln!("HTTP server error: {:?}", e);
-        }
-    });
-
     // Run the node in the current task. If it returns an error, log it.
-    if let Err(e) = node.run().await {
+    if let Err(e) = node
+        .run(move |rpc_client| {
+            // Build the Axum router using the `api` module (routes wired to RpcClient).
+            // Wrap the RpcClient in an Arc and hand it to the router creator.
+            let app = api::router(rpc_client);
+
+            // Bind address (use port from config if present, otherwise 3000)
+            let bind_port = config.port.unwrap_or(3000);
+            let addr = SocketAddr::from(([0, 0, 0, 0], bind_port));
+            println!("Starting HTTP API on http://{}", addr);
+
+            // Spawn the HTTP server as a background task, and run the node in the main task.
+            let server = axum::Server::bind(&addr).serve(app.into_make_service());
+            let _server_handle = tokio::spawn(async move {
+                if let Err(e) = server.await {
+                    eprintln!("HTTP server error: {:?}", e);
+                }
+            });
+        })
+        .await
+    {
         eprintln!("Node error: {:?}", e);
     }
 
