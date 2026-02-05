@@ -22,6 +22,7 @@ use libp2p::{
 };
 use rand::TryRngCore;
 use rand::rngs::OsRng;
+use tokio::sync::mpsc::Sender;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -538,6 +539,57 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         });
     }
 
+    fn spawn_mining_loop(&self, block_tx: Sender<Block>)
+    where
+        L: Indexer,
+    {
+        let ledger = Arc::clone(&self.ledger);
+        let sync_target_miner = Arc::clone(&self.sync_target);
+        let secret_key = self.config.secret_key();
+
+        tokio::spawn(async move {
+            // Delay to allow initial setup before starting the loop
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            loop {
+                if sync_target_miner.read().unwrap().is_some() {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                let metadata = {
+                    let lg = ledger.read().unwrap();
+                    lg.get_last_block_metadata().and_then(|prev_block| {
+                        lg.get_utxo(&prev_block.lead_utxo)
+                            .map(|lead_utxo| (prev_block.hash, prev_block.lead_utxo, lead_utxo))
+                    })
+                };
+                let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
+                    tokio::time::sleep(Duration::from_secs(1)).await; // Retry after a short delay
+                    continue;
+                };
+                let start = OsRng.try_next_u64().unwrap() as usize;
+                let result = tokio::task::spawn_blocking(move || {
+                    miner::build_mining_tx(
+                        &secret_key,
+                        &prev_block_hash,
+                        &lead_utxo_id.tx_hash,
+                        &lead_utxo,
+                        start..start + 10_000,
+                    )
+                })
+                .await
+                .unwrap();
+                if let Some((_key, mining_tx)) = result {
+                    let mut block = Block::new(0, prev_block_hash);
+                    block.transactions.push(mining_tx);
+                    if block_tx.send(block).await.is_err() {
+                        break;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+    }
+
     /// Runs the main event loop for the node, handling network events and synchronization.
     pub async fn run<F>(mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
     where
@@ -585,53 +637,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
         f(RpcClient::new(rpc_tx));
 
-        let ledger = Arc::clone(&self.ledger);
-        let sync_target_miner = Arc::clone(&self.sync_target);
-        let secret_key = self.config.secret_key();
-
         // Spawn mining loop only if mining is enabled in the config
         if self.config.mining {
-            tokio::spawn(async move {
-                // Delay to allow initial setup before starting the loop
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                loop {
-                    if sync_target_miner.read().unwrap().is_some() {
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-                    let metadata = {
-                        let lg = ledger.read().unwrap();
-                        lg.get_last_block_metadata().and_then(|prev_block| {
-                            lg.get_utxo(&prev_block.lead_utxo)
-                                .map(|lead_utxo| (prev_block.hash, prev_block.lead_utxo, lead_utxo))
-                        })
-                    };
-                    let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
-                        tokio::time::sleep(Duration::from_secs(1)).await; // Retry after a short delay
-                        continue;
-                    };
-                    let start = OsRng.try_next_u64().unwrap() as usize;
-                    let result = tokio::task::spawn_blocking(move || {
-                        miner::build_mining_tx(
-                            &secret_key,
-                            &prev_block_hash,
-                            &lead_utxo_id.tx_hash,
-                            &lead_utxo,
-                            start..start + 10_000,
-                        )
-                    })
-                    .await
-                    .unwrap();
-                    if let Some((_key, mining_tx)) = result {
-                        let mut block = Block::new(0, prev_block_hash);
-                        block.transactions.push(mining_tx);
-                        if block_tx.send(block).await.is_err() {
-                            break;
-                        }
-                    }
-                    tokio::task::yield_now().await;
-                }
-            });
+            self.spawn_mining_loop(block_tx);
         }
 
         let mut sync_check_interval = tokio::time::interval(Duration::from_secs(7)); // Periodic sync check
