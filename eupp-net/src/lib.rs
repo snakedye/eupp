@@ -56,7 +56,9 @@ impl RpcClient {
     /// Send a request and await the response.
     pub async fn request(&self, req: RpcRequest) -> Option<RpcResponse> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.inner.send((req, tx)).await.ok()?;
+        if let Err(err) = self.inner.send((req, tx)).await {
+            eprintln!("Failed to send RPC request: {}", err);
+        }
         rx.await.ok()
     }
 }
@@ -83,6 +85,7 @@ pub struct EuppNode<L, M: Mempool> {
 
     /// Internal RPC server sender.
     rpc: tokio::sync::mpsc::Sender<RpcRequestMessage>,
+    _rpc_channel: tokio::sync::mpsc::Receiver<RpcRequestMessage>,
 }
 
 impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
@@ -101,6 +104,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             peers_sync_state: HashMap::new(),
             sync_target: Arc::new(RwLock::new(None)),
             rpc: rpc_tx,
+            _rpc_channel: _rpc_rx,
         }
     }
 
@@ -409,7 +413,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     let _ = responder.send(RpcResponse::NetworkInfo(info));
                 } else {
                     // Best-effort: drop response on lock failure
-                    let _ = responder.send(RpcResponse::NetworkInfo(Default::default()));
+                    let _ = responder.send(RpcResponse::Error("An error occurred".to_string()));
                 }
             }
             RpcRequest::GetConfirmations { tx_hash } => {
@@ -452,10 +456,10 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         let _ = responder.send(RpcResponse::TransactionHash(tx_hash));
                     }
                     Err(e) => {
-                        eprintln!("Failed to add transaction to mempool: {:?}", e);
-                        // Return an empty/failed response if desired; using TransactionHash([0;32]) is not appropriate.
-                        // For now, send back an empty hash to indicate failure (caller should handle).
-                        let _ = responder.send(RpcResponse::TransactionHash([0; 32]));
+                        let _ = responder.send(RpcResponse::Error(format!(
+                            "Failed to add transaction to mempool: {:?}",
+                            e
+                        )));
                     }
                 }
             }
@@ -552,7 +556,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     }
 
     /// Runs the main event loop for the node, handling network events and synchronization.
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>>
+    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>>
     where
         L: Indexer,
     {
@@ -584,11 +588,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
 
         let topic = gossipsub::IdentTopic::new("eupp-testnet");
         swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
-        // Use configured port if present, otherwise bind to an ephemeral port (0)
-        let listen_addr = match self.config.port {
-            Some(p) => format!("/ip4/0.0.0.0/tcp/{}", p),
-            None => "/ip4/0.0.0.0/tcp/0".to_string(),
-        };
+        let listen_addr = "/ip4/0.0.0.0/tcp/0";
         swarm.listen_on(listen_addr.parse()?)?;
 
         // Set up channels for mining communication
@@ -598,9 +598,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         let (internal_tx, mut internal_rx) = mpsc::channel(8);
 
         // Internal RPC channel (internal request/response)
-        let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
+        // let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
         // Store sender in node so other components can create RpcClient instances.
-        self.rpc = rpc_tx.clone();
+        // self.rpc = rpc_tx.clone();
 
         let ledger = Arc::clone(&self.ledger);
         let sync_target_miner = Arc::clone(&self.sync_target);
@@ -688,7 +688,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 Some(block) = block_rx.recv() => {
                     self.handle_mined_block(block, &mut swarm, topic.clone());
                 }
-                Some((request, responder)) = rpc_rx.recv() => {
+                Some((request, responder)) = self._rpc_channel.recv() => {
                     // Handle internal RPC requests (this will respond via the oneshot responder)
                     self.handle_rpc_event(request, responder, &mut swarm, topic.clone()).await;
                 }

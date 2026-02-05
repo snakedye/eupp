@@ -6,11 +6,11 @@ edition = "2024"
 [dependencies]
 # Local workspace crates
 eupp-core = { path = "../eupp-core" }
-eupp-net = { path = "../eupp-net" }
 ed25519-dalek = { version = "3.0.0-pre.3", features = ["rand_core"] }
-libp2p = { version = "0.56", features = ["gossipsub", "mdns", "tcp", "noise", "yamux", "tokio", "macros", "request-response", "cbor"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-futures = "0.3"
 hex = "0.4"
 anyhow = "1.0"
 clap = { version = "4.5.4", features = ["derive"] }
+
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }

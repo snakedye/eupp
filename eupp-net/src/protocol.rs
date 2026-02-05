@@ -92,4 +92,7 @@ pub enum RpcResponse {
 
     /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
+
+    /// An error response indicating that the request could not be fulfilled.
+    Error(String),
 }

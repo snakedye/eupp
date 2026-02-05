@@ -4,25 +4,14 @@ use ed25519_dalek::{Signer, SigningKey};
 use eupp_core::ledger::Query;
 use eupp_core::transaction::{Input, Output, Transaction, sighash};
 use eupp_core::{Hash, commitment};
-use eupp_net::protocol::{RpcRequest, RpcResponse};
-use futures::StreamExt;
 use hex;
-use libp2p::{
-    Multiaddr, StreamProtocol, SwarmBuilder,
-    request_response::{self, ProtocolSupport},
-    swarm::SwarmEvent,
-};
-use std::str::FromStr;
-use std::sync::Once;
+use std::time::Duration;
 
-static READY: Once = Once::new();
-
-/// A CLI for interacting with the Eupp network by sending transactions.
+/// A CLI for interacting with the Eupp node via its HTTP REST API.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// The multiaddr of the peer to connect to for libp2p RPC.
-    /// Example: /ip4/127.0.0.1/tcp/12345/p2p/12D3... . If provided, CLI will use libp2p RPC.
+    /// The base URL of the node's REST API (e.g. http://127.0.0.1:3000).
     #[arg(long)]
     peer: String,
 
@@ -39,8 +28,7 @@ struct Args {
     amount: u64,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     // --- Construct a transaction from CLI arguments ---
@@ -54,74 +42,31 @@ async fn main() -> Result<()> {
     let data = [0_u8; 32];
     let address = commitment(&public_key, Some(data.as_slice()));
 
-    // Fetch UTXOs via libp2p request/response RPC — the `--peer` multiaddr is required.
+    // Build query for UTXOs
     let query = Query::new().with_address(address);
-    let ma = Multiaddr::from_str(&args.peer).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-    // Create a channel for communication with the swarm thread
-    let (request_tx, mut request_rx) = tokio::sync::mpsc::channel::<RpcRequest>(1);
-    let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<RpcResponse>(1);
+    // Interpret peer as base URL (remove trailing slash if present)
+    let base = args.peer.trim_end_matches('/').to_string();
 
-    let mut swarm = SwarmBuilder::with_new_identity()
-        .with_tokio()
-        .with_tcp(
-            Default::default(),
-            libp2p::noise::Config::new,
-            libp2p::yamux::Config::default,
-        )?
-        .with_behaviour(|_key| {
-            let rpc_proto = StreamProtocol::new("/eupp/rpc/1");
-            Ok(request_response::cbor::Behaviour::new(
-                [(rpc_proto, ProtocolSupport::Full)],
-                Default::default(),
-            ))
-        })?
-        .build();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
 
-    // Dial the peer
-    swarm
-        .dial(ma.clone())
-        .map_err(|e| anyhow::anyhow!(format!("Dial error: {:?}", e)))?;
+    // Fetch UTXOs via HTTP POST /transactions/utxos <query>
+    let resp = client
+        .post(format!("{base}/transactions/utxos"))
+        .json(&query)
+        .send()?;
 
-    // Spawn the swarm thread
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Some(request) = request_rx.recv() => {
-                    let peer_id = swarm.connected_peers().next().unwrap().clone();
-                    swarm.behaviour_mut().send_request(&peer_id, request);
-                }
-                event = swarm.select_next_some() => {
-                    // Drive libp2p events and handle connection establishment & responses.
-                    match event {
-                        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                            READY.call_once(|| println!("Connected to peer: {}", peer_id));
-                        }
-                        SwarmEvent::Behaviour(request_response::Event::Message { message, .. }) => {
-                            if let request_response::Message::Response { response, .. } = message {
-                                let _ = response_tx.send(response).await;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    });
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!("Failed to fetch UTXOs: {}", resp.status()));
+    }
 
-    // Wait for the connection to be established
-    READY.wait();
-
-    // Send GetUtxos request to the swarm thread
-    request_tx.send(RpcRequest::GetUtxos { query }).await?;
-
-    // Wait for the response
-    let utxos = match response_rx.recv().await {
-        Some(RpcResponse::Utxos(utxos)) => utxos,
-        _ => return Err(anyhow::anyhow!("Failed to receive UTXOs response")),
-    };
+    // Deserialize to Vec<(OutputId, Output)>
+    let utxos: Vec<(eupp_core::transaction::OutputId, Output)> = resp.json()?;
     let balance: u64 = utxos.iter().map(|(_, output)| output.amount).sum();
-    println!("Address balance: {}", balance);
+    println!("Address: {}", hex::encode(address));
+    println!("Balance: {} units", balance);
 
     // Determine recipient
     let recipient_pubkey = if let Some(remote_pubkey_hex) = args.remote_pubkey {
@@ -135,12 +80,13 @@ async fn main() -> Result<()> {
     // Create a single output sending the specified amount with dummy data.
     let data: Hash = [0u8; 32];
     let to_remote = Output::new_v1(args.amount, &recipient_pubkey, &data);
-    let to_self = Output::new_v1(balance - args.amount, &public_key, &data);
+    let to_self = Output::new_v1(balance.saturating_sub(args.amount), &public_key, &data);
     let new_outputs = vec![to_remote, to_self];
 
     // Construct the signature
-    let sighash = sighash(utxos.iter().map(|(output_id, _)| output_id), &new_outputs);
-    let signature = signing_key.sign(&sighash);
+    // sighash expects an iterator of OutputId references; adapt accordingly
+    let sighash_val = sighash(utxos.iter().map(|(output_id, _)| output_id), &new_outputs);
+    let signature = signing_key.sign(&sighash_val);
 
     // Create inputs
     let inputs = utxos
@@ -156,18 +102,25 @@ async fn main() -> Result<()> {
         hex::encode(tx_hash)
     );
 
-    // Send SendRawTransaction request to the swarm thread
-    request_tx
-        .send(RpcRequest::SendRawTransaction { tx: tx.clone() })
-        .await?;
+    // Broadcast the transaction via HTTP POST /transactions <tx>
+    let resp = client
+        .post(format!("{base}/transactions"))
+        .json(&tx)
+        .send()?;
 
-    match response_rx.recv().await {
-        Some(RpcResponse::TransactionHash(broadcasted_hash)) => println!(
-            "Transaction {} broadcasted successfully.",
-            hex::encode(broadcasted_hash)
-        ),
-        _ => eprintln!("Failed to receive broadcast response from peer."),
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to broadcast transaction: {}",
+            resp.status()
+        ));
     }
+
+    // Expect a TransactionHash in the response body (array of bytes)
+    let broadcasted_hash: eupp_core::transaction::TransactionHash = resp.json()?;
+    println!(
+        "Transaction {} broadcasted successfully.",
+        hex::encode(broadcasted_hash)
+    );
 
     Ok(())
 }
