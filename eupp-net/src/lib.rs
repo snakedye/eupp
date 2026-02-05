@@ -604,7 +604,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
 
         let ledger = Arc::clone(&self.ledger);
         let sync_target_miner = Arc::clone(&self.sync_target);
-        let secret_key = *self.config.secret_key();
+        let secret_key = self.config.secret_key();
 
         // Spawn mining loop only if mining is enabled in the config
         if self.config.mining {

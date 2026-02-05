@@ -134,10 +134,11 @@ impl Config {
     }
 
     /// Retrieve the secret key.
-    pub fn secret_key(&self) -> &[u8; 32] {
-        &self.secret_key_bytes
+    pub fn secret_key(&self) -> [u8; 32] {
+        self.secret_key_bytes
     }
 
+    /// Retrieve the public key.
     pub fn public_key(&self) -> PublicKey {
         let mut sk = self.secret_key_bytes;
         let kp = Keypair::try_from_bytes(&mut sk).unwrap();
