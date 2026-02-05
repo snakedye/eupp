@@ -959,7 +959,7 @@ mod tests {
         indexer.add_block(&block).unwrap();
 
         // Generate inputs exceeding the maximum allowed
-        let max_allowed = u8::MAX as usize;
+        let max_allowed = MAX_ALLOWED + 1;
         let mut inputs = Vec::new();
         for i in 0..=max_allowed {
             let utxo_id = OutputId {
@@ -1019,7 +1019,7 @@ mod tests {
         indexer.add_block(&block).unwrap();
 
         // Generate outputs exceeding the maximum allowed
-        let max_allowed = u8::MAX as usize;
+        let max_allowed = MAX_ALLOWED + 1;
         let outputs: Vec<Output> = (0..=max_allowed)
             .map(|_| Output {
                 version: Version::V1,

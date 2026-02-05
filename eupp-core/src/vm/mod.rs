@@ -640,7 +640,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn get_block_metadata(&self, _hash: &Hash) -> Option<Cow<BlockMetadata>> {
+        fn get_block_metadata(&'_ self, _hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
             self.block_meta.as_ref().map(Cow::Borrowed)
         }
 
@@ -659,7 +659,7 @@ mod tests {
             self.block_meta.as_ref().map(|meta| meta.hash)
         }
 
-        fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+        fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
             self.block_meta.as_ref().map(Cow::Borrowed)
         }
     }
@@ -671,11 +671,11 @@ mod tests {
         }
     }
 
-    fn create_vm<'a>(
-        indexer: &'a MockLedger,
+    fn create_vm<'a, I: Indexer>(
+        indexer: &'a I,
         input: usize,
         transaction: &'a Transaction,
-    ) -> Vm<'a, MockLedger> {
+    ) -> Vm<'a, I> {
         Vm::new(indexer, input, transaction)
     }
 

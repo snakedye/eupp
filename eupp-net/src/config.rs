@@ -9,7 +9,6 @@ use std::error::Error;
 use std::fmt;
 
 use hex;
-use libp2p::identity::ed25519::SecretKey;
 
 /// Default number of blocks to fetch in a single synchronization chunk when not provided.
 const DEFAULT_BLOCK_CHUNK_SIZE: usize = 16;
@@ -132,12 +131,9 @@ impl Config {
         })
     }
 
-    /// Attempt to convert the stored secret key bytes into a libp2p ed25519 `SecretKey`.
-    ///
-    /// Note: this conversion may fail if libp2p's API changes; the stored bytes are plain 32 bytes.
-    pub fn secret_key(&self) -> SecretKey {
-        let mut sk = self.secret_key_bytes;
-        SecretKey::try_from_bytes(&mut sk).expect("failed to convert secret key bytes to SecretKey")
+    /// Retrieve the secret key.
+    pub fn secret_key(&self) -> &[u8; 32] {
+        &self.secret_key_bytes
     }
 
     /// Convenience: return the effective block chunk size (already present on the struct,

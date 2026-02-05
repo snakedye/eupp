@@ -8,6 +8,7 @@ use u256::U256;
 use crate::{
     Hash,
     block::{Block, BlockError},
+    ledger::IndexerExt,
     mask_difficulty,
     transaction::{Output, OutputId, TransactionError},
 };
@@ -36,6 +37,12 @@ pub struct InMemoryIndexer {
 pub struct FullInMemoryLedger {
     indexer: InMemoryIndexer,
     blocks: HashMap<Hash, Block>,
+}
+
+impl Default for InMemoryIndexer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InMemoryIndexer {
@@ -101,7 +108,7 @@ impl InMemoryIndexer {
     /// any blocks and UTXOs that are no longer part of the main chain after a reorganization.
     fn uproot(&mut self, tip: &Hash, root: &Hash) {
         let blocks = self
-            .metadata_iter_from(tip)
+            .metadata_from(tip)
             .map(|meta| meta.hash)
             .take_while(|hash| hash != root)
             .collect::<HashSet<_>>();
@@ -190,7 +197,7 @@ impl Indexer for InMemoryIndexer {
         Ok(())
     }
 
-    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
+    fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
         self.block_index.get(hash).map(Cow::Borrowed)
     }
 
@@ -206,7 +213,7 @@ impl Indexer for InMemoryIndexer {
     ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
         // This is to only fetch UTXOs in the canonical branch.
         let blocks: HashSet<_> = self
-            .metadata_iter()
+            .metadata()
             .map(|meta| meta.hash)
             .take_while(|hash| Some(hash) != query.to.as_ref())
             .collect();
@@ -226,7 +233,7 @@ impl Indexer for InMemoryIndexer {
         self.utxo_set.get(output_id).map(|entry| entry.block_hash)
     }
 
-    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
         self.block_index.get(&self.tip).map(Cow::Borrowed)
     }
 }
@@ -248,7 +255,7 @@ impl Indexer for FullInMemoryLedger {
         Ok(())
     }
 
-    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
+    fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
         self.indexer.get_block_metadata(hash)
     }
 
@@ -267,13 +274,17 @@ impl Indexer for FullInMemoryLedger {
         self.indexer.get_utxo_block_hash(output_id)
     }
 
-    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
         self.indexer.get_last_block_metadata()
+    }
+
+    fn as_ledger(&self) -> Option<&dyn Ledger> {
+        Some(self)
     }
 }
 
 impl Ledger for FullInMemoryLedger {
-    fn get_block(&self, hash: &Hash) -> Option<Cow<Block>> {
+    fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
         self.blocks.get(hash).map(Cow::Borrowed)
     }
 }

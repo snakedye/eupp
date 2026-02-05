@@ -103,7 +103,7 @@ impl BlockMetadata {
     }
 }
 
-impl<'a, I: Indexer> Iterator for BlockMetadataIter<'a, I> {
+impl<'a, I: Indexer + ?Sized> Iterator for BlockMetadataIter<'a, I> {
     type Item = Cow<'a, BlockMetadata>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -114,7 +114,7 @@ impl<'a, I: Indexer> Iterator for BlockMetadataIter<'a, I> {
     fn size_hint(&self) -> (usize, Option<usize>) {
         let height = self
             .indexer
-            .metadata_iter()
+            .metadata()
             .next()
             .map(|meta| meta.height as usize);
         (height.unwrap_or_default(), height)
@@ -128,7 +128,7 @@ pub trait Indexer {
     fn add_block(&mut self, block: &Block) -> Result<(), BlockError>;
 
     /// Retrieves metadata for a block identified by its hash.
-    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>>;
+    fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>>;
 
     /// Checks if a transaction output is spent.
     fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
@@ -148,7 +148,7 @@ pub trait Indexer {
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
 
     /// Retrieves metadata for the most recently added block.
-    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>>;
+    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>>;
 
     /// Retrieves the hash of the block containing the given transaction.
     fn get_transaction_block_hash(
@@ -158,7 +158,16 @@ pub trait Indexer {
         self.get_utxo_block_hash(&OutputId::new(*tx_hash, 0))
     }
 
-    fn metadata_iter(&self) -> BlockMetadataIter<'_, Self> {
+    /// Returns a Ledger reference if the Indexer is also a Ledger.
+    fn as_ledger(&self) -> Option<&dyn Ledger> {
+        None
+    }
+}
+
+pub trait IndexerExt: Indexer {
+    /// Returns an iterator over the block metadata starting from the most recently added block
+    /// and traversing back to the genesis block.
+    fn metadata(&self) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
             current_hash: self
                 .get_last_block_metadata()
@@ -168,7 +177,9 @@ pub trait Indexer {
         }
     }
 
-    fn metadata_iter_from(&self, hash: &Hash) -> BlockMetadataIter<'_, Self> {
+    /// Returns an iterator over the block metadata starting from a specific block hash
+    /// and traversing back to the genesis block.
+    fn metadata_from(&self, hash: &Hash) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
             current_hash: *hash,
             indexer: self,
@@ -176,7 +187,9 @@ pub trait Indexer {
     }
 }
 
-impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
+impl<T: Indexer + ?Sized> IndexerExt for T {}
+
+impl<'a, L: Ledger + ?Sized> Iterator for BlockIter<'a, L> {
     type Item = Cow<'a, Block>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -197,10 +210,15 @@ impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
 /// It extends Indexer to provide access to full block data.
 pub trait Ledger: Indexer {
     /// Retrieves a full block by its hash.
-    fn get_block(&self, hash: &Hash) -> Option<Cow<Block>>;
+    fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>>;
+}
 
+pub trait LedgerExt: Ledger {
     /// Returns an iterator over blocks starting from the tip to oldest.
-    fn block_iter(&self) -> BlockIter<Self> {
+    fn blocks(&'_ self) -> BlockIter<'_, Self>
+    where
+        Self: Indexer,
+    {
         BlockIter {
             current_hash: self
                 .get_last_block_metadata()
@@ -211,13 +229,15 @@ pub trait Ledger: Indexer {
     }
 
     /// Returns an iterator over blocks starting from a given hash.
-    fn block_iter_from(&self, hash: &Hash) -> BlockIter<Self> {
+    fn blocks_from(&'_ self, hash: &Hash) -> BlockIter<'_, Self> {
         BlockIter {
             current_hash: *hash,
             ledger: self,
         }
     }
 }
+
+impl<T: Ledger + ?Sized> LedgerExt for T {}
 
 #[cfg(test)]
 mod tests {
@@ -251,7 +271,7 @@ mod tests {
             Ok(())
         }
 
-        fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
+        fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
             self.metadata.get(hash).map(Cow::Borrowed)
         }
 
@@ -270,13 +290,13 @@ mod tests {
             None
         }
 
-        fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+        fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
             self.metadata.values().next().map(Cow::Borrowed)
         }
     }
 
     impl Ledger for MockIterator {
-        fn get_block(&self, hash: &Hash) -> Option<Cow<Block>> {
+        fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
             self.blocks.get(hash).map(Cow::Borrowed)
         }
     }
@@ -289,7 +309,7 @@ mod tests {
         let block_hash = block.header().hash();
         mock.add_block(&block).unwrap();
 
-        let mut iter = mock.block_iter_from(&block_hash);
+        let mut iter = mock.blocks_from(&block_hash);
         assert_eq!(iter.next().unwrap().header().hash(), block_hash);
         assert_eq!(iter.next(), None);
     }
@@ -310,7 +330,7 @@ mod tests {
         };
         mock.metadata.insert(block_hash, metadata);
 
-        let mut iter = mock.metadata_iter_from(&block_hash);
+        let mut iter = mock.metadata_from(&block_hash);
         assert_eq!(iter.next().unwrap().hash, block_hash);
         assert_eq!(iter.next(), None);
     }

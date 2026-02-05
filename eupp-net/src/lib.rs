@@ -11,7 +11,7 @@ use crate::protocol::{
     GossipMessage, NetworkInfo, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
 use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
-use eupp_core::ledger::Ledger;
+use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt};
 use eupp_core::transaction::{Transaction, TransactionError};
 use eupp_core::{VirtualSize, block::Block, miner};
 
@@ -40,7 +40,7 @@ enum InternalEvent {
 }
 
 /// Represents a full node in the Eupp network.
-pub struct EuppNode<L: Ledger, M: Mempool> {
+pub struct EuppNode<L, M: Mempool> {
     /// The ledger that maintains the blockchain state.
     ledger: Arc<RwLock<L>>,
 
@@ -60,7 +60,7 @@ pub struct EuppNode<L: Ledger, M: Mempool> {
     config: Config,
 }
 
-impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
+impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
     /// Creates a new instance of `EuppNode` with the given ledger and mempool.
     pub fn new(config: Config, ledger: L, mempool: M) -> Self {
         Self {
@@ -78,13 +78,55 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         self.sync_target.read().unwrap().is_some()
     }
 
+    /// Sets the node to syncing state and sends the initial GetBlocksHash request.
+    /// This is called after the ChainTip phase completes (or its timeout elapses).
+    fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId)
+    where
+        L: Indexer,
+    {
+        println!(
+            "Initiating sync with peer {}, starting from their tip",
+            peer_id,
+        );
+        *self.sync_target.write().unwrap() = Some(peer_id);
+        let lg = self.ledger.read().unwrap();
+        let to = lg.get_last_block_metadata().map(|meta| meta.hash);
+
+        // send_request returns an OutboundRequestId; ignore the return value.
+        let _ = swarm
+            .behaviour_mut()
+            .sync
+            .send_request(&peer_id, SyncRequest::GetBlockHeaders { from: None, to });
+    }
+
+    /// Identifies the best peer to sync with from the known peer states.
+    fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)>
+    where
+        L: Indexer,
+    {
+        let lg = self.ledger.read().ok()?;
+        let local_supply = lg
+            .get_last_block_metadata()
+            .map(|m| m.available_supply)
+            .unwrap_or(0);
+
+        self.peers_sync_state
+            .iter()
+            .filter(|(_, state)| state.supply > local_supply)
+            .max_by_key(|(_, state)| state.supply)
+            .map(|(peer_id, state)| (*peer_id, state.clone()))
+    }
+
     /// Handles incoming gossip messages and processes them based on their type.
     async fn handle_gossip_message(
         &mut self,
         message: gossipsub::Message,
         swarm: &mut Swarm<EuppBehaviour>,
         topic: gossipsub::IdentTopic,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        L: Indexer,
+    {
         let msg: GossipMessage = bincode::deserialize(&message.data)?;
         match msg {
             GossipMessage::Transaction(tx) => {
@@ -167,7 +209,9 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         &mut self,
         event: request_response::Event<SyncRequest, SyncResponse>,
         swarm: &mut Swarm<EuppBehaviour>,
-    ) {
+    ) where
+        L: Indexer,
+    {
         match event {
             request_response::Event::Message { peer, message, .. } => {
                 match message {
@@ -177,8 +221,8 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         SyncRequest::GetBlockHeaders { from, to } => {
                             if let Ok(lg) = self.ledger.read() {
                                 let iter = match from {
-                                    Some(from) => lg.metadata_iter_from(&from),
-                                    None => lg.metadata_iter(),
+                                    Some(from) => lg.metadata_from(&from),
+                                    None => lg.metadata(),
                                 };
                                 let halt = to
                                     .and_then(|hash| lg.get_block_metadata(&hash))
@@ -198,27 +242,29 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         }
                         SyncRequest::GetBlocks { from, to } => {
                             if let Ok(lg) = self.ledger.read() {
-                                let (block_iter, metadata_iter) = match from {
-                                    Some(from) => {
-                                        (lg.block_iter_from(&from), lg.metadata_iter_from(&from))
-                                    }
-                                    None => (lg.block_iter(), lg.metadata_iter()),
-                                };
-                                let halt = to
-                                    .and_then(|hash| lg.get_block_metadata(&hash))
-                                    .map(|meta| meta.prev_block_hash);
-                                let blocks = block_iter
-                                    .zip(metadata_iter)
-                                    .take_while(|(_, meta)| Some(meta.hash) != halt)
-                                    .map(|(block, _)| block.into_owned())
-                                    .collect();
+                                if let Some(lg) = lg.as_ledger() {
+                                    let (block_iter, metadata_iter) = match from {
+                                        Some(from) => {
+                                            (lg.blocks_from(&from), lg.metadata_from(&from))
+                                        }
+                                        None => (lg.blocks(), lg.metadata()),
+                                    };
+                                    let halt = to
+                                        .and_then(|hash| lg.get_block_metadata(&hash))
+                                        .map(|meta| meta.prev_block_hash);
+                                    let blocks = block_iter
+                                        .zip(metadata_iter)
+                                        .take_while(|(_, meta)| Some(meta.hash) != halt)
+                                        .map(|(block, _)| block.into_owned())
+                                        .collect();
 
-                                if let Err(e) = swarm
-                                    .behaviour_mut()
-                                    .sync
-                                    .send_response(channel, SyncResponse::Blocks(blocks))
-                                {
-                                    eprintln!("Failed to send Blocks response: {:?}", e);
+                                    if let Err(e) = swarm
+                                        .behaviour_mut()
+                                        .sync
+                                        .send_response(channel, SyncResponse::Blocks(blocks))
+                                    {
+                                        eprintln!("Failed to send Blocks response: {:?}", e);
+                                    }
                                 }
                             }
                         }
@@ -303,7 +349,9 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         event: request_response::Event<RpcRequest, RpcResponse>,
         swarm: &mut Swarm<EuppBehaviour>,
         topic: gossipsub::IdentTopic,
-    ) {
+    ) where
+        L: Indexer,
+    {
         match event {
             request_response::Event::Message {
                 peer: _, message, ..
@@ -392,19 +440,64 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         }
     }
 
-    /// Identifies the best peer to sync with from the known peer states.
-    fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)> {
-        let lg = self.ledger.read().ok()?;
-        let local_supply = lg
-            .get_last_block_metadata()
-            .map(|m| m.available_supply)
-            .unwrap_or(0);
+    /// Handle a mined block: select mempool transactions, attempt to add to ledger,
+    /// remove included txs from mempool, and gossip the new block.
+    fn handle_mined_block(
+        &mut self,
+        mut block: Block,
+        swarm: &mut Swarm<EuppBehaviour>,
+        topic: gossipsub::IdentTopic,
+    ) where
+        L: Indexer,
+    {
+        {
+            let mp = self.mempool.read().unwrap();
+            let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
+            let selected = mp.get_transactions().scan(remaining, |remaining, tx| {
+                // Select transactions for the block
+                let tx_vsize = tx.vsize();
+                *remaining = remaining.saturating_sub(tx_vsize);
+                (*remaining > 0).then(|| tx.into_owned())
+            });
+            block.transactions.extend(selected);
+        }
 
-        self.peers_sync_state
-            .iter()
-            .filter(|(_, state)| state.supply > local_supply)
-            .max_by_key(|(_, state)| state.supply)
-            .map(|(peer_id, state)| (*peer_id, state.clone()))
+        let mut lg = self.ledger.write().unwrap();
+        loop {
+            match lg.add_block(&block) {
+                Ok(_) => {
+                    println!(
+                        "-> Send Block via gossip {}",
+                        hex::encode(block.header().hash())
+                    );
+
+                    // Remove transactions included in the block from the mempool
+                    let mut mp = self.mempool.write().unwrap();
+                    let added_tx_hashes = block.transactions.iter().map(Transaction::hash);
+                    mp.remove_transactions(added_tx_hashes);
+
+                    // Broadcast new block via gossip
+                    let msg = GossipMessage::NewBlock(block);
+                    let _ = swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                    break;
+                }
+                Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id)))
+                | Err(BlockError::TransactionError(TransactionError::DoubleSpend(output_id))) => {
+                    // Remove offending transaction from the mempool
+                    let mut mp = self.mempool.write().unwrap();
+                    mp.remove_transactions([output_id.tx_hash]);
+                }
+                Err(err) => {
+                    // Clear mempool on other errors and log
+                    self.mempool.write().unwrap().clear();
+                    eprintln!("Failed to add block to ledger: {:?}", err);
+                    break;
+                }
+            }
+        }
     }
 
     /// Broadcast a GetChainTip over gossipsub and schedule a timeout that will trigger picking
@@ -436,26 +529,11 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         });
     }
 
-    /// Sets the node to syncing state and sends the initial GetBlocksHash request.
-    /// This is called after the ChainTip phase completes (or its timeout elapses).
-    fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId) {
-        println!(
-            "Initiating sync with peer {}, starting from their tip",
-            peer_id,
-        );
-        *self.sync_target.write().unwrap() = Some(peer_id);
-        let lg = self.ledger.read().unwrap();
-        let to = lg.get_last_block_metadata().map(|meta| meta.hash);
-
-        // send_request returns an OutboundRequestId; ignore the return value.
-        let _ = swarm
-            .behaviour_mut()
-            .sync
-            .send_request(&peer_id, SyncRequest::GetBlockHeaders { from: None, to });
-    }
-
     /// Runs the main event loop for the node, handling network events and synchronization.
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>>
+    where
+        L: Indexer,
+    {
         let mut swarm = SwarmBuilder::with_new_identity()
             .with_tokio()
             .with_tcp(
@@ -496,18 +574,15 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
         swarm.listen_on(listen_addr.parse()?)?;
 
         // Set up channels for mining and RPC communication
-        let (block_sender, mut block_receiver) = mpsc::channel(10);
-        // let (rpc_tx_sender, mut rpc_tx_receiver) = mpsc::channel(32);
+        let (block_tx, mut block_receiver) = mpsc::channel(1);
 
         // Internal channel for notifications like chain tip timeouts
         let (internal_tx, mut internal_rx) = mpsc::channel(8);
 
         let ledger = Arc::clone(&self.ledger);
         let sync_target_miner = Arc::clone(&self.sync_target);
-        let mut secret_key = [0; 32];
-        secret_key.copy_from_slice(self.config.secret_key().as_ref());
+        let secret_key = *self.config.secret_key();
 
-        // Only spawn miner if configured to do so
         // Spawn mining loop only if mining is enabled in the config
         if self.config.mining {
             tokio::spawn(async move {
@@ -544,7 +619,7 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     if let Some((_key, mining_tx)) = result {
                         let mut block = Block::new(0, prev_block_hash);
                         block.transactions.push(mining_tx);
-                        if block_sender.send(block).await.is_err() {
+                        if block_tx.send(block).await.is_err() {
                             break;
                         }
                     }
@@ -579,15 +654,6 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                     }
                     _ => {}
                 },
-                _ = sync_check_interval.tick() => {
-                    // Broadcast GetChainTip periodically to gather peer chain tips
-                    self.request_chain_tip_and_schedule_timeout(
-                        &mut swarm,
-                        topic.clone(),
-                        internal_tx.clone(),
-                        chain_tip_to_blocks_timeout,
-                    );
-                }
                 Some(ev) = internal_rx.recv() => {
                     match ev {
                         InternalEvent::ChainTipTimeout => {
@@ -599,54 +665,17 @@ impl<L: Ledger + Send + Sync + 'static, M: Mempool + Send + Sync + 'static> Eupp
                         }
                     }
                 }
-                Some(mut block) = block_receiver.recv() => {
-                    {
-                        let mp = self.mempool.read().unwrap();
-                        let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
-                        let selected = mp.get_transactions().scan(remaining, |remaining, tx| { // Select transactions for the block
-                            let tx_vsize = tx.vsize();
-                            *remaining = remaining.saturating_sub(tx_vsize);
-                            (*remaining > 0).then(|| tx.into_owned())
-                        });
-                        block.transactions.extend(selected);
-                    }
-
-                    let mut lg = self.ledger.write().unwrap();
-                    loop {
-                        match lg.add_block(&block) {
-                            Ok(_) => {
-                                println!(
-                                    "-> Send Block via gossip {}",
-                                    hex::encode(block.header().hash())
-                                );
-
-                                // Remove transactions included in the block from the mempool
-                                let mut mp = self.mempool.write().unwrap();
-                                let added_tx_hashes = block.transactions.iter().map(Transaction::hash);
-                                mp.remove_transactions(added_tx_hashes);
-
-                                // Broadcast new block via gossip
-                                let msg = GossipMessage::NewBlock(block);
-                                let _ = swarm
-                                    .behaviour_mut()
-                                    .gossipsub
-                                    .publish(topic.clone(), bincode::serialize(&msg).unwrap());
-                                break;
-                            }
-                            Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id)))
-                            | Err(BlockError::TransactionError(TransactionError::DoubleSpend(output_id))) => {
-                                // Remove offending transaction from the mempool
-                                let mut mp = self.mempool.write().unwrap();
-                                mp.remove_transactions([output_id.tx_hash]);
-                            }
-                            Err(err) => {
-                                // Clear mempool on other errors and log
-                                self.mempool.write().unwrap().clear();
-                                eprintln!("Failed to add block to ledger: {:?}", err);
-                                break;
-                            }
-                        }
-                    }
+                Some(block) = block_receiver.recv() => {
+                    self.handle_mined_block(block, &mut swarm, topic.clone());
+                }
+                _ = sync_check_interval.tick() => {
+                    // Broadcast GetChainTip periodically to gather peer chain tips
+                    self.request_chain_tip_and_schedule_timeout(
+                        &mut swarm,
+                        topic.clone(),
+                        internal_tx.clone(),
+                        chain_tip_to_blocks_timeout,
+                    );
                 }
             }
         }
