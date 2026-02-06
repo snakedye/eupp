@@ -34,11 +34,6 @@ struct PeerSyncState {
     supply: u64,
 }
 
-#[derive(Debug)]
-enum InternalEvent {
-    ChainTipTimeout,
-}
-
 /// Represents a full node in the Eupp network.
 type RpcResponder = tokio::sync::oneshot::Sender<RpcResponse>;
 type RpcRequestMessage = (RpcRequest, RpcResponder);
@@ -139,6 +134,29 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             .filter(|(_, state)| state.supply > local_supply)
             .max_by_key(|(_, state)| state.supply)
             .map(|(peer_id, state)| (*peer_id, state.clone()))
+    }
+
+    /// Requests the chain tip from peers and initiates synchronization if a suitable peer is found.
+    fn request_chain_tip(&mut self, swarm: &mut Swarm<EuppBehaviour>, topic: gossipsub::IdentTopic)
+    where
+        L: Indexer,
+    {
+        // Clear provisional sync target; we'll select the best peer after tip responses arrive.
+        self.sync_target.write().unwrap().take();
+        if let Some((peer_id, _)) = self.find_sync_target() {
+            println!(
+                "ChainTip gathering complete, initiating sync with {}",
+                peer_id
+            );
+            self.initiate_sync(swarm, peer_id);
+        }
+
+        // Broadcast GetChainTip over gossipsub
+        let msg = GossipMessage::GetChainTip;
+        let _ = swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), bincode::serialize(&msg).unwrap());
     }
 
     /// Handles incoming gossip messages and processes them based on their type.
@@ -510,35 +528,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         }
     }
 
-    /// Broadcast a GetChainTip over gossipsub and schedule a timeout that will trigger picking
-    /// the peer with highest advertised supply and starting the block sync afterwards.
-    fn request_chain_tip_and_schedule_timeout(
-        &mut self,
-        swarm: &mut Swarm<EuppBehaviour>,
-        topic: gossipsub::IdentTopic,
-        internal_tx: mpsc::Sender<InternalEvent>,
-        timeout: Duration,
-    ) {
-        // println!("Broadcasting GetChainTip request");
-        // Clear provisional sync target; we'll select the best peer after tip responses arrive.
-        *self.sync_target.write().unwrap() = None;
-
-        // Broadcast GetChainTip over gossipsub
-        let msg = GossipMessage::GetChainTip;
-        let _ = swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(topic.clone(), bincode::serialize(&msg).unwrap());
-
-        // spawn a background task that will notify the main loop after the timeout
-        // so it can choose the peer with highest supply and issue the GetBlocksHash.
-        tokio::spawn(async move {
-            tokio::time::sleep(timeout).await;
-            // best-effort: ignore send errors (channel closed)
-            let _ = internal_tx.send(InternalEvent::ChainTipTimeout).await;
-        });
-    }
-
     fn spawn_mining_loop(&self, block_tx: Sender<Block>)
     where
         L: Indexer,
@@ -630,9 +619,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         // Set up channels for mining communication
         let (block_tx, mut block_rx) = mpsc::channel(1);
 
-        // Internal channel for notifications like chain tip timeouts
-        let (internal_tx, mut internal_rx) = mpsc::channel(8);
-
         // RPC client channel
         let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
         f(RpcClient::new(rpc_tx));
@@ -642,8 +628,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             self.spawn_mining_loop(block_tx);
         }
 
-        let mut sync_check_interval = tokio::time::interval(Duration::from_secs(7)); // Periodic sync check
-        let chain_tip_to_blocks_timeout = Duration::from_secs(3);
+        let mut sync_check_interval = tokio::time::interval(Duration::from_secs(5)); // Periodic sync check
 
         loop {
             // Main event loop
@@ -665,17 +650,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     }
                     _ => {}
                 },
-                Some(ev) = internal_rx.recv() => {
-                    match ev {
-                        InternalEvent::ChainTipTimeout => {
-                            // Pick the best peer after gathering chain tips and start syncing
-                            if let Some((peer, _)) = self.find_sync_target() {
-                                println!("ChainTip gathering complete, initiating sync with {}", peer);
-                                self.initiate_sync(&mut swarm, peer);
-                            }
-                        }
-                    }
-                }
                 Some(block) = block_rx.recv() => {
                     self.handle_mined_block(block, &mut swarm, topic.clone());
                 }
@@ -685,11 +659,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 }
                 _ = sync_check_interval.tick() => {
                     // Broadcast GetChainTip periodically to gather peer chain tips
-                    self.request_chain_tip_and_schedule_timeout(
+                    self.request_chain_tip(
                         &mut swarm,
                         topic.clone(),
-                        internal_tx.clone(),
-                        chain_tip_to_blocks_timeout,
                     );
                 }
             }
