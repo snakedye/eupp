@@ -43,6 +43,16 @@ pub struct Config {
 
     /// The number of blocks to fetch in a single synchronization chunk.
     pub block_chunk_size: usize,
+
+    /// Optional path to the indexing database (used by `eupp-db`).
+    ///
+    /// Environment variable: `EUPP_INDEX_DB_PATH`
+    pub index_db_path: Option<String>,
+
+    /// Optional path to the block file where all blocks are stored on disk.
+    ///
+    /// Environment variable: `EUPP_BLOCK_FILE`
+    pub block_file_path: Option<String>,
 }
 
 impl Default for Config {
@@ -52,6 +62,8 @@ impl Default for Config {
             secret_key_bytes: Default::default(),
             mining: false,
             block_chunk_size: DEFAULT_BLOCK_CHUNK_SIZE,
+            index_db_path: None,
+            block_file_path: None,
         }
     }
 }
@@ -64,6 +76,8 @@ impl Config {
     /// - `EUPP_SECRET_KEY` - required hex-encoded 32-byte ed25519 secret key
     /// - `EUPP_MINING` - optional boolean (true/false). Accepts `1`, `true`, `yes`, `on`.
     /// - `EUPP_BLOCK_CHUNK_SIZE` - optional usize, defaults to 16
+    /// - `EUPP_INDEX_DB_PATH` - optional path to the indexing database used by `eupp-db`
+    /// - `EUPP_BLOCK_FILE` - optional path to the block file where blocks are stored
     pub fn from_env() -> Result<Self, ConfigError> {
         // Load .env if present, ignore errors
         let _ = dotenv::dotenv();
@@ -101,6 +115,18 @@ impl Config {
             _ => DEFAULT_BLOCK_CHUNK_SIZE,
         };
 
+        // INDEX DB PATH (optional) - used by eupp-db
+        let index_db_path = match env::var("EUPP_INDEX_DB_PATH").ok() {
+            Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            _ => None,
+        };
+
+        // BLOCK FILE PATH (optional) - where blocks are stored on disk
+        let block_file_path = match env::var("EUPP_BLOCK_FILE").ok() {
+            Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            _ => None,
+        };
+
         // SECRET KEY (required) - expect hex encoded 32 bytes
         let sk_hex = env::var("EUPP_SECRET_KEY")
             .or_else(|_| env::var("SECRET_KEY"))
@@ -130,6 +156,8 @@ impl Config {
             secret_key_bytes,
             mining,
             block_chunk_size,
+            index_db_path,
+            block_file_path,
         })
     }
 
@@ -149,6 +177,16 @@ impl Config {
     /// but this method exists for symmetry/clarity).
     pub fn block_chunk_size(&self) -> usize {
         self.block_chunk_size
+    }
+
+    /// Optional path to the indexing database (if configured).
+    pub fn index_db_path(&self) -> Option<&str> {
+        self.index_db_path.as_deref()
+    }
+
+    /// Optional path to the block file where blocks are stored (if configured).
+    pub fn block_file_path(&self) -> Option<&str> {
+        self.block_file_path.as_deref()
     }
 }
 

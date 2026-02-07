@@ -1,14 +1,15 @@
 use std::{
+    any::Any,
     borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
 };
 
-use u256::U256;
+use ethnum::U256;
 
 use crate::{
     Hash,
     block::{Block, BlockError},
-    ledger::IndexerExt,
+    ledger::{IndexerExt, LedgerView},
     mask_difficulty,
     transaction::{Output, OutputId, TransactionError},
 };
@@ -21,8 +22,10 @@ pub(crate) struct UtxoEntry {
 
 use super::{BlockMetadata, Indexer, Ledger};
 
+type BlockMap = HashMap<Hash, Block>;
+
 /// Represents an in-memory implementation of a blockchain `Indexer`.
-pub struct InMemoryIndexer {
+pub struct InMemoryIndexer<T = ()> {
     /// Block metadata index
     block_index: HashMap<Hash, BlockMetadata>,
 
@@ -31,12 +34,8 @@ pub struct InMemoryIndexer {
 
     /// Points to the block with the Maximum Accumulated Supply (MAS)
     tip: Hash,
-}
 
-/// Represents an in-memory implementation of a blockchain `Ledger`.
-pub struct FullInMemoryLedger {
-    indexer: InMemoryIndexer,
-    blocks: HashMap<Hash, Block>,
+    blocks: T,
 }
 
 impl Default for InMemoryIndexer {
@@ -51,6 +50,18 @@ impl InMemoryIndexer {
             block_index: HashMap::new(),
             utxo_set: BTreeMap::new(),
             tip: Hash::default(),
+            blocks: (),
+        }
+    }
+}
+
+impl<T: 'static> InMemoryIndexer<T> {
+    pub fn to_ledger(self) -> InMemoryIndexer<BlockMap> {
+        InMemoryIndexer {
+            block_index: self.block_index,
+            utxo_set: self.utxo_set,
+            tip: self.tip,
+            blocks: BlockMap::new(),
         }
     }
 
@@ -72,15 +83,19 @@ impl InMemoryIndexer {
         {
             let output_id = input.output_id;
             if spent_utxos.contains(&output_id) {
-                return Err(BlockError::TransactionError(TransactionError::DoubleSpend(
-                    output_id,
-                )));
+                return Err(BlockError::TransactionError(
+                    TransactionError::InvalidOutput(output_id),
+                ));
             }
             spent_utxos.insert(output_id);
         }
         // Remove spent UTXOs
         for output_id in spent_utxos.iter() {
-            self.utxo_set.remove(output_id);
+            if self.utxo_set.remove(output_id).is_none() {
+                return Err(BlockError::TransactionError(
+                    TransactionError::InvalidOutput(*output_id),
+                ));
+            }
         }
 
         // Add new UTXOs
@@ -120,23 +135,31 @@ impl InMemoryIndexer {
         self.utxo_set
             .retain(|_, entry| blocks.contains(&entry.block_hash));
     }
+
+    fn block_map(&mut self) -> Option<&mut BlockMap>
+    where
+        T: Any,
+    {
+        let blocks = &mut self.blocks as &mut dyn Any;
+        blocks.downcast_mut::<BlockMap>()
+    }
 }
 
-impl Indexer for InMemoryIndexer {
+impl<T: 'static> Indexer for InMemoryIndexer<T> {
     fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
         // Initialize variables
         let height;
         let available_supply;
         let prev_block = self.block_index.get(&block.prev_block_hash);
         let prev_locked_supply = prev_block.map_or(0, |meta| meta.locked_supply(self));
-        let prev_cumulative_work = prev_block.map_or(U256::zero(), |meta| meta.cumulative_work);
-        let locked_supply = block.lead_utxo().map_or(0, |utxo| utxo.amount);
+        let prev_cumulative_work = prev_block.map_or(U256::MIN, |meta| meta.cumulative_work);
+        let locked_supply = block.lead_output().map_or(0, |utxo| utxo.amount);
         let block_difficulty = prev_block
-            .and_then(|meta| self.get_utxo(&meta.lead_utxo))
+            .and_then(|meta| self.get_utxo(&meta.lead_output))
             .and_then(|utxo| utxo.mask().copied())
             .as_ref()
             .map_or(0, mask_difficulty);
-        let block_work = U256::from(1) << block_difficulty as usize;
+        let block_work = U256::new(1) << block_difficulty as usize;
 
         // Get the previous block metadata
         if !self.block_index.is_empty() {
@@ -161,9 +184,10 @@ impl Indexer for InMemoryIndexer {
             version: header.version,
             hash: header.hash(),
             prev_block_hash: header.prev_block_hash,
-            lead_utxo: OutputId::new(block.transactions[0].hash(), 0),
+            lead_output: OutputId::new(block.transactions[0].hash(), 0),
             merkle_root: header.merkle_root,
             cumulative_work: prev_cumulative_work + block_work,
+            cursor: None,
             available_supply,
             height,
         };
@@ -181,7 +205,7 @@ impl Indexer for InMemoryIndexer {
             || metadata.cumulative_work
                 > current_prev_metadata
                     .map(|meta| meta.cumulative_work)
-                    .unwrap_or(U256::zero())
+                    .unwrap_or_default()
         {
             if let Some(root) = current_prev_metadata
                 .map(|meta| meta.prev_block_hash)
@@ -193,7 +217,11 @@ impl Indexer for InMemoryIndexer {
             self.tip = metadata.hash;
         }
 
+        if let Some(block_map) = self.block_map() {
+            block_map.insert(metadata.hash, block.clone());
+        }
         self.block_index.insert(metadata.hash, metadata);
+
         Ok(())
     }
 
@@ -207,83 +235,43 @@ impl Indexer for InMemoryIndexer {
             .map(|entry| entry.output.clone())
     }
 
-    fn query_utxos<'a>(
-        &'a self,
-        query: &'a super::Query,
-    ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
+    fn query_utxos<'a>(&'a self, query: &'a super::Query) -> Vec<(OutputId, Output)> {
         // This is to only fetch UTXOs in the canonical branch.
         let blocks: HashSet<_> = self
             .metadata()
             .map(|meta| meta.hash)
             .take_while(|hash| Some(hash) != query.to.as_ref())
             .collect();
-        Box::new(
-            self.utxo_set
-                .iter()
-                .filter(move |(_, entry)| {
-                    let addresses = query.addresses();
-                    addresses.contains(&entry.output.commitment)
-                        && blocks.contains(&entry.block_hash)
-                })
-                .map(|(id, entry)| (*id, entry.output)),
-        )
+        self.utxo_set
+            .iter()
+            .filter(move |(_, entry)| {
+                let addresses = query.addresses();
+                addresses.contains(&entry.output.commitment) && blocks.contains(&entry.block_hash)
+            })
+            .map(|(id, entry)| (*id, entry.output))
+            .collect()
+    }
+
+    fn get_tip(&'_ self) -> Option<Hash> {
+        Some(self.tip)
     }
 
     fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
         self.utxo_set.get(output_id).map(|entry| entry.block_hash)
     }
+}
 
-    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
-        self.block_index.get(&self.tip).map(Cow::Borrowed)
+impl<T: 'static> LedgerView for InMemoryIndexer<T> {
+    type Ledger<'a>
+        = InMemoryIndexer<BlockMap>
+    where
+        Self: 'a;
+    fn as_ledger<'a>(&'a self) -> Option<&'a Self::Ledger<'a>> {
+        (self as &dyn Any).downcast_ref()
     }
 }
 
-impl FullInMemoryLedger {
-    pub fn new() -> Self {
-        FullInMemoryLedger {
-            indexer: InMemoryIndexer::new(),
-            blocks: HashMap::new(),
-        }
-    }
-}
-
-impl Indexer for FullInMemoryLedger {
-    fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
-        self.indexer.add_block(block)?;
-        let hash = block.header().hash();
-        self.blocks.insert(hash, block.clone());
-        Ok(())
-    }
-
-    fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
-        self.indexer.get_block_metadata(hash)
-    }
-
-    fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
-        self.indexer.get_utxo(output_id)
-    }
-
-    fn query_utxos<'a>(
-        &'a self,
-        query: &'a super::Query,
-    ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
-        self.indexer.query_utxos(query)
-    }
-
-    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
-        self.indexer.get_utxo_block_hash(output_id)
-    }
-
-    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
-        self.indexer.get_last_block_metadata()
-    }
-
-    fn as_ledger(&self) -> Option<&dyn Ledger> {
-        Some(self)
-    }
-}
-
-impl Ledger for FullInMemoryLedger {
+impl Ledger for InMemoryIndexer<BlockMap> {
     fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
         self.blocks.get(hash).map(Cow::Borrowed)
     }

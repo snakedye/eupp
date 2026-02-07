@@ -10,7 +10,7 @@ use crate::protocol::{
     GossipMessage, NetworkInfo, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
 use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
-use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt};
+use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
 use eupp_core::transaction::{Transaction, TransactionError};
 use eupp_core::{VirtualSize, block::Block, miner};
 
@@ -167,7 +167,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         topic: gossipsub::IdentTopic,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        L: Indexer,
+        L: Indexer + LedgerView,
     {
         let msg: GossipMessage = bincode::deserialize(&message.data)?;
         match msg {
@@ -200,15 +200,22 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             }
             GossipMessage::GetChainTip => {
                 // Respond by publishing our ChainTip via gossipsub.
-                if let Some(meta) = self.ledger.read().unwrap().get_last_block_metadata() {
-                    let msg = GossipMessage::ChainTip {
-                        hash: meta.hash,
-                        supply: meta.available_supply,
-                    };
-                    let _ = swarm
-                        .behaviour_mut()
-                        .gossipsub
-                        .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                if let Some(lg) = self
+                    .ledger
+                    .read()
+                    .ok()
+                    .filter(|lg| lg.as_ledger().is_some())
+                {
+                    if let Some(meta) = lg.get_last_block_metadata() {
+                        let msg = GossipMessage::ChainTip {
+                            hash: meta.hash,
+                            supply: meta.available_supply,
+                        };
+                        let _ = swarm
+                            .behaviour_mut()
+                            .gossipsub
+                            .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                    }
                 }
             }
             GossipMessage::ChainTip {
@@ -252,7 +259,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         event: request_response::Event<SyncRequest, SyncResponse>,
         swarm: &mut Swarm<EuppBehaviour>,
     ) where
-        L: Indexer,
+        L: Indexer + LedgerView,
     {
         match event {
             request_response::Event::Message { peer, message, .. } => {
@@ -408,7 +415,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                 .connected_peers()
                                 .map(|peer_id| peer_id.to_base58())
                                 .collect(),
-                            cummulative_difficulty: meta.cumulative_work.bits(),
+                            cummulative_difficulty: meta.cumulative_work.to_le_bytes(),
                         })
                         .unwrap_or_default();
 
@@ -436,7 +443,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             }
             RpcRequest::GetUtxos { query } => {
                 if let Ok(lg) = self.ledger.read() {
-                    let outputs = lg.query_utxos(&query).collect();
+                    let outputs = lg.query_utxos(&query);
                     let _ = responder.send(RpcResponse::Utxos(outputs));
                 } else {
                     let _ = responder.send(RpcResponse::Utxos(Vec::new()));
@@ -512,8 +519,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         .publish(topic.clone(), bincode::serialize(&msg).unwrap());
                     break;
                 }
-                Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id)))
-                | Err(BlockError::TransactionError(TransactionError::DoubleSpend(output_id))) => {
+                Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id))) => {
                     // Remove offending transaction from the mempool
                     let mut mp = self.mempool.write().unwrap();
                     mp.remove_transactions([output_id.tx_hash]);
@@ -547,8 +553,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 let metadata = {
                     let lg = ledger.read().unwrap();
                     lg.get_last_block_metadata().and_then(|prev_block| {
-                        lg.get_utxo(&prev_block.lead_utxo)
-                            .map(|lead_utxo| (prev_block.hash, prev_block.lead_utxo, lead_utxo))
+                        lg.get_utxo(&prev_block.lead_output)
+                            .map(|lead_utxo| (prev_block.hash, prev_block.lead_output, lead_utxo))
                     })
                 };
                 let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
@@ -583,7 +589,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     pub async fn run<F>(mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: FnOnce(RpcClient),
-        L: Indexer,
+        L: Indexer + LedgerView,
     {
         let mut swarm = SwarmBuilder::with_new_identity()
             .with_tokio()

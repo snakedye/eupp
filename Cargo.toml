@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = [ "eupp-cli","eupp-core", "eupp-net"]
+members = [ "eupp-cli","eupp-core", "eupp-db", "eupp-net"]
 
 [dependencies]
 eupp-core = { path = "./eupp-core" }
 eupp-net = { path = "./eupp-net" }
+eupp-db = { path = "./eupp-db" }
 tokio = { version = "1.0", features = ["full"] }
 blake2 = "0.10.6"
 hex = "0.4.3"

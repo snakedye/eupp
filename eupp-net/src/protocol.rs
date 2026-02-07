@@ -14,7 +14,7 @@ pub struct NetworkInfo {
     /// The list of connected peers.
     pub peers: Vec<String>,
     /// The cummulative difficulty of the blockchain in the amount of bits used.
-    pub cummulative_difficulty: usize,
+    pub cummulative_difficulty: [u8; 32],
 }
 
 /// Messages broadcast over gossipsub for all peers to see.
