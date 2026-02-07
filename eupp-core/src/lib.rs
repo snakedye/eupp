@@ -1,4 +1,5 @@
 use blake2::Digest;
+use ed25519_dalek::SigningKey;
 
 pub mod block;
 pub mod ledger;
@@ -8,6 +9,9 @@ pub mod vm;
 
 /// 32-byte Ed25519 public key
 pub type PublicKey = [u8; 32];
+
+/// 32-byte Ed25519 secret key
+pub type SecretKey = [u8; 32];
 
 /// 32-byte hash (e.g., Blake2s256 output)
 pub type Hash = [u8; 32];
@@ -31,6 +35,13 @@ pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) 
     hasher.finalize().into()
 }
 
+/// Generate a new Ed25519 keypair.
+///
+/// Returns a tuple containing the public key and the secret key.
+pub fn generate_keypair() -> SigningKey {
+    let sk: [u8; 32] = rand::random();
+    return ed25519_dalek::SigningKey::from_bytes(&sk);
+}
 /// Check whether an attempted public key satisfies the provided mask.
 ///
 /// Convention:

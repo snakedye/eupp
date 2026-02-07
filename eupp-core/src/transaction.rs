@@ -13,6 +13,7 @@ use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
 use super::{Hash, PublicKey, commitment, ledger::Indexer};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
+use ed25519_dalek::{SecretKey, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -86,19 +87,14 @@ pub struct Output {
 pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),
-
-    /// The referenced output (UTXO) was already spent.
-    DoubleSpend(OutputId),
-
     /// Execution error occurred during transaction validation.
     Execution(ExecError),
-
     /// Total outputs exceed total inputs.
     InvalidBalance { total_input: u64, total_output: u64 },
-
     /// Witness script is too large.
     InvalidWitnessSize,
-
+    /// The transaction has no inputs.
+    MissingInputs,
     /// Number of inputs exceeds maximum allowed.
     TooManyInputs,
     /// Number of outputs exceeds maximum allowed.
@@ -125,38 +121,26 @@ impl fmt::Debug for Input {
 }
 
 impl Input {
-    pub fn new_unsigned(output_id: OutputId, public_key: PublicKey) -> Self {
+    pub fn new_unsigned(output_id: OutputId) -> Self {
         Self {
             output_id,
             signature: [0; 64],
-            public_key,
+            public_key: Default::default(),
             witness: vec![],
         }
     }
-    pub fn new(output_id: OutputId, public_key: PublicKey, signature: Signature) -> Self {
-        Self {
-            output_id,
-            signature,
-            public_key,
-            witness: vec![],
-        }
-    }
-    pub fn new_with_witness(
-        output_id: OutputId,
-        public_key: PublicKey,
-        signature: Signature,
-        witness: Vec<u8>,
-    ) -> Self {
-        Self {
-            output_id,
-            signature,
-            public_key,
-            witness,
-        }
-    }
-    pub fn with_signature(mut self, signature: Signature) -> Self {
-        self.signature = signature;
+    pub fn with_witness(mut self, witness: Vec<u8>) -> Self {
+        self.witness = witness;
         self
+    }
+    pub fn sign(mut self, sk: &SecretKey, sighash: Hash) -> Self {
+        let signing_key = SigningKey::from_bytes(sk);
+        self.public_key = signing_key.verifying_key().to_bytes();
+        self.signature = signing_key.sign(&sighash).to_bytes();
+        self
+    }
+    pub fn output_id(&self) -> OutputId {
+        self.output_id
     }
 }
 
@@ -453,7 +437,7 @@ impl Transaction {
             .get(0)
             .map(|input| input.output_id)
             .zip(prev_block.as_ref())
-            .filter(|(utxo, meta)| &meta.lead_utxo == utxo);
+            .filter(|(utxo, meta)| &meta.lead_output == utxo);
 
         if self.inputs.len() > MAX_ALLOWED {
             return Err(TransactionError::TooManyInputs);
@@ -599,14 +583,10 @@ mod tests {
     #[test]
     fn test_transaction_hash() {
         // Build a transaction with one input and one output
-        let input = Input::new(
-            OutputId {
-                tx_hash: [1u8; 32],
-                index: 0,
-            },
-            [2u8; 32],
-            [0; 64],
-        );
+        let input = Input::new_unsigned(OutputId {
+            tx_hash: [1u8; 32],
+            index: 0,
+        });
         let output = Output::new_v1(10, &[0; 32], &[3u8; 32]);
         let tx = Transaction {
             inputs: vec![input.clone()],
@@ -661,7 +641,7 @@ mod tests {
         indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
+        let output_id = OutputId {
             tx_hash: funding_txid,
             index: 0,
         };
@@ -670,9 +650,9 @@ mod tests {
             Output::new_v1(30, &mask, &data),
         ]; // total output: 90
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input::new(utxo_id, signing_key.verifying_key().to_bytes(), signature);
+        let sighash = sighash(&[output_id], &new_outputs);
+        let input =
+            Input::new_unsigned(output_id).sign(signing_key.verifying_key().as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -713,14 +693,10 @@ mod tests {
         indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
-        let input = Input::new(
-            OutputId {
-                tx_hash: funding_txid,
-                index: 0,
-            },
-            [11u8; 32], // we use a random public key
-            [0; 64],
-        );
+        let input = Input::new_unsigned(OutputId {
+            tx_hash: funding_txid,
+            index: 0,
+        });
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -796,16 +772,12 @@ mod tests {
             tx_hash: funding_txid,
             index: 1,
         };
-        let input = Input::new_unsigned(
-            utxo_id,
-            signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-        );
+        let input = Input::new_unsigned(utxo_id);
         let new_outputs = vec![Output::new_v1(150, &data, &mask)]; // Any commitment will work with the mask chosen before
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
 
         let spending_tx = Transaction {
-            inputs: vec![input.with_signature(signature)],
+            inputs: vec![input.sign(signing_key.as_bytes(), sighash)],
             outputs: new_outputs,
         };
 
@@ -855,13 +827,10 @@ mod tests {
             data,
             commitment: mask,
         }];
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input::new(
-            utxo_id,
-            signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-            signature,
+        let input = Input::new_unsigned(utxo_id).sign(
+            &[11u8; 32], // same public key used to construct commitment
+            sighash,
         );
 
         let spending_tx = Transaction {
@@ -915,11 +884,7 @@ mod tests {
         };
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input::new(
-            utxo_id, pubkey, // same public key used to construct commitment
-            signature,
-        );
+        let input = Input::new_unsigned(utxo_id).sign(signing_key.as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -966,14 +931,8 @@ mod tests {
                 tx_hash: funding_txid,
                 index: i as u8,
             };
-            let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
             let sighash = sighash(&[utxo_id], &[]);
-            let signature = signing_key.sign(&sighash).to_bytes();
-            inputs.push(Input::new(
-                utxo_id,
-                signing_key.verifying_key().to_bytes(),
-                signature,
-            ));
+            inputs.push(Input::new_unsigned(utxo_id).sign(&[11u8; 32], sighash));
         }
 
         let spending_tx = Transaction {
@@ -1030,14 +989,10 @@ mod tests {
             .collect();
 
         let spending_tx = Transaction {
-            inputs: vec![Input::new(
-                OutputId {
-                    tx_hash: funding_txid,
-                    index: 0,
-                },
-                [11u8; 32],
-                [0; 64],
-            )],
+            inputs: vec![Input::new_unsigned(OutputId {
+                tx_hash: funding_txid,
+                index: 0,
+            })],
             outputs,
         };
 
@@ -1089,11 +1044,12 @@ mod tests {
 
         // sighash for spending tx (what the signature must sign)
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
 
         // Use the witness and place it on the input; but since utxo.data != hash(witness)
         // the verify() should return InvalidWitnessScript error before executing the witness.
-        let input = Input::new_with_witness(utxo_id, pubkey, signature, witness);
+        let input = Input::new_unsigned(utxo_id)
+            .with_witness(witness)
+            .sign(signing_key.as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -1138,11 +1094,12 @@ mod tests {
 
         // sighash for spending tx (what the signature must sign)
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
 
         // Place the witness on the input; since utxo.data == hash(witness),
         // the VM will run the witness which will verify the signature and succeed.
-        let input = Input::new_with_witness(utxo_id, pubkey, signature, witness);
+        let input = Input::new_unsigned(utxo_id)
+            .with_witness(witness)
+            .sign(signing_key.as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],

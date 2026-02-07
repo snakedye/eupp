@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use eupp_core::ledger::Query;
 use eupp_core::transaction::{Input, Output, Transaction, sighash};
 use eupp_core::{Hash, commitment};
@@ -32,12 +32,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // --- Construct a transaction from CLI arguments ---
-    let secret_key_bytes = hex::decode(args.secret_key)?;
-    let signing_key = SigningKey::from_bytes(
-        &secret_key_bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid secret key length, expected 32 bytes"))?,
-    );
+    let secret_key_bytes = hex::decode(args.secret_key.as_bytes())?;
+    let signing_key = SigningKey::try_from(secret_key_bytes.as_slice())
+        .map_err(|e| anyhow::anyhow!("Failed to parse secret key: {}", e))?;
     let public_key = signing_key.verifying_key().to_bytes();
     let data = [0_u8; 32];
     let address = commitment(&public_key, Some(data.as_slice()));
@@ -86,12 +83,13 @@ fn main() -> Result<()> {
     // Construct the signature
     // sighash expects an iterator of OutputId references; adapt accordingly
     let sighash_val = sighash(utxos.iter().map(|(output_id, _)| output_id), &new_outputs);
-    let signature = signing_key.sign(&sighash_val);
 
     // Create inputs
     let inputs = utxos
         .iter()
-        .map(|(output_id, _)| Input::new(*output_id, public_key, signature.to_bytes()))
+        .map(|(output_id, _)| {
+            Input::new_unsigned(*output_id).sign(signing_key.as_bytes(), sighash_val)
+        })
         .collect();
     let tx = Transaction::new(inputs, new_outputs);
 
