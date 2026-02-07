@@ -17,12 +17,12 @@ pub fn router(state: RpcClient) -> Router {
             "/transactions/:tx_hash/confirmations",
             get(get_confirmations),
         )
-        .route("/transactions/outputs", post(get_utxos))
+        .route("/transactions/outputs", post(query_outputs))
+        .route("/transactions/outputs", get(get_outputs))
         .route("/transactions", post(send_raw_tx))
         .with_state(state)
 }
 
-/// GET /network
 async fn get_network_info(
     State(client): State<RpcClient>,
 ) -> Result<Json<protocol::NetworkInfo>, StatusCode> {
@@ -32,8 +32,6 @@ async fn get_network_info(
     }
 }
 
-/// GET /transactions/:tx_hash/confirmations
-/// Expects hex-encoded 32-byte transaction hash in the path (no 0x prefix).
 async fn get_confirmations(
     State(client): State<RpcClient>,
     axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
@@ -54,8 +52,7 @@ async fn get_confirmations(
     }
 }
 
-/// POST /transactions/utxos
-async fn get_utxos(
+async fn query_outputs(
     State(client): State<RpcClient>,
     Json(query): Json<Query>,
 ) -> Result<Json<Vec<(OutputId, Output)>>, StatusCode> {
@@ -65,7 +62,20 @@ async fn get_utxos(
     }
 }
 
-/// POST /transactions
+async fn get_outputs(
+    State(client): State<RpcClient>,
+) -> Result<Json<Vec<(OutputId, Output)>>, StatusCode> {
+    match client
+        .request(RpcRequest::GetUtxos {
+            query: Query::new(),
+        })
+        .await
+    {
+        Some(RpcResponse::Utxos(list)) => Ok(Json(list)),
+        _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 async fn send_raw_tx(
     State(client): State<RpcClient>,
     Json(tx): Json<Transaction>,
