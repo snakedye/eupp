@@ -10,7 +10,7 @@ use std::fmt;
 
 use eupp_core::PublicKey;
 use hex;
-use libp2p::identity::ed25519::Keypair;
+use libp2p::identity::ed25519::{Keypair, SecretKey};
 
 /// Default number of blocks to fetch in a single synchronization chunk when not provided.
 const DEFAULT_BLOCK_CHUNK_SIZE: usize = 16;
@@ -168,8 +168,8 @@ impl Config {
 
     /// Retrieve the public key.
     pub fn public_key(&self) -> PublicKey {
-        let mut sk = self.secret_key_bytes;
-        let kp = Keypair::try_from_bytes(&mut sk).unwrap();
+        let sk = SecretKey::try_from_bytes(self.secret_key_bytes.clone().as_mut()).unwrap();
+        let kp = Keypair::from(sk);
         kp.public().to_bytes()
     }
 

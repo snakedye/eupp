@@ -1,5 +1,6 @@
 use eupp_core::{
     block::Block,
+    commitment,
     ledger::Indexer,
     transaction::{Output, Transaction},
 };
@@ -20,6 +21,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_fs(config.block_file_path().expect("Block file path not found"))
         .unwrap();
 
+    for i in 0..100 {
+        let data = [i as u8; 32];
+        ledger.add_address(commitment(&config.public_key(), [data.as_slice()]));
+    }
+
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.
     // A mask requiring 2.5 bytes of zeros for a valid PoW solution.
@@ -37,11 +43,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let genesis_block_hash = genesis_block.header().hash();
 
     // Add genesis block to ledger
-    let _ = ledger.add_block(&genesis_block);
-    eprintln!(
-        "Added genesis block. Hash: {}",
-        hex::encode(&genesis_block_hash)
-    );
+    if let Ok(_) = ledger.add_block(&genesis_block) {
+        println!(
+            "Added genesis block. Hash: {}",
+            hex::encode(&genesis_block_hash)
+        );
+    }
 
     // Create a mempool
     let mempool = SimpleMempool::new();

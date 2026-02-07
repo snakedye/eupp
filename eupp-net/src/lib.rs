@@ -452,7 +452,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             RpcRequest::SendRawTransaction { tx } => {
                 // Attempt to add to local mempool, then gossip.
                 let tx_hash = tx.hash();
-                println!("-> Gossiping Tx {} from RPC", hex::encode(tx_hash));
                 let mut mempool = self.mempool.write().unwrap();
                 let lg = self.ledger.read().unwrap();
                 match mempool.add(tx.clone(), &*lg) {
@@ -462,6 +461,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             .behaviour_mut()
                             .gossipsub
                             .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                        println!("-> Gossiping Tx {} from RPC", hex::encode(tx_hash));
                         let _ = responder.send(RpcResponse::TransactionHash(tx_hash));
                     }
                     Err(e) => {

@@ -49,9 +49,9 @@ fn main() -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    // Fetch UTXOs via HTTP POST /transactions/utxos <query>
+    // Fetch UTXOs
     let resp = client
-        .post(format!("{base}/transactions/utxos"))
+        .post(format!("{base}/transactions/outputs"))
         .json(&query)
         .send()?;
 
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
         return Err(anyhow::anyhow!("Failed to fetch UTXOs: {}", resp.status()));
     }
 
-    // Deserialize to Vec<(OutputId, Output)>
+    // Deserialize the response
     let utxos: Vec<(eupp_core::transaction::OutputId, Output)> = resp.json()?;
     let balance: u64 = utxos.iter().map(|(_, output)| output.amount()).sum();
     println!("Address: {}", hex::encode(address));
@@ -100,7 +100,7 @@ fn main() -> Result<()> {
         hex::encode(tx_hash)
     );
 
-    // Broadcast the transaction via HTTP POST /transactions <tx>
+    // Broadcast the transaction
     let resp = client
         .post(format!("{base}/transactions"))
         .json(&tx)
