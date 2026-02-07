@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a config
     let config = Config::from_env()?;
 
-    // Create an in-memory ledger
+    // Create a ledger
     let mut ledger = RedbIndexer::from(config.index_db_path().expect("Index DB path not found"))
         .with_fs(config.block_file_path().expect("Block file path not found"))
         .unwrap();

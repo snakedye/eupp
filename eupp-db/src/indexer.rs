@@ -137,6 +137,7 @@ impl Key for OutputKey {
     }
 }
 
+/// RedbIndexer is an indexer that uses Redb as the underlying storage.
 pub struct RedbIndexer<T = ()> {
     tip: Option<Hash>,
     db: redb::Database,
@@ -145,6 +146,7 @@ pub struct RedbIndexer<T = ()> {
 }
 
 impl RedbIndexer {
+    /// Creates a new RedbIndexer instance.
     pub fn new(db: redb::Database) -> Self {
         RedbIndexer {
             db,
@@ -170,6 +172,7 @@ impl<T: AsRef<Path>> From<T> for RedbIndexer {
 }
 
 impl<Fs> RedbIndexer<Fs> {
+    /// Enables the `Ledger` to be used with a file system.
     pub fn with_fs(
         self,
         path: impl AsRef<Path>,
@@ -192,6 +195,7 @@ impl<Fs> RedbIndexer<Fs> {
             .map(|tip| tip.value().try_into().ok())
             .flatten()
     }
+    /// Adds an address to the indexer.
     pub fn add_address(&mut self, address: Hash) {
         self.addresses.insert(address);
     }
@@ -209,6 +213,7 @@ impl<Fs> RedbIndexer<Fs> {
     {
         table.get(key).ok().flatten().map(|value| f(value.value()))
     }
+    /// Applies a block to the indexer database.
     fn write_block_to_utxo_set(
         &mut self,
         utxo_set: &mut Table<OutputKey, OutputValue>,

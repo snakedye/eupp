@@ -76,7 +76,7 @@ pub struct EuppNode<L, M: Mempool> {
     /// A queue of block hashes that need to be fetched from peers during synchronization.
     block_fetch_queue: Vec<BlockHeader>,
 
-    /// Node configuration
+    /// Node configuration.
     config: Config,
 }
 
