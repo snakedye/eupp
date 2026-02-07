@@ -262,9 +262,9 @@ impl<Fs> RedbIndexer<Fs> {
         }) {
             let output_id = OutputId::new(tx_id, i as u8);
 
-            if self.addresses.contains(&output.commitment) {
+            if self.addresses.contains(output.address()) {
                 address_table
-                    .insert(output.commitment, output_id.clone())
+                    .insert(output.address(), output_id.clone())
                     .map_err(|err| BlockError::Other(err.to_string()))?;
             }
 
@@ -308,7 +308,7 @@ impl<T: 'static> eupp_core::ledger::Indexer for RedbIndexer<T> {
             let prev_cumulative_work = prev_block
                 .as_ref()
                 .map_or(U256::MIN, |meta| meta.cumulative_work);
-            let locked_supply = block.lead_output().map_or(0, |utxo| utxo.amount);
+            let locked_supply = block.lead_output().map_or(0, |utxo| utxo.amount());
             let block_difficulty = prev_block
                 .as_ref()
                 .and_then(|meta| self.get_utxo(&meta.lead_output))
@@ -434,7 +434,7 @@ impl<T: 'static> eupp_core::ledger::Indexer for RedbIndexer<T> {
     }
 }
 
-impl<T: Any> LedgerView for RedbIndexer<T> {
+impl<T: 'static> LedgerView for RedbIndexer<T> {
     type Ledger<'a>
         = RedbIndexer<FileBlockStore>
     where
@@ -520,8 +520,8 @@ mod tests {
 
         // We'll index a specific commitment as an address
         let output = Output::new_v1(42, &[7u8; 32], &[0u8; 32]);
-        let address = output.commitment;
-        indexer.add_address(address);
+        let address = output.address();
+        indexer.add_address(*address);
 
         // Create a block with an output that has this commitment
         let tx = Transaction {
@@ -540,7 +540,7 @@ mod tests {
         // We expect at least one UTXO for our address
         assert!(
             res.iter()
-                .any(|(id, out)| id.tx_hash == txid && out.commitment == address)
+                .any(|(id, out)| id.tx_hash == txid && out.address() == address)
         );
     }
 

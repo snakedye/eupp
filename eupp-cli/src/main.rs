@@ -61,7 +61,7 @@ fn main() -> Result<()> {
 
     // Deserialize to Vec<(OutputId, Output)>
     let utxos: Vec<(eupp_core::transaction::OutputId, Output)> = resp.json()?;
-    let balance: u64 = utxos.iter().map(|(_, output)| output.amount).sum();
+    let balance: u64 = utxos.iter().map(|(_, output)| output.amount()).sum();
     println!("Address: {}", hex::encode(address));
     println!("Balance: {} units", balance);
 

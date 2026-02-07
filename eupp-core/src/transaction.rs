@@ -75,11 +75,11 @@ pub struct Output {
     /// Protocol version used for the output.
     pub(crate) version: Version,
     /// Amount of the output.
-    pub amount: u64,
+    pub(crate) amount: u64,
     /// Data associated with the output.
-    pub data: Hash,
+    pub(crate) data: Hash,
     /// The hash of the public key.
-    pub commitment: Hash,
+    pub(crate) commitment: Hash,
 }
 
 /// Error type for transaction validation.
@@ -378,6 +378,21 @@ impl Output {
             Version::V0 => Some(&self.commitment),
             _ => None,
         }
+    }
+
+    /// Returns the address associated with the output.
+    pub fn address(&self) -> &Hash {
+        &self.commitment
+    }
+
+    /// Returns the data associated with the output.
+    pub fn data(&self) -> &Hash {
+        &self.data
+    }
+
+    /// Returns the amount of the output.
+    pub fn amount(&self) -> u64 {
+        self.amount
     }
 }
 
