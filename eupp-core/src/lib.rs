@@ -1,5 +1,6 @@
 use blake2::Digest;
 use ed25519_dalek::SigningKey;
+use serde::Deserialize;
 
 pub mod block;
 pub mod ledger;
@@ -97,6 +98,39 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     let final_reward = MAX_REWARD.saturating_sub(gap as u64);
 
     final_reward.max(MIN_REWARD)
+}
+
+fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&hex::encode(hash))
+}
+
+fn deserialize_hash<'de, D>(deserializer: D) -> Result<crate::Hash, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
+    Hash::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_signature<'de, D>(deserializer: D) -> Result<crate::Signature, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
+    Signature::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    hex::decode(&s).map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]

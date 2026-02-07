@@ -10,7 +10,10 @@ supports extensible script and witness validation for advanced transaction types
 */
 
 use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
-use super::{Hash, PublicKey, commitment, ledger::Indexer};
+use super::{
+    Hash, PublicKey, commitment, deserialize_hash, deserialize_signature, deserialize_vec,
+    ledger::Indexer, serialize_to_hex,
+};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
 use ed25519_dalek::{SecretKey, Signer, SigningKey};
@@ -36,19 +39,35 @@ pub struct Transaction {
 /// An output identifier.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OutputId {
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub tx_hash: TransactionHash,
     pub index: u8,
 }
 
 /// A blockchain transaction input.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
     /// The id of the output being spent.
     pub(crate) output_id: OutputId,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// The public key used to verify the signature.
     pub(crate) public_key: PublicKey,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_vec"
+    )]
     /// Witness data for the input.
     pub(crate) witness: Vec<u8>,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_signature"
+    )]
     /// The signature signed by the private key linked to the public key.
     pub(crate) signature: Signature,
 }
@@ -57,7 +76,7 @@ pub struct Input {
 ///
 /// Adding a short doc comment makes the intent explicit and makes the type
 /// easier to discover when browsing the code or generated documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Version {
     /// Exclusively for mining.
     V0 = 0,
@@ -70,14 +89,22 @@ pub enum Version {
 }
 
 /// A blockchain transaction output.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
     /// Protocol version used for the output.
     pub(crate) version: Version,
     /// Amount of the output.
     pub(crate) amount: u64,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// Data associated with the output.
     pub(crate) data: Hash,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// The hash of the public key.
     pub(crate) commitment: Hash,
 }
@@ -144,50 +171,6 @@ impl Input {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for Input {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct InputHelper {
-            output_id: OutputId,
-            public_key: String,
-            witness: String,
-            signature: String,
-        }
-
-        let helper = InputHelper::deserialize(deserializer)?;
-        let pubkey = hex::decode(helper.public_key).map_err(serde::de::Error::custom)?;
-        let witness = hex::decode(helper.witness).map_err(serde::de::Error::custom)?;
-        let signature = hex::decode(helper.signature).map_err(serde::de::Error::custom)?;
-
-        Ok(Input {
-            output_id: helper.output_id,
-            public_key: PublicKey::try_from(pubkey.as_slice()).map_err(serde::de::Error::custom)?,
-            witness,
-            signature: Signature::try_from(signature.as_slice())
-                .map_err(serde::de::Error::custom)?,
-        })
-    }
-}
-
-impl serde::Serialize for Input {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-
-        let mut state = serializer.serialize_struct("Input", 4)?;
-        state.serialize_field("output_id", &self.output_id)?;
-        state.serialize_field("public_key", &hex::encode(&self.public_key))?;
-        state.serialize_field("witness", &hex::encode(&self.witness))?;
-        state.serialize_field("signature", &hex::encode(&self.signature))?;
-        state.end()
-    }
-}
-
 impl VirtualSize for OutputId {
     fn vsize(&self) -> usize {
         1 + self.tx_hash.len()
@@ -239,54 +222,6 @@ impl fmt::Debug for Output {
             .field("data", &hex::encode(&self.data))
             .field("commitment", &hex::encode(&self.commitment))
             .finish()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Output {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct OutputHelper {
-            version: u8,
-            amount: u64,
-            data: String,
-            commitment: String,
-        }
-
-        let helper = OutputHelper::deserialize(deserializer)?;
-        let data = hex::decode(helper.data).map_err(serde::de::Error::custom)?;
-        let commitment = hex::decode(helper.commitment).map_err(serde::de::Error::custom)?;
-
-        Ok(Output {
-            version: match helper.version {
-                0 => Version::V0,
-                1 => Version::V1,
-                2 => Version::V2,
-                3 => Version::V3,
-                _ => return Err(serde::de::Error::custom("Invalid version")),
-            },
-            amount: helper.amount,
-            data: Hash::try_from(data.as_slice()).map_err(serde::de::Error::custom)?,
-            commitment: Hash::try_from(commitment.as_slice()).map_err(serde::de::Error::custom)?,
-        })
-    }
-}
-
-impl serde::Serialize for Output {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-
-        let mut state = serializer.serialize_struct("Output", 4)?;
-        state.serialize_field("version", &(self.version as u8))?;
-        state.serialize_field("amount", &self.amount)?;
-        state.serialize_field("data", &hex::encode(&self.data))?;
-        state.serialize_field("commitment", &hex::encode(&self.commitment))?;
-        state.end()
     }
 }
 

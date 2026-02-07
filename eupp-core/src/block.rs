@@ -33,9 +33,9 @@ accessing blockchain data and a `Transaction` structure for representing transac
 use crate::miner::mining_solution;
 
 use super::{
-    Hash, VirtualSize, calculate_reward,
+    Hash, VirtualSize, calculate_reward, deserialize_hash,
     ledger::Indexer,
-    matches_mask,
+    matches_mask, serialize_to_hex,
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
@@ -50,6 +50,10 @@ pub struct Block {
     /// The version of the block, used to indicate protocol changes.
     pub version: u8,
     /// The hash of the previous block in the blockchain.
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub prev_block_hash: Hash,
     /// A list of transactions included in the block.
     pub transactions: Vec<Transaction>,
@@ -61,8 +65,16 @@ pub struct BlockHeader {
     /// The version of the block, used to indicate protocol changes.
     pub version: u8,
     /// The hash of the previous block in the blockchain.
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub prev_block_hash: Hash,
     /// The Merkle root of the transactions in the block.
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub merkle_root: Hash,
 }
 
