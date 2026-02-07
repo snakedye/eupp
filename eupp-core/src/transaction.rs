@@ -10,9 +10,13 @@ supports extensible script and witness validation for advanced transaction types
 */
 
 use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
-use super::{Hash, PublicKey, commitment, ledger::Indexer};
+use super::{
+    Hash, PublicKey, commitment, deserialize_hash, deserialize_signature, deserialize_vec,
+    ledger::Indexer, serialize_to_hex,
+};
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
+use ed25519_dalek::{SecretKey, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -35,19 +39,35 @@ pub struct Transaction {
 /// An output identifier.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OutputId {
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub tx_hash: TransactionHash,
     pub index: u8,
 }
 
 /// A blockchain transaction input.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
     /// The id of the output being spent.
     pub(crate) output_id: OutputId,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// The public key used to verify the signature.
     pub(crate) public_key: PublicKey,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_vec"
+    )]
     /// Witness data for the input.
     pub(crate) witness: Vec<u8>,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_signature"
+    )]
     /// The signature signed by the private key linked to the public key.
     pub(crate) signature: Signature,
 }
@@ -56,7 +76,7 @@ pub struct Input {
 ///
 /// Adding a short doc comment makes the intent explicit and makes the type
 /// easier to discover when browsing the code or generated documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Version {
     /// Exclusively for mining.
     V0 = 0,
@@ -69,16 +89,24 @@ pub enum Version {
 }
 
 /// A blockchain transaction output.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
     /// Protocol version used for the output.
     pub(crate) version: Version,
     /// Amount of the output.
-    pub amount: u64,
+    pub(crate) amount: u64,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// Data associated with the output.
-    pub data: Hash,
+    pub(crate) data: Hash,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// The hash of the public key.
-    pub commitment: Hash,
+    pub(crate) commitment: Hash,
 }
 
 /// Error type for transaction validation.
@@ -86,19 +114,14 @@ pub struct Output {
 pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),
-
-    /// The referenced output (UTXO) was already spent.
-    DoubleSpend(OutputId),
-
     /// Execution error occurred during transaction validation.
     Execution(ExecError),
-
     /// Total outputs exceed total inputs.
     InvalidBalance { total_input: u64, total_output: u64 },
-
     /// Witness script is too large.
     InvalidWitnessSize,
-
+    /// The transaction has no inputs.
+    MissingInputs,
     /// Number of inputs exceeds maximum allowed.
     TooManyInputs,
     /// Number of outputs exceeds maximum allowed.
@@ -125,82 +148,26 @@ impl fmt::Debug for Input {
 }
 
 impl Input {
-    pub fn new_unsigned(output_id: OutputId, public_key: PublicKey) -> Self {
+    pub fn new_unsigned(output_id: OutputId) -> Self {
         Self {
             output_id,
             signature: [0; 64],
-            public_key,
+            public_key: Default::default(),
             witness: vec![],
         }
     }
-    pub fn new(output_id: OutputId, public_key: PublicKey, signature: Signature) -> Self {
-        Self {
-            output_id,
-            signature,
-            public_key,
-            witness: vec![],
-        }
-    }
-    pub fn new_with_witness(
-        output_id: OutputId,
-        public_key: PublicKey,
-        signature: Signature,
-        witness: Vec<u8>,
-    ) -> Self {
-        Self {
-            output_id,
-            signature,
-            public_key,
-            witness,
-        }
-    }
-    pub fn with_signature(mut self, signature: Signature) -> Self {
-        self.signature = signature;
+    pub fn with_witness(mut self, witness: Vec<u8>) -> Self {
+        self.witness = witness;
         self
     }
-}
-
-impl<'de> serde::Deserialize<'de> for Input {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct InputHelper {
-            output_id: OutputId,
-            public_key: String,
-            witness: String,
-            signature: String,
-        }
-
-        let helper = InputHelper::deserialize(deserializer)?;
-        let pubkey = hex::decode(helper.public_key).map_err(serde::de::Error::custom)?;
-        let witness = hex::decode(helper.witness).map_err(serde::de::Error::custom)?;
-        let signature = hex::decode(helper.signature).map_err(serde::de::Error::custom)?;
-
-        Ok(Input {
-            output_id: helper.output_id,
-            public_key: PublicKey::try_from(pubkey.as_slice()).map_err(serde::de::Error::custom)?,
-            witness,
-            signature: Signature::try_from(signature.as_slice())
-                .map_err(serde::de::Error::custom)?,
-        })
+    pub fn sign(mut self, sk: &SecretKey, sighash: Hash) -> Self {
+        let signing_key = SigningKey::from_bytes(sk);
+        self.public_key = signing_key.verifying_key().to_bytes();
+        self.signature = signing_key.sign(&sighash).to_bytes();
+        self
     }
-}
-
-impl serde::Serialize for Input {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-
-        let mut state = serializer.serialize_struct("Input", 4)?;
-        state.serialize_field("output_id", &self.output_id)?;
-        state.serialize_field("public_key", &hex::encode(&self.public_key))?;
-        state.serialize_field("witness", &hex::encode(&self.witness))?;
-        state.serialize_field("signature", &hex::encode(&self.signature))?;
-        state.end()
+    pub fn output_id(&self) -> OutputId {
+        self.output_id
     }
 }
 
@@ -255,54 +222,6 @@ impl fmt::Debug for Output {
             .field("data", &hex::encode(&self.data))
             .field("commitment", &hex::encode(&self.commitment))
             .finish()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Output {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(serde::Deserialize)]
-        struct OutputHelper {
-            version: u8,
-            amount: u64,
-            data: String,
-            commitment: String,
-        }
-
-        let helper = OutputHelper::deserialize(deserializer)?;
-        let data = hex::decode(helper.data).map_err(serde::de::Error::custom)?;
-        let commitment = hex::decode(helper.commitment).map_err(serde::de::Error::custom)?;
-
-        Ok(Output {
-            version: match helper.version {
-                0 => Version::V0,
-                1 => Version::V1,
-                2 => Version::V2,
-                3 => Version::V3,
-                _ => return Err(serde::de::Error::custom("Invalid version")),
-            },
-            amount: helper.amount,
-            data: Hash::try_from(data.as_slice()).map_err(serde::de::Error::custom)?,
-            commitment: Hash::try_from(commitment.as_slice()).map_err(serde::de::Error::custom)?,
-        })
-    }
-}
-
-impl serde::Serialize for Output {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-
-        let mut state = serializer.serialize_struct("Output", 4)?;
-        state.serialize_field("version", &(self.version as u8))?;
-        state.serialize_field("amount", &self.amount)?;
-        state.serialize_field("data", &hex::encode(&self.data))?;
-        state.serialize_field("commitment", &hex::encode(&self.commitment))?;
-        state.end()
     }
 }
 
@@ -395,6 +314,21 @@ impl Output {
             _ => None,
         }
     }
+
+    /// Returns the address associated with the output.
+    pub fn address(&self) -> &Hash {
+        &self.commitment
+    }
+
+    /// Returns the data associated with the output.
+    pub fn data(&self) -> &Hash {
+        &self.data
+    }
+
+    /// Returns the amount of the output.
+    pub fn amount(&self) -> u64 {
+        self.amount
+    }
 }
 
 impl fmt::Debug for Transaction {
@@ -453,7 +387,7 @@ impl Transaction {
             .get(0)
             .map(|input| input.output_id)
             .zip(prev_block.as_ref())
-            .filter(|(utxo, meta)| &meta.lead_utxo == utxo);
+            .filter(|(utxo, meta)| &meta.lead_output == utxo);
 
         if self.inputs.len() > MAX_ALLOWED {
             return Err(TransactionError::TooManyInputs);
@@ -599,14 +533,10 @@ mod tests {
     #[test]
     fn test_transaction_hash() {
         // Build a transaction with one input and one output
-        let input = Input::new(
-            OutputId {
-                tx_hash: [1u8; 32],
-                index: 0,
-            },
-            [2u8; 32],
-            [0; 64],
-        );
+        let input = Input::new_unsigned(OutputId {
+            tx_hash: [1u8; 32],
+            index: 0,
+        });
         let output = Output::new_v1(10, &[0; 32], &[3u8; 32]);
         let tx = Transaction {
             inputs: vec![input.clone()],
@@ -661,7 +591,7 @@ mod tests {
         indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
+        let output_id = OutputId {
             tx_hash: funding_txid,
             index: 0,
         };
@@ -670,9 +600,9 @@ mod tests {
             Output::new_v1(30, &mask, &data),
         ]; // total output: 90
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input::new(utxo_id, signing_key.verifying_key().to_bytes(), signature);
+        let sighash = sighash(&[output_id], &new_outputs);
+        let input =
+            Input::new_unsigned(output_id).sign(signing_key.verifying_key().as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -713,14 +643,10 @@ mod tests {
         indexer.add_block(&block).unwrap();
 
         // Now build a spending transaction that consumes the funding UTXO
-        let input = Input::new(
-            OutputId {
-                tx_hash: funding_txid,
-                index: 0,
-            },
-            [11u8; 32], // we use a random public key
-            [0; 64],
-        );
+        let input = Input::new_unsigned(OutputId {
+            tx_hash: funding_txid,
+            index: 0,
+        });
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -796,16 +722,12 @@ mod tests {
             tx_hash: funding_txid,
             index: 1,
         };
-        let input = Input::new_unsigned(
-            utxo_id,
-            signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-        );
+        let input = Input::new_unsigned(utxo_id);
         let new_outputs = vec![Output::new_v1(150, &data, &mask)]; // Any commitment will work with the mask chosen before
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
 
         let spending_tx = Transaction {
-            inputs: vec![input.with_signature(signature)],
+            inputs: vec![input.sign(signing_key.as_bytes(), sighash)],
             outputs: new_outputs,
         };
 
@@ -855,13 +777,10 @@ mod tests {
             data,
             commitment: mask,
         }];
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input::new(
-            utxo_id,
-            signing_key.verifying_key().to_bytes(), // same public key used to construct commitment
-            signature,
+        let input = Input::new_unsigned(utxo_id).sign(
+            &[11u8; 32], // same public key used to construct commitment
+            sighash,
         );
 
         let spending_tx = Transaction {
@@ -915,11 +834,7 @@ mod tests {
         };
         let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
-        let input = Input::new(
-            utxo_id, pubkey, // same public key used to construct commitment
-            signature,
-        );
+        let input = Input::new_unsigned(utxo_id).sign(signing_key.as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -966,14 +881,8 @@ mod tests {
                 tx_hash: funding_txid,
                 index: i as u8,
             };
-            let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
             let sighash = sighash(&[utxo_id], &[]);
-            let signature = signing_key.sign(&sighash).to_bytes();
-            inputs.push(Input::new(
-                utxo_id,
-                signing_key.verifying_key().to_bytes(),
-                signature,
-            ));
+            inputs.push(Input::new_unsigned(utxo_id).sign(&[11u8; 32], sighash));
         }
 
         let spending_tx = Transaction {
@@ -1030,14 +939,10 @@ mod tests {
             .collect();
 
         let spending_tx = Transaction {
-            inputs: vec![Input::new(
-                OutputId {
-                    tx_hash: funding_txid,
-                    index: 0,
-                },
-                [11u8; 32],
-                [0; 64],
-            )],
+            inputs: vec![Input::new_unsigned(OutputId {
+                tx_hash: funding_txid,
+                index: 0,
+            })],
             outputs,
         };
 
@@ -1089,11 +994,12 @@ mod tests {
 
         // sighash for spending tx (what the signature must sign)
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
 
         // Use the witness and place it on the input; but since utxo.data != hash(witness)
         // the verify() should return InvalidWitnessScript error before executing the witness.
-        let input = Input::new_with_witness(utxo_id, pubkey, signature, witness);
+        let input = Input::new_unsigned(utxo_id)
+            .with_witness(witness)
+            .sign(signing_key.as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -1138,11 +1044,12 @@ mod tests {
 
         // sighash for spending tx (what the signature must sign)
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let signature = signing_key.sign(&sighash).to_bytes();
 
         // Place the witness on the input; since utxo.data == hash(witness),
         // the VM will run the witness which will verify the signature and succeed.
-        let input = Input::new_with_witness(utxo_id, pubkey, signature, witness);
+        let input = Input::new_unsigned(utxo_id)
+            .with_witness(witness)
+            .sign(signing_key.as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],

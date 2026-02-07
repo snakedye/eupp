@@ -864,12 +864,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ethnum"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca81e6b4777c89fd810c25a4be2b1bd93ea034fbe58e6a75216a34c6b82c539b"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "eupp"
 version = "0.1.0"
 dependencies = [
  "axum",
  "blake2",
  "eupp-core",
+ "eupp-db",
  "eupp-net",
  "hex",
  "serde",
@@ -897,10 +907,22 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "ed25519-dalek 3.0.0-pre.3",
+ "ethnum",
  "hex",
  "rand 0.9.2",
  "serde",
  "u256",
+]
+
+[[package]]
+name = "eupp-db"
+version = "0.1.0"
+dependencies = [
+ "ethnum",
+ "eupp-core",
+ "hex",
+ "redb",
+ "serde_json",
 ]
 
 [[package]]
@@ -2814,6 +2836,15 @@ dependencies = [
  "rustls-pki-types",
  "time",
  "yasna",
+]
+
+[[package]]
+name = "redb"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae323eb086579a3769daa2c753bb96deb95993c534711e0dbe881b5192906a06"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

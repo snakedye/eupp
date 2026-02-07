@@ -1,4 +1,6 @@
 use blake2::Digest;
+use ed25519_dalek::SigningKey;
+use serde::Deserialize;
 
 pub mod block;
 pub mod ledger;
@@ -8,6 +10,9 @@ pub mod vm;
 
 /// 32-byte Ed25519 public key
 pub type PublicKey = [u8; 32];
+
+/// 32-byte Ed25519 secret key
+pub type SecretKey = [u8; 32];
 
 /// 32-byte hash (e.g., Blake2s256 output)
 pub type Hash = [u8; 32];
@@ -31,6 +36,13 @@ pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) 
     hasher.finalize().into()
 }
 
+/// Generate a new Ed25519 keypair.
+///
+/// Returns a tuple containing the public key and the secret key.
+pub fn generate_keypair() -> SigningKey {
+    let sk: [u8; 32] = rand::random();
+    return ed25519_dalek::SigningKey::from_bytes(&sk);
+}
 /// Check whether an attempted public key satisfies the provided mask.
 ///
 /// Convention:
@@ -86,6 +98,39 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     let final_reward = MAX_REWARD.saturating_sub(gap as u64);
 
     final_reward.max(MIN_REWARD)
+}
+
+fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&hex::encode(hash))
+}
+
+fn deserialize_hash<'de, D>(deserializer: D) -> Result<crate::Hash, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
+    Hash::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_signature<'de, D>(deserializer: D) -> Result<crate::Signature, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
+    Signature::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    hex::decode(&s).map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]

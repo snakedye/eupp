@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NetworkInfo {
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// The hash of the current tip block.
     pub tip_hash: Hash,
     /// The height of the current tip block.
@@ -13,8 +17,12 @@ pub struct NetworkInfo {
     pub available_supply: u64,
     /// The list of connected peers.
     pub peers: Vec<String>,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     /// The cummulative difficulty of the blockchain in the amount of bits used.
-    pub cummulative_difficulty: usize,
+    pub cummulative_difficulty: [u8; 32],
 }
 
 /// Messages broadcast over gossipsub for all peers to see.
@@ -95,4 +103,20 @@ pub enum RpcResponse {
 
     /// An error response indicating that the request could not be fulfilled.
     Error(String),
+}
+
+fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&hex::encode(hash))
+}
+
+fn deserialize_hash<'de, D>(deserializer: D) -> Result<Hash, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
+    Hash::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
 }

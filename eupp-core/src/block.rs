@@ -33,9 +33,9 @@ accessing blockchain data and a `Transaction` structure for representing transac
 use crate::miner::mining_solution;
 
 use super::{
-    Hash, VirtualSize, calculate_reward,
+    Hash, VirtualSize, calculate_reward, deserialize_hash,
     ledger::Indexer,
-    matches_mask,
+    matches_mask, serialize_to_hex,
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
@@ -50,6 +50,10 @@ pub struct Block {
     /// The version of the block, used to indicate protocol changes.
     pub version: u8,
     /// The hash of the previous block in the blockchain.
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub prev_block_hash: Hash,
     /// A list of transactions included in the block.
     pub transactions: Vec<Transaction>,
@@ -61,14 +65,21 @@ pub struct BlockHeader {
     /// The version of the block, used to indicate protocol changes.
     pub version: u8,
     /// The hash of the previous block in the blockchain.
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub prev_block_hash: Hash,
     /// The Merkle root of the transactions in the block.
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_hash"
+    )]
     pub merkle_root: Hash,
 }
 
 /// Represents errors that can occur when validating blocks.
 #[derive(Debug, Clone, PartialEq)]
-/// Represents errors that can occur when validating blocks.
 pub enum BlockError {
     /// The previous block hash is invalid or not found.
     InvalidBlockHash(String),
@@ -82,6 +93,8 @@ pub enum BlockError {
     SupplyError { min: u64, actual: u64 },
     /// An error occurred in one of the block's transactions.
     TransactionError(super::transaction::TransactionError),
+    /// An error occurred while indexing the block.
+    Other(String),
 }
 
 impl VirtualSize for Block {
@@ -147,8 +160,10 @@ impl Block {
                 .transactions
                 .first()
                 .and_then(|tx| tx.inputs.first())
-                .unwrap();
-            let this_lead_utxo = &self.transactions[0].outputs[0];
+                .ok_or(BlockError::TransactionError(
+                    crate::transaction::TransactionError::MissingInputs,
+                ))?;
+            let this_lead_utxo = self.lead_output().ok_or(BlockError::ChallengeError)?;
             let prev_lead_utxo =
                 indexer
                     .get_utxo(&input.output_id)
@@ -234,8 +249,8 @@ impl Block {
             .sum()
     }
 
-    /// Returns the lead (mint) UTXO if present.
-    pub fn lead_utxo(&self) -> Option<&Output> {
+    /// Returns the lead (mint) Output if present.
+    pub fn lead_output(&self) -> Option<&Output> {
         self.transactions.first().and_then(|tx| tx.outputs.first())
     }
 
@@ -338,7 +353,7 @@ fn verify_proof(root: &Hash, proof: &[Leaf]) -> Option<()> {
 mod tests {
     use super::*;
     use crate::{
-        PublicKey,
+        SecretKey,
         ledger::InMemoryIndexer,
         transaction::{Input, OutputId},
     };
@@ -353,12 +368,12 @@ mod tests {
         block
     }
 
-    fn mining_transaction(new_supply: u64, tx_hash: Hash, public_key: PublicKey) -> Transaction {
+    fn mining_transaction(new_supply: u64, tx_hash: Hash, sk: &SecretKey) -> Transaction {
         let output_id = OutputId::new(tx_hash, 0);
         let mut transaction = Transaction::new(vec![], vec![]);
         transaction
             .inputs
-            .push(Input::new(output_id, public_key, [0; 64]));
+            .push(Input::new_unsigned(output_id).sign(sk, [0; 32]));
         transaction.outputs.push(Output {
             version: crate::transaction::Version::V0,
             amount: new_supply,
@@ -368,12 +383,12 @@ mod tests {
         transaction
     }
 
-    fn new_indexer(public_key: PublicKey) -> (InMemoryIndexer, Transaction) {
+    fn new_indexer(sk: SecretKey) -> (InMemoryIndexer, Transaction) {
         let mut indexer = InMemoryIndexer::new();
         let genesis_block = genesis_block([0; 32]);
         let new_supply = genesis_block.transactions[0].outputs[0].amount;
         let prev_tx_hash = genesis_block.transactions[0].hash();
-        let mining_transaction = mining_transaction(new_supply, prev_tx_hash, public_key);
+        let mining_transaction = mining_transaction(new_supply, prev_tx_hash, &sk);
         indexer.add_block(&genesis_block).unwrap();
         (indexer, mining_transaction)
     }
@@ -426,7 +441,7 @@ mod tests {
         indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block_hash);
-        let transaction = mining_transaction(1, first_tx_hash, [0; 32]);
+        let transaction = mining_transaction(1, first_tx_hash, &[0; 32]);
         block.transactions.push(transaction); // Invalid challenge
 
         let result = block.verify(&indexer);
@@ -441,7 +456,7 @@ mod tests {
         indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block.header().hash());
-        let transaction = mining_transaction(1, first_tx_hash, [1; 32]);
+        let transaction = mining_transaction(1, first_tx_hash, &[1; 32]);
         block.transactions.push(transaction);
 
         let result = block.verify(&indexer);
@@ -459,7 +474,7 @@ mod tests {
         indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block.header().hash());
-        let transaction = mining_transaction(2, first_tx_hash, [1; 32]);
+        let transaction = mining_transaction(2, first_tx_hash, &[1; 32]);
         block.transactions.push(transaction);
 
         let result = block.verify(&indexer);
@@ -477,7 +492,7 @@ mod tests {
         indexer.add_block(&genesis_block).unwrap();
 
         let mut block = Block::new(1, genesis_block.header().hash());
-        let mut transaction = mining_transaction(1, first_tx_hash, [1; 32]);
+        let mut transaction = mining_transaction(1, first_tx_hash, &[1; 32]);
         transaction.outputs[0].version = crate::transaction::Version::V1; // Invalid version
         block.transactions.push(transaction);
 

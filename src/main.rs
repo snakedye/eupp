@@ -1,8 +1,10 @@
 use eupp_core::{
     block::Block,
-    ledger::{FullInMemoryLedger, Indexer},
+    commitment,
+    ledger::Indexer,
     transaction::{Output, Transaction},
 };
+use eupp_db::RedbIndexer;
 use eupp_net::{EuppNode, config::Config, mempool::SimpleMempool};
 use std::net::SocketAddr;
 mod api;
@@ -11,8 +13,18 @@ mod api;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("EUPP node starting...");
 
-    // Create an in-memory ledger
-    let mut ledger = FullInMemoryLedger::new();
+    // Create a config
+    let config = Config::from_env()?;
+
+    // Create a ledger
+    let mut ledger = RedbIndexer::from(config.index_db_path().expect("Index DB path not found"))
+        .with_fs(config.block_file_path().expect("Block file path not found"))
+        .unwrap();
+
+    for i in 0..100 {
+        let data = [i as u8; 32];
+        ledger.add_address(commitment(&config.public_key(), [data.as_slice()]));
+    }
 
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.
@@ -31,20 +43,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let genesis_block_hash = genesis_block.header().hash();
 
     // Add genesis block to ledger
-    if let Err(e) = ledger.add_block(&genesis_block) {
-        eprintln!("Failed to add genesis block: {:?}", e);
-        return Ok(());
+    if let Ok(_) = ledger.add_block(&genesis_block) {
+        println!(
+            "Added genesis block. Hash: {}",
+            hex::encode(&genesis_block_hash)
+        );
     }
-    eprintln!(
-        "Added genesis block. Hash: {}",
-        hex::encode(&genesis_block_hash)
-    );
 
     // Create a mempool
     let mempool = SimpleMempool::new();
-
-    // Create a config
-    let config = Config::from_env()?;
 
     // Create the EuppNode (do not block the current task yet)
     let node = EuppNode::new(config.clone(), ledger, mempool);

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use eupp_core::ledger::Query;
 use eupp_core::transaction::{Input, Output, Transaction, sighash};
 use eupp_core::{Hash, commitment};
@@ -32,12 +32,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // --- Construct a transaction from CLI arguments ---
-    let secret_key_bytes = hex::decode(args.secret_key)?;
-    let signing_key = SigningKey::from_bytes(
-        &secret_key_bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid secret key length, expected 32 bytes"))?,
-    );
+    let secret_key_bytes = hex::decode(args.secret_key.as_bytes())?;
+    let signing_key = SigningKey::try_from(secret_key_bytes.as_slice())
+        .map_err(|e| anyhow::anyhow!("Failed to parse secret key: {}", e))?;
     let public_key = signing_key.verifying_key().to_bytes();
     let data = [0_u8; 32];
     let address = commitment(&public_key, Some(data.as_slice()));
@@ -52,9 +49,9 @@ fn main() -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    // Fetch UTXOs via HTTP POST /transactions/utxos <query>
+    // Fetch UTXOs
     let resp = client
-        .post(format!("{base}/transactions/utxos"))
+        .post(format!("{base}/transactions/outputs"))
         .json(&query)
         .send()?;
 
@@ -62,9 +59,9 @@ fn main() -> Result<()> {
         return Err(anyhow::anyhow!("Failed to fetch UTXOs: {}", resp.status()));
     }
 
-    // Deserialize to Vec<(OutputId, Output)>
+    // Deserialize the response
     let utxos: Vec<(eupp_core::transaction::OutputId, Output)> = resp.json()?;
-    let balance: u64 = utxos.iter().map(|(_, output)| output.amount).sum();
+    let balance: u64 = utxos.iter().map(|(_, output)| output.amount()).sum();
     println!("Address: {}", hex::encode(address));
     println!("Balance: {} units", balance);
 
@@ -86,12 +83,13 @@ fn main() -> Result<()> {
     // Construct the signature
     // sighash expects an iterator of OutputId references; adapt accordingly
     let sighash_val = sighash(utxos.iter().map(|(output_id, _)| output_id), &new_outputs);
-    let signature = signing_key.sign(&sighash_val);
 
     // Create inputs
     let inputs = utxos
         .iter()
-        .map(|(output_id, _)| Input::new(*output_id, public_key, signature.to_bytes()))
+        .map(|(output_id, _)| {
+            Input::new_unsigned(*output_id).sign(signing_key.as_bytes(), sighash_val)
+        })
         .collect();
     let tx = Transaction::new(inputs, new_outputs);
 
@@ -102,7 +100,7 @@ fn main() -> Result<()> {
         hex::encode(tx_hash)
     );
 
-    // Broadcast the transaction via HTTP POST /transactions <tx>
+    // Broadcast the transaction
     let resp = client
         .post(format!("{base}/transactions"))
         .json(&tx)

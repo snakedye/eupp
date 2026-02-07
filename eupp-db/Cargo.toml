@@ -1,0 +1,11 @@
+[package]
+name = "eupp-db"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eupp-core = { path = "../eupp-core" }
+redb = "3.1.0"
+serde_json = "1.0"
+ethnum = { version = "1.5.2" }
+hex = "0.4.3"

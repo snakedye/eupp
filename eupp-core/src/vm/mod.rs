@@ -451,9 +451,9 @@ impl<'a, L: Indexer> Vm<'a, L> {
 
                 // Crypto & hashing (placeholders)
                 Op::CheckSig => {
-                    // Pops pk, sig, and msg (top is sig, next is pk, then msg)
+                    // Pops pk, sig, and sighash (top is sig, next is pk, then sighash)
                     if let Some((StackValue::Bytes(pk), parent1)) = stack.pop() {
-                        if let Some((StackValue::Bytes(msg), parent2)) = parent1.pop() {
+                        if let Some((StackValue::Bytes(sighash), parent2)) = parent1.pop() {
                             if let Some((StackValue::Bytes(sig), parent3)) = parent2.pop() {
                                 let signature = ed25519_dalek::Signature::from_slice(sig)
                                     .map_err(|_| ExecError::new(op, &stack))?;
@@ -463,7 +463,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                                     ed25519_dalek::VerifyingKey::from_bytes(&pubkey_bytes)
                                         .map_err(|_| ExecError::new(op, &stack))?;
 
-                                let result = verifying_key.verify(msg, &signature).is_ok();
+                                let result = verifying_key.verify(sighash, &signature).is_ok();
                                 return self.exec(scanner, parent3.push((result as u8).into()));
                             } else {
                                 return Err(ExecError::new(op, &stack));
@@ -624,9 +624,9 @@ mod tests {
         transaction::{Input, Output, OutputId, TransactionHash, Version},
     };
     use ed25519_dalek::{Signer, SigningKey};
+    use ethnum::U256;
     use op::r#const::*;
     use std::{borrow::Cow, collections::HashMap, u64};
-    use u256::U256;
 
     // A mock indexer for testing purposes.
     #[derive(Default, Clone)]
@@ -648,15 +648,16 @@ mod tests {
             self.utxos.get(id).copied()
         }
 
-        fn query_utxos<'a>(
-            &'a self,
-            _query: &'a crate::ledger::Query,
-        ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
+        fn query_utxos(&self, _query: &crate::ledger::Query) -> Vec<(OutputId, Output)> {
             unimplemented!()
         }
 
         fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
             self.block_meta.as_ref().map(|meta| meta.hash)
+        }
+
+        fn get_tip(&'_ self) -> Option<Hash> {
+            None
         }
 
         fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
@@ -666,7 +667,7 @@ mod tests {
 
     fn default_transaction() -> Transaction {
         Transaction {
-            inputs: vec![Input::new(OutputId::new([0; 32], 0), [0; 32], [0; 64])],
+            inputs: vec![Input::new_unsigned(OutputId::new([0; 32], 0))],
             outputs: vec![],
         }
     }
@@ -747,7 +748,7 @@ mod tests {
     #[test]
     fn test_op_in_amt() {
         let output_id = OutputId::new(TransactionHash::default(), 0);
-        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let input = Input::new_unsigned(output_id);
         let utxo = Output {
             version: Version::V1,
             amount: 100,
@@ -775,7 +776,7 @@ mod tests {
             commitment: [0; 32],
             data,
         };
-        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let input = Input::new_unsigned(output_id);
         let mut indexer = MockLedger::default();
         indexer.utxos.insert(output_id, utxo);
 
@@ -797,7 +798,7 @@ mod tests {
             commitment,
             data: [0; 32],
         };
-        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let input = Input::new_unsigned(output_id);
         let mut indexer = MockLedger::default();
         indexer.utxos.insert(output_id, output);
 
@@ -887,8 +888,9 @@ mod tests {
             height: 50,
             available_supply: 100_000,
             merkle_root: [0; 32],
-            cumulative_work: U256::zero(),
-            lead_utxo: OutputId::new([0; 32], 0),
+            cumulative_work: U256::MIN,
+            lead_output: OutputId::new([0; 32], 0),
+            cursor: None,
         });
         let transaction = default_transaction();
         let vm = create_vm(&indexer, 0, &transaction);
@@ -921,12 +923,13 @@ mod tests {
             height: 50,
             available_supply: 100_000,
             merkle_root: [0; 32],
-            cumulative_work: U256::zero(),
-            lead_utxo: OutputId::new([0; 32], 0),
+            cumulative_work: U256::MIN,
+            lead_output: OutputId::new([0; 32], 0),
+            cursor: None,
         });
 
         let output_id = OutputId::new(TransactionHash::default(), 0);
-        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let input = Input::new_unsigned(output_id);
         let utxo = Output {
             version: Version::V1,
             amount: 100,
@@ -944,9 +947,13 @@ mod tests {
 
     #[test]
     fn test_op_push_pk() {
-        let mut public_key = [0u8; 32];
-        public_key[10] = 10;
-        let input = Input::new(OutputId::new([0; 32], 0), public_key, [0; 64]);
+        let public_key = [0u8; 32];
+        let input = Input {
+            output_id: OutputId::new([0; 32], 0),
+            public_key,
+            signature: [0; 64],
+            witness: vec![],
+        };
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -962,7 +969,12 @@ mod tests {
     fn test_op_push_sig() {
         let mut signature = [0_u8; 64];
         signature[10] = 10;
-        let input = Input::new(OutputId::new([0; 32], 0), [0; 32], signature);
+        let input = Input {
+            output_id: OutputId::new([0; 32], 0),
+            public_key: [0; 32],
+            signature,
+            witness: vec![],
+        };
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -977,14 +989,12 @@ mod tests {
     #[test]
     fn test_op_checksig_valid() {
         let signing_key = SigningKey::from_bytes(&[1u8; 32]);
-        let verifying_key = signing_key.verifying_key();
 
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let msg = sighash(&[output_id], []);
-        let signature = signing_key.sign(&msg);
-        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
+        let sighash = sighash(&[output_id], []);
+        let input = Input::new_unsigned(output_id).sign(signing_key.as_bytes(), sighash);
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -1005,9 +1015,14 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let msg = sighash(&[output_id], []);
-        let signature = other_signing_key.sign(&msg); // Signed with wrong key
-        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
+        let sighash = sighash(&[output_id], []);
+        let signature = other_signing_key.sign(&sighash); // Signed with wrong key
+        let input = Input {
+            output_id,
+            public_key: verifying_key.to_bytes(),
+            signature: signature.to_bytes(),
+            witness: vec![],
+        };
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -1031,7 +1046,7 @@ mod tests {
             commitment,
             data,
         };
-        let input = Input::new(output_id, [0; 32], [0; 64]);
+        let input = Input::new_unsigned(output_id);
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -1179,9 +1194,8 @@ mod tests {
             output_id,
             Output::new_v1(100, &verifying_key.to_bytes(), &[0; 32]),
         );
-        let msg = sighash(&[output_id], []);
-        let signature = signing_key.sign(&msg);
-        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
+        let sighash = sighash(&[output_id], []);
+        let input = Input::new_unsigned(output_id).sign(signing_key.as_bytes(), sighash);
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],
@@ -1203,10 +1217,15 @@ mod tests {
         let tx_hash = [1u8; 32];
         let output_id = OutputId::new(tx_hash, 0);
 
-        let msg = sighash(&[output_id], []);
-        let signature = other_signing_key.sign(&msg);
+        let sighash = sighash(&[output_id], []);
+        let signature = other_signing_key.sign(&sighash);
 
-        let input = Input::new(output_id, verifying_key.to_bytes(), signature.to_bytes());
+        let input = Input {
+            output_id,
+            public_key: verifying_key.to_bytes(),
+            signature: signature.to_bytes(),
+            witness: vec![],
+        };
         let transaction = Transaction {
             inputs: vec![input],
             outputs: vec![],

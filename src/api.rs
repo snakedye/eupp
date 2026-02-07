@@ -17,7 +17,7 @@ pub fn router(state: RpcClient) -> Router {
             "/transactions/:tx_hash/confirmations",
             get(get_confirmations),
         )
-        .route("/transactions/utxos", post(get_utxos))
+        .route("/transactions/outputs", post(get_utxos))
         .route("/transactions", post(send_raw_tx))
         .with_state(state)
 }
