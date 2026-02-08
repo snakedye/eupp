@@ -18,7 +18,6 @@ pub fn router(state: RpcClient) -> Router {
             get(get_confirmations),
         )
         .route("/transactions/outputs", post(query_outputs))
-        .route("/transactions/outputs", get(get_outputs))
         .route("/transactions", post(send_raw_tx))
         .with_state(state)
 }
@@ -57,20 +56,6 @@ async fn query_outputs(
     Json(query): Json<Query>,
 ) -> Result<Json<Vec<(OutputId, Output)>>, StatusCode> {
     match client.request(RpcRequest::GetUtxos { query }).await {
-        Some(RpcResponse::Utxos(list)) => Ok(Json(list)),
-        _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-async fn get_outputs(
-    State(client): State<RpcClient>,
-) -> Result<Json<Vec<(OutputId, Output)>>, StatusCode> {
-    match client
-        .request(RpcRequest::GetUtxos {
-            query: Query::new(),
-        })
-        .await
-    {
         Some(RpcResponse::Utxos(list)) => Ok(Json(list)),
         _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
