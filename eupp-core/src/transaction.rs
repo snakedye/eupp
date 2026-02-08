@@ -129,6 +129,11 @@ pub enum TransactionError {
     TooManyOutputs,
 }
 
+impl From<ExecError> for TransactionError {
+    fn from(err: ExecError) -> Self {
+        TransactionError::Execution(err)
+    }
+}
 impl VirtualSize for Input {
     fn vsize(&self) -> usize {
         // the pk and sig can be pruned after validation
@@ -414,25 +419,23 @@ impl Transaction {
             match utxo.version {
                 Version::V0 => {
                     // For mining transactions, only the signature is checked
-                    vm.run(&check_sig_script())
-                        .map_err(TransactionError::Execution)?;
+                    vm.run(&check_sig_script())?;
                 }
                 Version::V1 => {
                     // V1 transactions use a simple P2PK script
-                    vm.run(&p2pkh()).map_err(TransactionError::Execution)?;
+                    vm.run(&p2pkh())?;
                 }
                 Version::V2 => {
                     // V2 transactions can use a more complex script
-                    vm.run(&utxo.data).map_err(TransactionError::Execution)?;
+                    vm.run(&utxo.data)?;
                 }
                 Version::V3 => {
                     // V3 transactions support segwit
                     if input.witness.len() > MAX_WITNESS_SIZE {
                         return Err(TransactionError::InvalidWitnessSize);
                     }
-                    vm.run(&p2wsh()).map_err(TransactionError::Execution)?;
-                    vm.run(&input.witness)
-                        .map_err(TransactionError::Execution)?;
+                    vm.run(&p2wsh())?;
+                    vm.run(&input.witness)?;
                 }
             }
         }

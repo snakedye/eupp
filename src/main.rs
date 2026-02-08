@@ -21,10 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = RedbIndexer::from(config.index_db_path().expect("Index DB path not found"))
         .with_scanner(move |output| {
             let commitment = commitment(&public_key, Some(output.data().as_slice()));
-            commitment
-                .eq(output.address())
-                .then_some(())
-                .filter(|_| output.version() == Version::V1)
+            commitment.eq(output.address()) && output.version() == Version::V1
         })
         .with_fs(config.block_file_path().expect("Block file path not found"))
         .unwrap();

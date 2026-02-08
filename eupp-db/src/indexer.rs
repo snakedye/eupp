@@ -137,7 +137,7 @@ impl Key for OutputKey {
 }
 
 /// RedbIndexer is an indexer that uses Redb as the underlying storage.
-pub struct RedbIndexer<S = fn(&Output) -> Option<()>, T = ()> {
+pub struct RedbIndexer<S = fn(&Output) -> bool, T = ()> {
     tip: Option<Hash>,
     db: redb::Database,
     scanner: S,
@@ -150,7 +150,7 @@ impl RedbIndexer {
         RedbIndexer {
             db,
             tip: Default::default(),
-            scanner: |_| None,
+            scanner: |_| false,
             fs: (),
         }
     }
@@ -164,7 +164,7 @@ impl<T: AsRef<Path>> From<T> for RedbIndexer {
         RedbIndexer {
             db,
             tip,
-            scanner: |_| None,
+            scanner: |_| false,
             fs: (),
         }
     }
@@ -197,7 +197,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
     /// Sets the scanner function for the indexer.
     pub fn with_scanner<F>(self, scanner: F) -> RedbIndexer<F, Fs>
     where
-        F: Fn(&Output) -> Option<()>,
+        F: Fn(&Output) -> bool,
     {
         RedbIndexer {
             tip: self.tip,
@@ -229,7 +229,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
         block: &Block,
     ) -> Result<(), BlockError>
     where
-        S: Fn(&Output) -> Option<()>,
+        S: Fn(&Output) -> bool,
     {
         // We keep the previous block's lead UTXO
         let mut prev_lead_output = None;
@@ -249,9 +249,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
                 Some(output) if i == 0 => prev_lead_output = Some((output_id, output.value())),
                 Some(_) => {}
                 None => {
-                    return Err(BlockError::TransactionError(
-                        TransactionError::InvalidOutput(output_id),
-                    ));
+                    return Err(TransactionError::InvalidOutput(output_id).into());
                 }
             }
         }
@@ -273,7 +271,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
                 .map(move |(i, output)| (i, tx_id, output))
         }) {
             let output_id = OutputId::new(tx_id, i as u8);
-            if let Some(_) = (self.scanner)(output) {
+            if (self.scanner)(output) {
                 address_table
                     .insert(output.address(), output_id.clone())
                     .map_err(|err| BlockError::Other(err.to_string()))?;
@@ -296,7 +294,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
     }
 }
 
-impl<F: Fn(&Output) -> Option<()>, T: 'static> eupp_core::ledger::Indexer for RedbIndexer<F, T> {
+impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbIndexer<F, T> {
     fn add_block(&mut self, block: &eupp_core::block::Block) -> Result<(), BlockError> {
         let write_tx = self.db.begin_write().unwrap();
 
@@ -341,11 +339,7 @@ impl<F: Fn(&Output) -> Option<()>, T: 'static> eupp_core::ledger::Indexer for Re
                 block
                     .prev_lead_output()
                     .filter(|output_id| *output_id == &prev_block.lead_output)
-                    .ok_or_else(|| {
-                        BlockError::TransactionError(TransactionError::InvalidOutput(
-                            prev_block.lead_output,
-                        ))
-                    })?;
+                    .ok_or_else(|| TransactionError::InvalidOutput(prev_block.lead_output))?;
 
                 // Update height
                 height = prev_block.height + 1;
@@ -451,7 +445,7 @@ impl<F: Fn(&Output) -> Option<()>, T: 'static> eupp_core::ledger::Indexer for Re
     }
 }
 
-impl<F: Fn(&Output) -> Option<()> + 'static, T: 'static> LedgerView for RedbIndexer<F, T> {
+impl<F: Fn(&Output) -> bool + 'static, T: 'static> LedgerView for RedbIndexer<F, T> {
     type Ledger<'a>
         = RedbIndexer<F, FileBlockStore>
     where
@@ -462,7 +456,7 @@ impl<F: Fn(&Output) -> Option<()> + 'static, T: 'static> LedgerView for RedbInde
     }
 }
 
-impl<F: Fn(&Output) -> Option<()>> Ledger for RedbIndexer<F, FileBlockStore> {
+impl<F: Fn(&Output) -> bool> Ledger for RedbIndexer<F, FileBlockStore> {
     fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
         let mut iter = self.metadata_from(hash);
         if let Some(cursor) = iter.next().and_then(|metadata| metadata.cursor) {
@@ -537,8 +531,8 @@ mod tests {
         // We'll index a specific commitment as an address
         let output = Output::new_v1(42, &[7u8; 32], &[0u8; 32]);
         let address = output.address();
-        let mut indexer = RedbIndexer::new(db)
-            .with_scanner(move |output| output.address().eq(address).then_some(()));
+        let mut indexer =
+            RedbIndexer::new(db).with_scanner(move |output| output.address().eq(address));
 
         // Create a block with an output that has this commitment
         let tx = Transaction {
@@ -552,13 +546,12 @@ mod tests {
         indexer.add_block(&block).expect("add block");
 
         // Query with an empty Query should return indexed addresses (the indexer stores added addresses)
-        let q = Query::new();
+        let q = Query::new().with_address(*address);
         let res = indexer.query_outputs(&q);
         // We expect at least one UTXO for our address
-        assert!(
-            res.iter()
-                .any(|(id, out)| id.tx_hash == txid && out.address() == address)
-        );
+        let (id, out) = res.first().unwrap();
+        assert_eq!(id.tx_hash, txid);
+        assert_eq!(out.address(), address);
     }
 
     #[test]
