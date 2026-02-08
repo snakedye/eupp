@@ -30,7 +30,10 @@ validated and added to the chain. It assumes the presence of an `Indexer` trait 
 accessing blockchain data and a `Transaction` structure for representing transactions.
 */
 
-use crate::{miner::mining_solution, transaction::OutputId};
+use crate::{
+    miner::mining_solution,
+    transaction::{OutputId, TransactionError},
+};
 
 use super::{
     Hash, VirtualSize, calculate_reward, deserialize_arr,
@@ -79,7 +82,7 @@ pub struct BlockHeader {
 }
 
 /// Represents errors that can occur when validating blocks.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum BlockError {
     /// The previous block hash is invalid or not found.
     InvalidBlockHash(String),
@@ -90,11 +93,17 @@ pub enum BlockError {
     /// The lead UTXO version is invalid.
     InvalidVersion(u8),
     /// The supply in the block is outside the allowed range.
-    SupplyError { min: u64, actual: u64 },
+    SupplyError { min_expected: u64, actual: u64 },
     /// An error occurred in one of the block's transactions.
     TransactionError(super::transaction::TransactionError),
     /// An error occurred while indexing the block.
     Other(String),
+}
+
+impl From<TransactionError> for BlockError {
+    fn from(err: TransactionError) -> Self {
+        BlockError::TransactionError(err)
+    }
 }
 
 impl VirtualSize for Block {
@@ -160,16 +169,11 @@ impl Block {
                 .transactions
                 .first()
                 .and_then(|tx| tx.inputs.first())
-                .ok_or(BlockError::TransactionError(
-                    crate::transaction::TransactionError::MissingInputs,
-                ))?;
+                .ok_or(crate::transaction::TransactionError::MissingInputs)?;
             let this_lead_utxo = self.lead_output().ok_or(BlockError::ChallengeError)?;
-            let prev_lead_utxo =
-                indexer
-                    .get_output(&input.output_id)
-                    .ok_or(BlockError::TransactionError(
-                        crate::transaction::TransactionError::InvalidOutput(input.output_id),
-                    ))?;
+            let prev_lead_utxo = indexer.get_output(&input.output_id).ok_or(
+                crate::transaction::TransactionError::InvalidOutput(input.output_id),
+            )?;
 
             let (mask, nonce) = prev_lead_utxo
                 .mask()
@@ -194,7 +198,7 @@ impl Block {
             let min_supply = old_supply.saturating_sub(max_reward);
             if new_supply < min_supply || new_supply > max_supply {
                 return Err(BlockError::SupplyError {
-                    min: min_supply,
+                    min_expected: min_supply,
                     actual: new_supply,
                 });
             }
@@ -212,12 +216,11 @@ impl Block {
                 .map(|output| output.amount)
                 .sum();
             if total_output > total_input + fees {
-                return Err(BlockError::TransactionError(
-                    crate::transaction::TransactionError::InvalidBalance {
-                        total_input,
-                        total_output,
-                    },
-                ));
+                return Err(crate::transaction::TransactionError::InvalidBalance {
+                    total_input,
+                    total_output,
+                }
+                .into());
             }
 
             // Verify that the new lead utxo is v0 only
