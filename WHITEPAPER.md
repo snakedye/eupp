@@ -1,100 +1,86 @@
-# **Experimental UTXO Payment Protocol (EUPP)**
+# Experimental UTXO Payment Protocol (EUPP)
 
 ## 1. Abstract
 
-**EUPP** is a decentralized ledger protocol that tightly couples its transaction graph with its consensus mechanism. By utilizing a **Chained Mask** Proof of Work (PoW) and a stack-based Virtual Machine (VM) with forward-looking introspection, EUPP enables complex cryptographic covenants and a strictly linear, verifiable block progression.
+EUPP is a compact, experimental UTXO ledger and reference node designed to explore programmable outputs and an alternative PoW construction. Its primary innovations are: the Lead UTXO (LUTXO) — a single, mutable UTXO that represents the mint pool; a Chained Mask proof-of-work that lets miners encode future difficulty; and a stack-based virtual machine that enables expressive spending conditions. The goal is a simple, auditable economic model and an expressive, verifiable transaction environment.
 
-## 2. The UTXO Model & Transaction Rules
+## 2. UTXO model & transaction rules
 
-The protocol operates on a UTXO architecture where the state is a collection of spendable outputs.
+EUPP follows the UTXO model: state is a set of unspent outputs, and transactions consume outputs (inputs) and produce new outputs.
 
-### 2.1 Transaction Structure
+### 2.1 Transaction structure
 
-Very much like Bitcoin, EUPP transactions consist of inputs and outputs. Each input spends a UTXO, while each output creates a new UTXO.
+Transactions contain inputs and outputs. Inputs reference previous outputs and must satisfy the spending conditions defined by those outputs (typically by presenting signatures and any required witness data). Outputs carry an amount and a spending condition (script/data) that determines how they may be spent in the future.
 
-In order to spend a UTXO to the next transaction, each input must provide a valid signature that proves ownership of the UTXO while additionally satisfying the spending conditions of the output spent.
+### 2.2 Lead UTXO (LUTXO) model
 
-### 2.2 The Lead UTXO Model
+The Lead UTXO (LUTXO) is a designated UTXO that functions as the mutable mint pool for the network. It is created at chain start to represent the initial unmined supply and is subsequently spent by miners when claiming block rewards.
 
-A novel idea introduced in the EUPP protocol is the **Lead UTXO (LUTXO)** model.
+Policy summary:
+- Each mined block consumes the prior block's LUTXO as part of the mining transaction.
+- A successful mining transaction creates a new LUTXO that carries the updated mint pool, the next mining challenge (mask), and the miner’s commitment/proof.
+- The new LUTXO amount is bounded by the previous supply, the miner reward, and collected fees. In equation form:
+  $$ S_{prev} - Reward \leq S_{next} \leq S_{prev} + \sum Fees $$
 
-The **LUTXO** is a special UTXO that holds the entire unmined supply of the network.
+Fees are the difference between input and output totals for non-mining transactions in a block; miners collect fees and may roll them back into the LUTXO to replenish the mint pool.
 
-It is created by the first block to define the initial supply of the network and spent when miners claim the reward.
-When the **LUTXO** of the current block is spent, the following **LUTXO** is created by the miner with the following amount:
+## 3. Programmability: the EUPP VM
 
-$$S_{prev} - \text{Reward} \le S_{next} \le S_{prev} + \sum \text{Fees}$$ 
+EUPP supports multiple script/logic versions:
+- v1: simple public-key based spending (P2PKH-style).
+- v2: programmable bytecode for richer spending conditions.
+- v3: extends programmability with segregated witness semantics.
 
-This allows nodes to verify the block's economic integrity by auditing a single UTXO transition.
+The VM is intentionally compact and stack-based. It enables:
+- deterministic script execution,
+- access to transaction-level context when needed,
+- programmable covenants and time/height checks,
+- extensibility for new opcodes or logic versions.
 
-#### Fees
+These capabilities allow common primitives (multisig, timelocks, atomic swap patterns) while preserving clear validation semantics.
 
-Fees are defined as amount in inputs not spent in outputs. For example, if an input has a value of 100 and the output has a value of 90, the fee is 10.
+## 4. Consensus: Chained Mask Proof-of-Work
 
-Transaction fees from all non-mining transactions in a block are collected by the miner. The protocol allows these fees to be rolled into the new **LUTXO**, as its new amount is permitted to be as high as the previous amount plus the sum of all collected fees. This mechanism recycles value back into the primary supply pool, creating a sustainable economic loop where network usage directly replenishes the funds available for future mining rewards.
+EUPP defines mining as a mask-based proof: miners must produce a candidate that satisfies constraints encoded by a mask. Consensus is expressed through spending and creating the LUTXO within the transaction graph rather than a separate header-only construction.
 
-## 3. Programmability: The EUPP VM
+### 4.1 Mask concept and mining solution
 
-EUPP supports multiple logic versions. While **v1** is a standard P2PKH script where the spender reveals a public key to match a hash commitment, **v2** introduces a programmable bytecode environment, and **v3** extends this functionality with Segregated Witness (SegWit) support.
+At a high level:
+- A mask encodes which bits in a miner's candidate are constrained: more set bits imply a stricter challenge.
+- A miner's candidate (solution) is derived from the previous block context, the miner's identity (e.g., public key), and an arbitrary nonce; this candidate is tested against the mask.
+- When a miner finds a valid candidate, they include the corresponding proof/commitment in the new LUTXO created by their mining transaction.
 
-The VM is a stack-based machine designed to process byte arrays and execute scripts that define spending conditions. It operates on a Modified UTXO model, enabling advanced programmability through its ability to evaluate custom logic embedded in transaction outputs. The VM supports a wide range of operations, including cryptographic verification, arithmetic, and data manipulation, allowing developers to implement complex spending rules.
+This design makes the mining challenge part of the spending semantics: to mine, a miner must legitimately spend the prior LUTXO and publish the proof as part of the new LUTXO.
 
-Key capabilities of the EUPP VM include:
+### 4.2 Difficulty and rewards (intuitive)
 
-- **Stack-Based Execution:** The VM uses a stack to manage data and intermediate results, ensuring efficient and deterministic script execution.
-- **Forward-Looking Introspection:** Scripts can access transaction-level metadata, such as input amounts, output commitments, and block height, enabling dynamic and context-aware logic.
-- **Programmable Covenants:** Developers can create UTXOs with conditions that restrict how they can be spent, such as requiring specific outputs or enforcing time locks.
-- **Segregated Witness (SegWit):** Introduced in **v3**, SegWit separates signature data from transaction data, improving scalability by allowing more transactions to fit within a block.
-- **Extensibility:** The VM's design allows for the addition of new opcodes and features, ensuring adaptability to future use cases.
+Rewards follow an asymptotic curve: as the mask-imposed difficulty increases, the per-block reward approaches an upper cap; low or zero difficulty yields a minimal base reward (a spam-protection floor). The curve is shaped to provide diminishing marginal reward as difficulty grows — the intent is to balance miner incentives against block scarcity.
 
-This programmable environment empowers developers to define custom transaction behaviors, enabling use cases such as multi-signature wallets, atomic swaps, and advanced financial instruments, all while maintaining the security and verifiability of the EUPP protocol.
+Conceptually:
+- Difficulty is determined by how many constraints the mask imposes.
+- Higher difficulty → larger reward (up to a cap).
+- A zero-difficulty challenge returns a small minimum reward to discourage trivial blocks.
 
-## 4. Consensus: Chained Mask Proof of Work
+(Technical formulas and parameter choices are part of the reference implementation and tests; this document stays at the conceptual level.)
 
-Consensus in EUPP is defined by the transaction graph itself rather than an external block header hash.
+The reward curve is governed by the asymptotic formula:
 
-### 4.1 The Mask Mechanism
+$$
+R(d) = M - \left\lfloor \frac{M - m}{2^{\lfloor d / H \rfloor}} \cdot (0.978)^{d \bmod H} \right\rfloor,
+$$
 
-1. **Lead UTXO:** The **LUTXO** from the previous block defines the mining challenge for the current block.
-2. **The Mask:** The **data** field of this previous **LUTXO** acts as a bitmask for the current miner.
-3. **Mining Condition:** A miner must find a solution such that the hash of the previous block, the miner's public key, and a nonce satisfies the mask condition:
-   `Mask & hash(prev_block_hash, pubkey, nonce) == 0`
-4. **Commitment:** The miner includes the successful nonce as part of the commitment in the new **Lead UTXO** they create in the current block.
+where d is the difficulty (number of constrained mask bits), M is the maximum reward, m is the minimum reward, and H is the half-life parameter.
 
-To successfully mine the block, the miner must create a transaction that **spends** the previous block's **LUTXO** by including the successful nonce in the **commitment** field of the **LUTXO**.
+### 4.3 Chain selection
 
-### 4.2 Difficulty-Based Rewards
+The canonical chain is chosen by accumulated work: each block contributes work proportional to the difficulty it enforces, and the chain with the most total work is preferred. This is the usual “heaviest-chain” principle adapted to mask-based difficulties.
 
-The block reward $R(d)$ is calculated as an asymptotic curve where the reward starts at $m$ and approaches $M$ as difficulty $d$ increases.
+### 4.4 Economic and security considerations
 
-$$R(d) = M - \left\lfloor \frac{M - m}{2^{\lfloor d / H \rfloor}} \cdot (0.978)^{d \pmod H} \right\rfloor$$ 
+- Miner-set difficulty is an economic lever: miners may adjust the next mask based on fee conditions and expected rewards.
+- A market for block inclusion (fees) interacts with miner choices: when fees are high, miners can safely increase difficulty to chase larger rewards.
+- Clients must follow confirmations/finality best practices: heavier cumulative work gives stronger safety against reorgs, but recent blocks remain probabilistic until sufficient work accumulates.
 
-#### Variables & Constants
-
-- **d**: The difficulty, defined as the population count (number of set bits) in the 32-byte mask.
-- **M**: `MAX_REWARD` (`1,000,000`).
-- **m**: `MIN_REWARD` (`1`).
-- **H**: `HALF_LIFE` (`32` bits).
-- **0.978**: The bitwise decay factor (derived from the `978/1000` scaling).
-
-#### Logic
-
-The function calculates the "gap" between the current difficulty and the maximum possible reward:
-1.  **Macro Scaling**: Every $H$ (32) bits of difficulty halves the remaining gap ($2^{\lfloor d / H \rfloor}$).
-2.  **Micro Scaling**: For every individual bit ($d \pmod H$), the gap is reduced by approximately $2.2\%$ ($0.978$ multiplier) to create a smooth transition between half-life steps.
-3.  **Final Reward**: The resulting gap is subtracted from the `MAX_REWARD` and clamped to ensure it never falls below `MIN_REWARD`.
-
-### 4.3 Chain Selection: Heaviest Chain Rule
-
-The canonical chain is determined by the "heaviest chain" rule, which selects the valid chain with the most accumulated Proof of Work.
-
-- **Block Work**: The work for a single block is calculated as `2^d`, where `d` is the difficulty (the number of set bits in the mask).
-- **Cumulative Work**: Each block stores a `cumulative_work` value, which is the sum of its own work and the `cumulative_work` of its parent block.
-- **Chain Selection**: When multiple chains (forks) exist, the one with the highest `cumulative_work` at its tip is considered the valid, canonical chain. This ensures that the chain representing the most computational effort is the one that the network follows.
-
-### 4.4 Market-Negotiated Equilibrium
-
-Because the miner of Block $N$ sets the difficulty (the mask in the new Lead UTXO) for Block $N+1$, the network operates on a value-driven equilibrium:
-- **High Activity**: Users pay higher fees to be included in blocks.
-- **Miner Response**: When fees are high, miners are incentivized to set a higher difficulty for the next block to claim a larger asymptotic reward, securing the now more valuable chain.
-- **System Stability**: Block times naturally fluctuate based on the difficulty chosen by the market, rather than a hardcoded protocol constant.
+Short risks to keep in mind:
+- Miner strategies that repeatedly seek extreme masks can affect block times; fee dynamics and reward shaping constrain incentives.
+- As with any PoW system, reorgs and selfish-mining vectors are possible; confirmation depth remains the recommended protection.
