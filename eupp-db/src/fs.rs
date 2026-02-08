@@ -85,6 +85,7 @@ impl FileBlockStore {
 
         // Write bytes
         file.write_all(&bytes)?;
+        file.write_all(b"\n")?;
         file.flush()?;
 
         Ok((start, bytes.len()))

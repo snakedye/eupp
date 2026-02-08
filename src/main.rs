@@ -2,7 +2,7 @@ use eupp_core::{
     block::Block,
     commitment,
     ledger::Indexer,
-    transaction::{Output, Transaction},
+    transaction::{Output, Transaction, Version},
 };
 use eupp_db::RedbIndexer;
 use eupp_net::{EuppNode, config::Config, mempool::SimpleMempool};
@@ -15,16 +15,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a config
     let config = Config::from_env()?;
+    let public_key = config.public_key();
 
     // Create a ledger
     let mut ledger = RedbIndexer::from(config.index_db_path().expect("Index DB path not found"))
+        .with_scanner(move |output| {
+            let commitment = commitment(&public_key, Some(output.data().as_slice()));
+            commitment
+                .eq(output.address())
+                .then_some(())
+                .filter(|_| output.version() == Version::V1)
+        })
         .with_fs(config.block_file_path().expect("Block file path not found"))
         .unwrap();
-
-    for i in 0..100 {
-        let data = [i as u8; 32];
-        ledger.add_address(commitment(&config.public_key(), [data.as_slice()]));
-    }
 
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.

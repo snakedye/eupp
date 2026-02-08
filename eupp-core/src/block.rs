@@ -33,7 +33,7 @@ accessing blockchain data and a `Transaction` structure for representing transac
 use crate::{miner::mining_solution, transaction::OutputId};
 
 use super::{
-    Hash, VirtualSize, calculate_reward, deserialize_hash,
+    Hash, VirtualSize, calculate_reward, deserialize_arr,
     ledger::Indexer,
     matches_mask, serialize_to_hex,
     transaction::{Output, Transaction, TransactionHash},
@@ -52,7 +52,7 @@ pub struct Block {
     /// The hash of the previous block in the blockchain.
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     pub prev_block_hash: Hash,
     /// A list of transactions included in the block.
@@ -67,13 +67,13 @@ pub struct BlockHeader {
     /// The hash of the previous block in the blockchain.
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     pub prev_block_hash: Hash,
     /// The Merkle root of the transactions in the block.
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     pub merkle_root: Hash,
 }

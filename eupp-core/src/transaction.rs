@@ -11,8 +11,8 @@ supports extensible script and witness validation for advanced transaction types
 
 use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
 use super::{
-    Hash, PublicKey, commitment, deserialize_hash, deserialize_signature, deserialize_vec,
-    ledger::Indexer, serialize_to_hex,
+    Hash, PublicKey, commitment, deserialize_arr, deserialize_vec, ledger::Indexer,
+    serialize_to_hex,
 };
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
@@ -41,7 +41,7 @@ pub struct Transaction {
 pub struct OutputId {
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     pub tx_hash: TransactionHash,
     pub index: u8,
@@ -54,7 +54,7 @@ pub struct Input {
     pub(crate) output_id: OutputId,
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     /// The public key used to verify the signature.
     pub(crate) public_key: PublicKey,
@@ -66,7 +66,7 @@ pub struct Input {
     pub(crate) witness: Vec<u8>,
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_signature"
+        deserialize_with = "deserialize_arr"
     )]
     /// The signature signed by the private key linked to the public key.
     pub(crate) signature: Signature,
@@ -77,6 +77,7 @@ pub struct Input {
 /// Adding a short doc comment makes the intent explicit and makes the type
 /// easier to discover when browsing the code or generated documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum Version {
     /// Exclusively for mining.
     V0 = 0,
@@ -97,13 +98,13 @@ pub struct Output {
     pub(crate) amount: u64,
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     /// Data associated with the output.
     pub(crate) data: Hash,
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     /// The hash of the public key.
     pub(crate) commitment: Hash,
@@ -328,6 +329,11 @@ impl Output {
     /// Returns the amount of the output.
     pub fn amount(&self) -> u64 {
         self.amount
+    }
+
+    /// Returns the version of the output.
+    pub fn version(&self) -> Version {
+        self.version
     }
 }
 

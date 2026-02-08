@@ -100,32 +100,28 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     final_reward.max(MIN_REWARD)
 }
 
-fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+/// Serialize a byte slice to a hexadecimal string.
+pub fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     serializer.serialize_str(&hex::encode(hash))
 }
 
-fn deserialize_hash<'de, D>(deserializer: D) -> Result<crate::Hash, D::Error>
+/// Deserialize a hexadecimal string into a fixed-size array.
+pub fn deserialize_arr<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
     let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
-    Hash::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
+    vec.as_slice()
+        .try_into()
+        .map_err(|_| serde::de::Error::custom(format!("Expected array of length {}", N)))
 }
 
-fn deserialize_signature<'de, D>(deserializer: D) -> Result<crate::Signature, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
-    Signature::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
-}
-
-fn deserialize_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+/// Deserialize a hexadecimal string into a vector.
+pub fn deserialize_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

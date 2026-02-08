@@ -1,13 +1,13 @@
 use eupp_core::block::Block;
 use eupp_core::transaction::{Output, OutputId, Transaction, TransactionHash};
-use eupp_core::{Hash, block::BlockHeader, ledger::Query};
+use eupp_core::{Hash, block::BlockHeader, deserialize_arr, ledger::Query, serialize_to_hex};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NetworkInfo {
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     /// The hash of the current tip block.
     pub tip_hash: Hash,
@@ -19,7 +19,7 @@ pub struct NetworkInfo {
     pub peers: Vec<String>,
     #[serde(
         serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_hash"
+        deserialize_with = "deserialize_arr"
     )]
     /// The cummulative difficulty of the blockchain in the amount of bits used.
     pub cummulative_difficulty: [u8; 32],
@@ -103,20 +103,4 @@ pub enum RpcResponse {
 
     /// An error response indicating that the request could not be fulfilled.
     Error(String),
-}
-
-fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&hex::encode(hash))
-}
-
-fn deserialize_hash<'de, D>(deserializer: D) -> Result<Hash, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
-    Hash::try_from(vec.as_slice()).map_err(serde::de::Error::custom)
 }
