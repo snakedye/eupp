@@ -355,21 +355,21 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 Op::SelfAmt => {
                     let utxo = self
                         .indexer
-                        .get_utxo(&self.get_input().output_id)
+                        .get_output(&self.get_input().output_id)
                         .ok_or(ExecError::new(op, &stack))?;
                     return self.exec(scanner, stack.push(utxo.amount.into()));
                 }
                 Op::SelfData => {
                     let utxo = self
                         .indexer
-                        .get_utxo(&self.get_input().output_id)
+                        .get_output(&self.get_input().output_id)
                         .ok_or(ExecError::new(op, &stack))?;
                     return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.data)));
                 }
                 Op::SelfComm => {
                     let utxo = self
                         .indexer
-                        .get_utxo(&self.get_input().output_id)
+                        .get_output(&self.get_input().output_id)
                         .ok_or(ExecError::new(op, &stack))?;
                     return self.exec(scanner, stack.push(StackValue::Bytes(&utxo.commitment)));
                 }
@@ -398,7 +398,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 Op::SelfSupply => {
                     let supply = self
                         .indexer
-                        .get_utxo_block_hash(&self.get_input().output_id)
+                        .get_block_from_output(&self.get_input().output_id)
                         .and_then(|hash| self.indexer.get_block_metadata(&hash))
                         .map_or(0, |meta| meta.available_supply);
                     return self.exec(scanner, stack.push(supply.into()));
@@ -413,7 +413,7 @@ impl<'a, L: Indexer> Vm<'a, L> {
                 Op::SelfHeight => {
                     let height = self
                         .indexer
-                        .get_utxo_block_hash(&self.get_input().output_id)
+                        .get_block_from_output(&self.get_input().output_id)
                         .and_then(|hash| self.indexer.get_block_metadata(&hash))
                         .map_or(0, |meta| meta.height);
                     return self.exec(scanner, stack.push(height.into()));
@@ -644,15 +644,15 @@ mod tests {
             self.block_meta.as_ref().map(Cow::Borrowed)
         }
 
-        fn get_utxo(&self, id: &OutputId) -> Option<Output> {
+        fn get_output(&self, id: &OutputId) -> Option<Output> {
             self.utxos.get(id).copied()
         }
 
-        fn query_utxos(&self, _query: &crate::ledger::Query) -> Vec<(OutputId, Output)> {
+        fn query_outputs(&self, _query: &crate::ledger::Query) -> Vec<(OutputId, Output)> {
             unimplemented!()
         }
 
-        fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
+        fn get_block_from_output(&self, _output_id: &OutputId) -> Option<Hash> {
             self.block_meta.as_ref().map(|meta| meta.hash)
         }
 

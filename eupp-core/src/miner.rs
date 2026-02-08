@@ -102,7 +102,7 @@ pub fn build_next_block<L: Indexer>(
     let prev_block = indexer.get_last_block_metadata()?;
     let prev_block_hash = prev_block.hash;
     let lead_utxo_id = prev_block.lead_output;
-    let lead_utxo = indexer.get_utxo(&lead_utxo_id)?;
+    let lead_utxo = indexer.get_output(&lead_utxo_id)?;
 
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let (signing_key, mining_tx) = build_mining_tx(

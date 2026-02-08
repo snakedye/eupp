@@ -401,7 +401,7 @@ impl Transaction {
 
             // Lookup referenced utxo
             let utxo = indexer
-                .get_utxo(&input.output_id)
+                .get_output(&input.output_id)
                 .ok_or(TransactionError::InvalidOutput(input.output_id))?;
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
 
@@ -449,7 +449,7 @@ impl Transaction {
         let total_input_amount: u64 = self
             .inputs
             .iter()
-            .filter_map(|input| indexer.get_utxo(&input.output_id))
+            .filter_map(|input| indexer.get_output(&input.output_id))
             .map(|output| output.amount)
             .sum();
         let total_output_amount = self.outputs.iter().map(|output| output.amount).sum();

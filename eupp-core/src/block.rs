@@ -30,7 +30,7 @@ validated and added to the chain. It assumes the presence of an `Indexer` trait 
 accessing blockchain data and a `Transaction` structure for representing transactions.
 */
 
-use crate::miner::mining_solution;
+use crate::{miner::mining_solution, transaction::OutputId};
 
 use super::{
     Hash, VirtualSize, calculate_reward, deserialize_hash,
@@ -166,7 +166,7 @@ impl Block {
             let this_lead_utxo = self.lead_output().ok_or(BlockError::ChallengeError)?;
             let prev_lead_utxo =
                 indexer
-                    .get_utxo(&input.output_id)
+                    .get_output(&input.output_id)
                     .ok_or(BlockError::TransactionError(
                         crate::transaction::TransactionError::InvalidOutput(input.output_id),
                     ))?;
@@ -203,7 +203,7 @@ impl Block {
             let total_input = self.transactions[0]
                 .inputs
                 .iter()
-                .filter_map(|input| indexer.get_utxo(&input.output_id))
+                .filter_map(|input| indexer.get_output(&input.output_id))
                 .map(|output| output.amount)
                 .sum();
             let total_output = self.transactions[0]
@@ -252,6 +252,14 @@ impl Block {
     /// Returns the lead (mint) Output if present.
     pub fn lead_output(&self) -> Option<&Output> {
         self.transactions.first().and_then(|tx| tx.outputs.first())
+    }
+
+    /// Returns the previous lead (mint) Output if present.
+    pub fn prev_lead_output(&self) -> Option<&OutputId> {
+        self.transactions
+            .first()
+            .and_then(|tx| tx.inputs.first())
+            .map(|input| &input.output_id)
     }
 
     /// Returns the merkle root of the transactions in the block.

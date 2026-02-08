@@ -98,7 +98,7 @@ impl BlockMetadata {
     /// Return the locked supply on the blockchain.
     pub fn locked_supply(&self, indexer: &impl Indexer) -> u64 {
         indexer
-            .get_utxo(&self.lead_output)
+            .get_output(&self.lead_output)
             .map_or(0, |utxo| utxo.amount)
     }
 }
@@ -117,17 +117,17 @@ pub trait Indexer {
 
     /// Checks if a transaction output is spent.
     fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
-        self.get_utxo(output_id).is_none()
+        self.get_output(output_id).is_none()
     }
 
     /// Fetches an unspent transaction output (UTXO) by its identifier.
-    fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
+    fn get_output(&self, output_id: &OutputId) -> Option<Output>;
 
-    /// Returns an iterator over all UTXOs matching the given query.
-    fn query_utxos(&self, query: &Query) -> Vec<(OutputId, Output)>;
+    /// Returns a list of all outputs matching the given query.
+    fn query_outputs(&self, query: &Query) -> Vec<(OutputId, Output)>;
 
     /// Fetches the block hash of a UTXO by its identifier.
-    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
+    fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash>;
 
     /// Retrieves metadata for the most recently added block.
     fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
@@ -136,11 +136,11 @@ pub trait Indexer {
     }
 
     /// Retrieves the hash of the block containing the given transaction.
-    fn get_transaction_block_hash(
+    fn get_block_from_transaction(
         &self,
         tx_hash: &super::transaction::TransactionHash,
     ) -> Option<Hash> {
-        self.get_utxo_block_hash(&OutputId::new(*tx_hash, 0))
+        self.get_block_from_output(&OutputId::new(*tx_hash, 0))
     }
 }
 
@@ -248,15 +248,15 @@ mod tests {
             self.metadata.get(hash).map(Cow::Borrowed)
         }
 
-        fn get_utxo(&self, _output_id: &OutputId) -> Option<Output> {
+        fn get_output(&self, _output_id: &OutputId) -> Option<Output> {
             None
         }
 
-        fn query_utxos(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
             unimplemented!()
         }
 
-        fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
+        fn get_block_from_output(&self, _output_id: &OutputId) -> Option<Hash> {
             None
         }
 

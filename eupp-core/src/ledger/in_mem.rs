@@ -155,7 +155,7 @@ impl<T: 'static> Indexer for InMemoryIndexer<T> {
         let prev_cumulative_work = prev_block.map_or(U256::MIN, |meta| meta.cumulative_work);
         let locked_supply = block.lead_output().map_or(0, |utxo| utxo.amount);
         let block_difficulty = prev_block
-            .and_then(|meta| self.get_utxo(&meta.lead_output))
+            .and_then(|meta| self.get_output(&meta.lead_output))
             .and_then(|utxo| utxo.mask().copied())
             .as_ref()
             .map_or(0, mask_difficulty);
@@ -163,16 +163,26 @@ impl<T: 'static> Indexer for InMemoryIndexer<T> {
 
         // Get the previous block metadata
         if !self.block_index.is_empty() {
-            let prev_meta = prev_block.ok_or(BlockError::InvalidBlockHash(format!(
+            let prev_block = prev_block.ok_or(BlockError::InvalidBlockHash(format!(
                 "Previous block hash not found: {}",
                 hex::encode(&block.prev_block_hash)
             )))?;
 
             let reward = prev_locked_supply - locked_supply;
-            available_supply = prev_meta.available_supply + reward;
+            available_supply = prev_block.available_supply + reward;
+
+            // Check that the lead output belongs to the previous block
+            block
+                .prev_lead_output()
+                .filter(|output_id| *output_id == &prev_block.lead_output)
+                .ok_or_else(|| {
+                    BlockError::TransactionError(TransactionError::InvalidOutput(
+                        prev_block.lead_output,
+                    ))
+                })?;
 
             // Update height
-            height = prev_meta.height + 1;
+            height = prev_block.height + 1;
         // We make an exception for the genesis block, which has no previous block.
         } else {
             height = 0;
@@ -229,13 +239,13 @@ impl<T: 'static> Indexer for InMemoryIndexer<T> {
         self.block_index.get(hash).map(Cow::Borrowed)
     }
 
-    fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
+    fn get_output(&self, output_id: &OutputId) -> Option<Output> {
         self.utxo_set
             .get(output_id)
             .map(|entry| entry.output.clone())
     }
 
-    fn query_utxos<'a>(&'a self, query: &'a super::Query) -> Vec<(OutputId, Output)> {
+    fn query_outputs<'a>(&'a self, query: &'a super::Query) -> Vec<(OutputId, Output)> {
         // This is to only fetch UTXOs in the canonical branch.
         let blocks: HashSet<_> = self
             .metadata()
@@ -256,7 +266,7 @@ impl<T: 'static> Indexer for InMemoryIndexer<T> {
         Some(self.tip)
     }
 
-    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
+    fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash> {
         self.utxo_set.get(output_id).map(|entry| entry.block_hash)
     }
 }

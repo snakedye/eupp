@@ -428,7 +428,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             RpcRequest::GetConfirmations { tx_hash } => {
                 if let Ok(lg) = self.ledger.read() {
                     let tip_metadata = lg.get_last_block_metadata();
-                    let tx_block_hash = lg.get_transaction_block_hash(&tx_hash);
+                    let tx_block_hash = lg.get_block_from_transaction(&tx_hash);
                     let confirmations = match (tip_metadata, tx_block_hash) {
                         (Some(tip), Some(block_hash)) => {
                             let block_metadata = lg.get_block_metadata(&block_hash).unwrap();
@@ -443,7 +443,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             }
             RpcRequest::GetUtxos { query } => {
                 if let Ok(lg) = self.ledger.read() {
-                    let outputs = lg.query_utxos(&query);
+                    let outputs = lg.query_outputs(&query);
                     let _ = responder.send(RpcResponse::Utxos(outputs));
                 } else {
                     let _ = responder.send(RpcResponse::Utxos(Vec::new()));
@@ -553,7 +553,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 let metadata = {
                     let lg = ledger.read().unwrap();
                     lg.get_last_block_metadata().and_then(|prev_block| {
-                        lg.get_utxo(&prev_block.lead_output)
+                        lg.get_output(&prev_block.lead_output)
                             .map(|lead_utxo| (prev_block.hash, prev_block.lead_output, lead_utxo))
                     })
                 };

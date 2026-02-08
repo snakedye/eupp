@@ -316,23 +316,35 @@ impl<T: 'static> eupp_core::ledger::Indexer for RedbIndexer<T> {
             let locked_supply = block.lead_output().map_or(0, |utxo| utxo.amount());
             let block_difficulty = prev_block
                 .as_ref()
-                .and_then(|meta| self.get_utxo(&meta.lead_output))
+                .and_then(|meta| self.get_output(&meta.lead_output))
                 .and_then(|utxo| utxo.mask().copied())
                 .as_ref()
                 .map_or(0, mask_difficulty);
             let block_work = U256::new(1) << block_difficulty as usize;
 
             if !metadata_table.is_empty().unwrap() {
-                let prev_meta = prev_block.ok_or(BlockError::InvalidBlockHash(format!(
-                    "Previous block hash not found: {}",
-                    hex::encode(&block.prev_block_hash)
-                )))?;
+                let prev_block = prev_block.ok_or_else(|| {
+                    BlockError::InvalidBlockHash(format!(
+                        "Previous block hash not found: {}",
+                        hex::encode(&block.prev_block_hash)
+                    ))
+                })?;
 
                 let reward = prev_locked_supply.saturating_sub(locked_supply);
-                available_supply = prev_meta.available_supply + reward;
+                available_supply = prev_block.available_supply + reward;
+
+                // Check that the lead output belongs to the previous block
+                block
+                    .prev_lead_output()
+                    .filter(|output_id| *output_id == &prev_block.lead_output)
+                    .ok_or_else(|| {
+                        BlockError::TransactionError(TransactionError::InvalidOutput(
+                            prev_block.lead_output,
+                        ))
+                    })?;
 
                 // Update height
-                height = prev_meta.height + 1;
+                height = prev_block.height + 1;
             } else {
                 height = 0;
                 available_supply = 0;
@@ -402,12 +414,12 @@ impl<T: 'static> eupp_core::ledger::Indexer for RedbIndexer<T> {
     fn get_tip(&'_ self) -> Option<Hash> {
         self.tip
     }
-    fn get_utxo(&self, output_id: &OutputId) -> Option<Output> {
+    fn get_output(&self, output_id: &OutputId) -> Option<Output> {
         let read_tx = self.db.begin_read().ok()?;
         let table = read_tx.open_table(UTXO_TABLE).ok()?;
         self.get(&table, output_id, |output| output)
     }
-    fn query_utxos(&self, query: &eupp_core::ledger::Query) -> Vec<(OutputId, Output)> {
+    fn query_outputs(&self, query: &eupp_core::ledger::Query) -> Vec<(OutputId, Output)> {
         let read_tx = self.db.begin_read().unwrap();
         let address_table = read_tx.open_multimap_table(ADDRESS_TABLE).unwrap();
         let utxo_table = read_tx.open_table(UTXO_TABLE).unwrap();
@@ -432,7 +444,7 @@ impl<T: 'static> eupp_core::ledger::Indexer for RedbIndexer<T> {
             })
             .collect()
     }
-    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash> {
+    fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash> {
         let read_tx = self.db.begin_read().ok()?;
         let table = read_tx.open_table(TRANSACTION_TABLE).ok()?;
         self.get(&table, output_id.tx_hash, |hash| hash)
@@ -514,7 +526,7 @@ mod tests {
 
         // The UTXO should now be present
         let utxo_id = OutputId::new(funding_txid, 0);
-        let maybe = indexer.get_utxo(&utxo_id);
+        let maybe = indexer.get_output(&utxo_id);
         assert_eq!(maybe, Some(output));
     }
 
@@ -541,7 +553,7 @@ mod tests {
 
         // Query with an empty Query should return indexed addresses (the indexer stores added addresses)
         let q = Query::new();
-        let res = indexer.query_utxos(&q);
+        let res = indexer.query_outputs(&q);
         // We expect at least one UTXO for our address
         assert!(
             res.iter()
@@ -567,7 +579,7 @@ mod tests {
         let utxo_id = OutputId::new(txid, 0);
         let block_hash = block.header().hash();
 
-        let maybe = indexer.get_utxo_block_hash(&utxo_id);
+        let maybe = indexer.get_block_from_output(&utxo_id);
         assert_eq!(maybe, Some(block_hash));
     }
 
