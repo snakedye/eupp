@@ -546,13 +546,12 @@ mod tests {
         indexer.add_block(&block).expect("add block");
 
         // Query with an empty Query should return indexed addresses (the indexer stores added addresses)
-        let q = Query::new();
+        let q = Query::new().with_address(*address);
         let res = indexer.query_outputs(&q);
         // We expect at least one UTXO for our address
-        assert!(
-            res.iter()
-                .any(|(id, out)| id.tx_hash == txid && out.address() == address)
-        );
+        let (id, out) = res.first().unwrap();
+        assert_eq!(id.tx_hash, txid);
+        assert_eq!(out.address(), address);
     }
 
     #[test]
