@@ -402,7 +402,14 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
 
         write_tx
             .commit()
-            .map_err(|err| BlockError::Other(err.to_string()))
+            .map_err(|err| BlockError::Other(err.to_string()))?;
+
+        if let Some(fs) = self.get_fs() {
+            fs.commit()
+                .map_err(|err| BlockError::Other(err.to_string()))?;
+        }
+
+        Ok(())
     }
     fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
         let read_tx = self.db.begin_read().ok()?;

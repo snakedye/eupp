@@ -2,6 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{error::Error, fmt};
 
 use serde_json;
@@ -45,10 +46,11 @@ impl Error for LedgerError {
     }
 }
 
-/// A very small file-backed block store. Blocks are appended to the end of the file
-/// as JSON (via `serde_json`).
+/// A very small file-backed block store. Blocks are appended as JSON and buffered in
+/// memory until `commit` is called.
 pub struct FileBlockStore {
-    file: Mutex<File>,
+    inner: Mutex<(File, Vec<u8>)>,
+    file_end: AtomicU64,
 }
 
 impl FileBlockStore {
@@ -58,53 +60,65 @@ impl FileBlockStore {
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, LedgerError> {
         let path = path.into();
         // Open the file for read+append and create it if missing. Keep the handle open.
-        let f = OpenOptions::new()
+        let mut f = OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(&path)?;
+        let file_end = f.seek(SeekFrom::End(0))?;
         Ok(FileBlockStore {
-            file: Mutex::new(f),
+            inner: Mutex::new((f, Vec::new())),
+            file_end: AtomicU64::new(file_end),
         })
     }
 
-    /// Append a block to the file. Returns (start_offset, len_bytes_written).
-    ///
-    /// Note: the function writes only the raw JSON bytes. It does not write any framing or
-    /// length prefix. The caller must retain the returned length in order to be able to read
-    /// the block later using `get_block`.
+    /// Buffer a block for writing. The block is only persisted on `commit`.
+    /// Returns (start_offset, len_bytes).
     pub fn append_block(&self, block: &Block) -> Result<(u64, usize), LedgerError> {
-        // Serialize the block to JSON bytes
         let bytes = serde_json::to_vec(block)?;
-
-        // Lock the file handle
-        let mut file = self.file.lock().unwrap();
-
-        // Seek to the end to find the starting offset.
-        let start = file.seek(SeekFrom::End(0))?;
-
-        // Write bytes
-        file.write_all(&bytes)?;
-        file.write_all(b"\n")?;
-        file.flush()?;
-
+        let mut inner = self.inner.lock().unwrap();
+        let (_, ref mut buf) = *inner;
+        let start = self.file_end.load(Ordering::Acquire) + buf.len() as u64;
+        buf.extend_from_slice(&bytes);
+        buf.push(b'\n');
         Ok((start, bytes.len()))
     }
 
-    /// Read a block from the file at the given cursor (byte offset) and length (in bytes).
-    /// The function reads exactly `len` bytes starting at `cursor`, then deserializes them
-    /// using `serde_json` and returns the `Block`.
+    /// Flush buffered blocks to disk.
+    pub fn commit(&self) -> Result<(), LedgerError> {
+        let (ref mut file, ref mut buf) = *self.inner.lock().unwrap();
+        if buf.is_empty() {
+            return Ok(());
+        }
+        file.write_all(buf)?;
+        file.flush()?;
+        self.file_end.fetch_add(buf.len() as u64, Ordering::Release);
+        buf.clear();
+        Ok(())
+    }
+
+    /// Read a block at the given byte offset and length. Works for both committed
+    /// and uncommitted (buffered) blocks.
     pub fn get_block(&self, pos: u64, len: usize) -> Result<Block, LedgerError> {
-        // Lock the file handle
-        let mut file = self.file.lock().unwrap();
-
-        file.seek(SeekFrom::Start(pos))?;
-
-        let mut buf = vec![0u8; len];
-        file.read_exact(&mut buf)?;
-
-        let block: Block = serde_json::from_slice(&buf)?;
-        Ok(block)
+        let file_end = self.file_end.load(Ordering::Acquire);
+        let (ref mut file, ref buf) = *self.inner.lock().unwrap();
+        let bytes = if pos + len as u64 <= file_end {
+            file.seek(SeekFrom::Start(pos))?;
+            let mut b = vec![0u8; len];
+            file.read_exact(&mut b)?;
+            b
+        } else {
+            let start = (pos - file_end) as usize;
+            buf.get(start..start + len)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "read past end of buffer",
+                    )
+                })?
+                .to_vec()
+        };
+        Ok(serde_json::from_slice(&bytes)?)
     }
 }
 
@@ -139,7 +153,14 @@ mod tests {
         block.transactions.push(tx);
 
         let (cursor, len) = store.append_block(&block).expect("append");
-        let read = store.get_block(cursor, len).expect("read");
+
+        // Block should be readable from the buffer before commit.
+        let read = store.get_block(cursor, len).expect("read before commit");
+        assert_eq!(block.header().hash(), read.header().hash());
+
+        // Commit to disk and verify it's still readable.
+        store.commit().expect("commit");
+        let read = store.get_block(cursor, len).expect("read after commit");
         assert_eq!(block.header().hash(), read.header().hash());
 
         let _ = fs::remove_file(&path);
@@ -172,13 +193,54 @@ mod tests {
         // Append the second block
         let (cursor2, len2) = store.append_block(&block2).expect("append second block");
 
-        // Read the first block
-        let read_first = store.get_block(cursor1, len1).expect("read first block");
+        // Both blocks should be readable from the buffer before commit.
+        let read_first = store
+            .get_block(cursor1, len1)
+            .expect("read first block before commit");
         assert_eq!(block1.header().hash(), read_first.header().hash());
 
-        // Read the second block
-        let read = store.get_block(cursor2, len2).expect("read second block");
-        assert_eq!(block2.header().hash(), read.header().hash());
+        let read_second = store
+            .get_block(cursor2, len2)
+            .expect("read second block before commit");
+        assert_eq!(block2.header().hash(), read_second.header().hash());
+
+        // Commit to disk and verify both are still readable.
+        store.commit().expect("commit");
+
+        let read_first = store
+            .get_block(cursor1, len1)
+            .expect("read first block after commit");
+        assert_eq!(block1.header().hash(), read_first.header().hash());
+
+        let read_second = store
+            .get_block(cursor2, len2)
+            .expect("read second block after commit");
+        assert_eq!(block2.header().hash(), read_second.header().hash());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn uncommitted_block_not_persisted() {
+        let path = temp_path("uncommitted");
+        let mut block = CoreBlock::new(0, [0u8; 32]);
+        let tx = eupp_core::transaction::Transaction {
+            inputs: vec![],
+            outputs: vec![Output::new_v1(456, &[3u8; 32], &[4u8; 32])],
+        };
+        block.transactions.push(tx);
+
+        // Append without committing, then drop the store.
+        let (cursor, len) = {
+            let store = FileBlockStore::new(&path).expect("create store");
+            let result = store.append_block(&block).expect("append");
+            // deliberately no commit
+            result
+        };
+
+        // Re-open the file — the block should not be there.
+        let store = FileBlockStore::new(&path).expect("reopen store");
+        assert!(store.get_block(cursor, len).is_err());
 
         let _ = fs::remove_file(&path);
     }
