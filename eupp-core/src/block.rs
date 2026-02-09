@@ -165,21 +165,26 @@ impl Block {
             )?;
 
             // Verify the challenge
-            let input = self
+            let lead_input = self
                 .transactions
                 .first()
                 .and_then(|tx| tx.inputs.first())
                 .ok_or(crate::transaction::TransactionError::MissingInputs)?;
             let this_lead_utxo = self.lead_output().ok_or(BlockError::ChallengeError)?;
-            let prev_lead_utxo = indexer.get_output(&input.output_id).ok_or(
-                crate::transaction::TransactionError::InvalidOutput(input.output_id),
+            let prev_lead_utxo = indexer.get_output(&lead_input.output_id).ok_or(
+                crate::transaction::TransactionError::InvalidOutput(lead_input.output_id),
             )?;
+
+            // Check that the lead output belongs to the previous block
+            self.prev_lead_output()
+                .filter(|&output_id| *output_id == lead_input.output_id())
+                .ok_or_else(|| TransactionError::InvalidOutput(lead_input.output_id()))?;
 
             let (mask, nonce) = prev_lead_utxo
                 .mask()
                 .zip(this_lead_utxo.nonce())
                 .ok_or_else(|| BlockError::InvalidVersion(prev_lead_utxo.version as u8))?;
-            let solution = mining_solution(&prev_block_hash, &input.public_key, nonce);
+            let solution = mining_solution(&prev_block_hash, &lead_input.public_key, nonce);
             if !matches_mask(mask, &solution) {
                 return Err(BlockError::ChallengeError);
             }
@@ -365,9 +370,87 @@ mod tests {
     use super::*;
     use crate::{
         SecretKey,
-        ledger::InMemoryIndexer,
+        block::BlockError,
+        ledger::{BlockMetadata, Indexer, Query},
         transaction::{Input, OutputId},
     };
+    use ethnum::U256;
+    use std::{borrow::Cow, collections::HashMap};
+
+    // A mock indexer for testing block logic without a real blockchain.
+    #[derive(Default, Clone)]
+    struct MockIndexer {
+        utxos: HashMap<OutputId, Output>,
+        metadata: HashMap<Hash, BlockMetadata>,
+        tip: Option<Hash>,
+    }
+
+    impl MockIndexer {
+        /// Populate the mock from a genesis block: registers its metadata,
+        /// UTXOs, and sets the tip.
+        fn with_genesis(mut self, block: &Block) -> Self {
+            let header = block.header();
+            let hash = header.hash();
+            let lead_output = OutputId::new(block.transactions[0].hash(), 0);
+
+            for tx in &block.transactions {
+                let tx_hash = tx.hash();
+                for (i, output) in tx.outputs.iter().enumerate() {
+                    self.utxos.insert(OutputId::new(tx_hash, i as u8), *output);
+                }
+            }
+
+            self.metadata.insert(
+                hash,
+                BlockMetadata {
+                    version: header.version,
+                    hash,
+                    prev_block_hash: header.prev_block_hash,
+                    height: 0,
+                    available_supply: 0,
+                    lead_output,
+                    cumulative_work: U256::MIN,
+                    merkle_root: header.merkle_root,
+                    cursor: None,
+                },
+            );
+            self.tip = Some(hash);
+            self
+        }
+    }
+
+    impl Indexer for MockIndexer {
+        fn add_block(&mut self, _block: &Block) -> Result<(), BlockError> {
+            unimplemented!()
+        }
+
+        fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
+            self.metadata.get(hash).map(Cow::Borrowed)
+        }
+
+        fn get_output(&self, id: &OutputId) -> Option<Output> {
+            self.utxos.get(id).copied()
+        }
+
+        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+            unimplemented!()
+        }
+
+        fn get_block_from_output(&self, _output_id: &OutputId) -> Option<Hash> {
+            None
+        }
+
+        fn get_tip(&'_ self) -> Option<Hash> {
+            self.tip
+        }
+
+        fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
+            self.tip
+                .as_ref()
+                .and_then(|hash| self.metadata.get(hash))
+                .map(Cow::Borrowed)
+        }
+    }
 
     fn genesis_block(mask: [u8; 32]) -> Block {
         let prev_block_hash = [0; 32];
@@ -389,19 +472,18 @@ mod tests {
             version: crate::transaction::Version::V0,
             amount: new_supply,
             data: [0; 32],
-            commitment: [0; 32], // this is the mask challenge
+            commitment: [0; 32],
         });
         transaction
     }
 
-    fn new_indexer(sk: SecretKey) -> (InMemoryIndexer, Transaction) {
-        let mut indexer = InMemoryIndexer::new();
-        let genesis_block = genesis_block([0; 32]);
-        let new_supply = genesis_block.transactions[0].outputs[0].amount;
-        let prev_tx_hash = genesis_block.transactions[0].hash();
-        let mining_transaction = mining_transaction(new_supply, prev_tx_hash, &sk);
-        indexer.add_block(&genesis_block).unwrap();
-        (indexer, mining_transaction)
+    fn new_indexer(sk: SecretKey) -> (MockIndexer, Transaction) {
+        let genesis = genesis_block([0; 32]);
+        let new_supply = genesis.transactions[0].outputs[0].amount;
+        let prev_tx_hash = genesis.transactions[0].hash();
+        let mining_tx = mining_transaction(new_supply, prev_tx_hash, &sk);
+        let indexer = MockIndexer::default().with_genesis(&genesis);
+        (indexer, mining_tx)
     }
 
     #[test]
@@ -445,33 +527,31 @@ mod tests {
 
     #[test]
     fn test_block_with_invalid_challenge() {
-        let mut indexer = InMemoryIndexer::new();
-        let genesis_block = genesis_block([1; 32]);
-        let genesis_block_hash = genesis_block.header().hash();
-        let first_tx_hash = genesis_block.transactions[0].hash();
-        indexer.add_block(&genesis_block).unwrap();
+        let genesis = genesis_block([1; 32]);
+        let genesis_hash = genesis.header().hash();
+        let first_tx_hash = genesis.transactions[0].hash();
+        let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis_block_hash);
-        let transaction = mining_transaction(1, first_tx_hash, &[0; 32]);
-        block.transactions.push(transaction); // Invalid challenge
+        let mut block = Block::new(1, genesis_hash);
+        block
+            .transactions
+            .push(mining_transaction(1, first_tx_hash, &[0; 32]));
 
-        let result = block.verify(&indexer);
-        assert_eq!(result, Err(BlockError::ChallengeError));
+        assert_eq!(block.verify(&indexer), Err(BlockError::ChallengeError));
     }
 
     #[test]
     fn test_block_with_valid_challenge() {
-        let mut indexer = InMemoryIndexer::new();
-        let genesis_block = genesis_block([0; 32]);
-        let first_tx_hash = genesis_block.transactions[0].hash();
-        indexer.add_block(&genesis_block).unwrap();
+        let genesis = genesis_block([0; 32]);
+        let first_tx_hash = genesis.transactions[0].hash();
+        let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis_block.header().hash());
-        let transaction = mining_transaction(1, first_tx_hash, &[1; 32]);
-        block.transactions.push(transaction);
+        let mut block = Block::new(1, genesis.header().hash());
+        block
+            .transactions
+            .push(mining_transaction(1, first_tx_hash, &[1; 32]));
 
-        let result = block.verify(&indexer);
-        match result {
+        match block.verify(&indexer) {
             Ok(()) | Err(BlockError::TransactionError(_)) => (),
             e => panic!("Expected Ok or BlockError::TransactionError, got {:?}", e),
         }
@@ -479,17 +559,16 @@ mod tests {
 
     #[test]
     fn test_block_with_reward_above_max_reward() {
-        let mut indexer = InMemoryIndexer::new();
-        let genesis_block = genesis_block([0; 32]);
-        let first_tx_hash = genesis_block.transactions[0].hash();
-        indexer.add_block(&genesis_block).unwrap();
+        let genesis = genesis_block([0; 32]);
+        let first_tx_hash = genesis.transactions[0].hash();
+        let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis_block.header().hash());
-        let transaction = mining_transaction(2, first_tx_hash, &[1; 32]);
-        block.transactions.push(transaction);
+        let mut block = Block::new(1, genesis.header().hash());
+        block
+            .transactions
+            .push(mining_transaction(2, first_tx_hash, &[1; 32]));
 
-        let result = block.verify(&indexer);
-        match result {
+        match block.verify(&indexer) {
             Err(BlockError::SupplyError { .. }) => (),
             e => panic!("Expected BlockError::RewardError, got {:?}", e),
         }
@@ -497,18 +576,16 @@ mod tests {
 
     #[test]
     fn test_block_with_invalid_lead_utxo_version() {
-        let mut indexer = InMemoryIndexer::new();
-        let genesis_block = genesis_block([0; 32]);
-        let first_tx_hash = genesis_block.transactions[0].hash();
-        indexer.add_block(&genesis_block).unwrap();
+        let genesis = genesis_block([0; 32]);
+        let first_tx_hash = genesis.transactions[0].hash();
+        let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis_block.header().hash());
+        let mut block = Block::new(1, genesis.header().hash());
         let mut transaction = mining_transaction(1, first_tx_hash, &[1; 32]);
-        transaction.outputs[0].version = crate::transaction::Version::V1; // Invalid version
+        transaction.outputs[0].version = crate::transaction::Version::V1;
         block.transactions.push(transaction);
 
-        let result = block.verify(&indexer);
-        match result {
+        match block.verify(&indexer) {
             Err(BlockError::InvalidVersion(_)) => (),
             e => panic!("Expected BlockError::InvalidVersion, got {:?}", e),
         }

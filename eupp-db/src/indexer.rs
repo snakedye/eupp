@@ -324,22 +324,14 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
                 .map_or(0, mask_difficulty);
             let block_work = U256::new(1) << block_difficulty as usize;
 
-            if !metadata_table.is_empty().unwrap() {
-                let prev_block = prev_block.ok_or_else(|| {
-                    BlockError::InvalidBlockHash(format!(
-                        "Previous block hash not found: {}",
-                        hex::encode(&block.prev_block_hash)
-                    ))
-                })?;
+            // Verify the block
+            block.verify(self)?;
+
+            if !metadata_table.is_empty().unwrap_or(true) {
+                let prev_block = prev_block.unwrap();
 
                 let reward = prev_locked_supply.saturating_sub(locked_supply);
                 available_supply = prev_block.available_supply + reward;
-
-                // Check that the lead output belongs to the previous block
-                block
-                    .prev_lead_output()
-                    .filter(|output_id| *output_id == &prev_block.lead_output)
-                    .ok_or_else(|| TransactionError::InvalidOutput(prev_block.lead_output))?;
 
                 // Update height
                 height = prev_block.height + 1;
@@ -370,9 +362,6 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
                 cursor,
             };
 
-            // Verify the block
-            block.verify(self)?;
-
             // Update the UTXO Set (Spend inputs, add new outputs)
             self.write_block_to_utxo_set(&mut utxo_set, &mut tx_table, &mut address_table, &block)?;
 
@@ -400,16 +389,14 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
                 .map_err(|err| BlockError::Other(err.to_string()))?;
         }
 
-        write_tx
-            .commit()
-            .map_err(|err| BlockError::Other(err.to_string()))?;
-
         if let Some(fs) = self.get_fs() {
             fs.commit()
                 .map_err(|err| BlockError::Other(err.to_string()))?;
         }
 
-        Ok(())
+        write_tx
+            .commit()
+            .map_err(|err| BlockError::Other(err.to_string()))
     }
     fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
         let read_tx = self.db.begin_read().ok()?;

@@ -27,7 +27,6 @@ This module is designed to be extensible and provides the building blocks for im
 custom blockchain indexing and ledger systems.
 */
 
-mod in_mem;
 mod iter;
 mod query;
 pub use iter::{BlockIter, BlockMetadataIter};
@@ -35,7 +34,6 @@ pub use iter::{BlockIter, BlockMetadataIter};
 use std::borrow::Cow;
 
 use ethnum::U256;
-pub use in_mem::InMemoryIndexer;
 pub use query::Query;
 use serde::{Deserialize, Serialize};
 

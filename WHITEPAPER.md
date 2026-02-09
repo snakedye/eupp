@@ -20,7 +20,8 @@ Policy summary:
 - Each mined block consumes the prior block's LUTXO as part of the mining transaction.
 - A successful mining transaction creates a new LUTXO that carries the updated mint pool, the next mining challenge (mask), and the miner’s commitment/proof.
 - The new LUTXO amount is bounded by the previous supply, the miner reward, and collected fees. In equation form:
-  $$ S_{prev} - Reward \leq S_{next} \leq S_{prev} + \sum Fees $$
+  
+$$ S_{prev} - Reward \leq S_{next} \leq S_{prev} + \sum Fees $$
 
 Fees are the difference between input and output totals for non-mining transactions in a block; miners collect fees and may roll them back into the LUTXO to replenish the mint pool.
 
