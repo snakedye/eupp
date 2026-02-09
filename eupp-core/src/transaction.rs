@@ -499,17 +499,95 @@ mod tests {
 
     use super::*;
     use crate::{
-        block::Block,
-        calculate_reward,
-        ledger::{InMemoryIndexer, Indexer},
+        Hash,
+        block::{Block, BlockError},
+        ledger::{BlockMetadata, Indexer, Query},
         vm::p2pkh,
     };
     use blake2::Blake2s256;
     use ed25519_dalek::Signer;
+    use ethnum::U256;
+    use std::{borrow::Cow, collections::HashMap};
+
+    // A mock indexer for testing transaction logic without a real blockchain.
+    #[derive(Default, Clone)]
+    struct MockIndexer {
+        utxos: HashMap<OutputId, Output>,
+        block_meta: Option<BlockMetadata>,
+    }
+
+    impl MockIndexer {
+        /// Insert a UTXO into the mock.
+        fn insert(&mut self, output_id: OutputId, output: Output) {
+            self.utxos.insert(output_id, output);
+        }
+
+        /// Set block metadata with a specific lead output (for coinbase tests).
+        fn with_lead_output(mut self, lead_output: OutputId) -> Self {
+            let meta = self.block_meta.get_or_insert_with(|| BlockMetadata {
+                version: 0,
+                hash: [0; 32],
+                prev_block_hash: [0; 32],
+                height: 0,
+                available_supply: 0,
+                lead_output,
+                cumulative_work: U256::MIN,
+                merkle_root: [0; 32],
+                cursor: None,
+            });
+            meta.lead_output = lead_output;
+            self
+        }
+
+        /// Set a dummy block metadata so that balance checking is enabled.
+        fn with_balance_check(mut self) -> Self {
+            self.block_meta = Some(BlockMetadata {
+                version: 0,
+                hash: [0; 32],
+                prev_block_hash: [0; 32],
+                height: 1,
+                available_supply: 0,
+                lead_output: OutputId::new([0xFF; 32], 0), // won't match any real input
+                cumulative_work: U256::MIN,
+                merkle_root: [0; 32],
+                cursor: None,
+            });
+            self
+        }
+    }
+
+    impl Indexer for MockIndexer {
+        fn add_block(&mut self, _block: &Block) -> Result<(), BlockError> {
+            unimplemented!()
+        }
+
+        fn get_block_metadata(&'_ self, _hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
+            self.block_meta.as_ref().map(Cow::Borrowed)
+        }
+
+        fn get_output(&self, id: &OutputId) -> Option<Output> {
+            self.utxos.get(id).copied()
+        }
+
+        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+            unimplemented!()
+        }
+
+        fn get_block_from_output(&self, _output_id: &OutputId) -> Option<Hash> {
+            self.block_meta.as_ref().map(|meta| meta.hash)
+        }
+
+        fn get_tip(&'_ self) -> Option<Hash> {
+            None
+        }
+
+        fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
+            self.block_meta.as_ref().map(Cow::Borrowed)
+        }
+    }
 
     #[test]
     fn test_sighash_matches_manual_hash() {
-        // Prepare a fake transaction id and outputs
         let txid: [u8; 32] = [9u8; 32];
         let output_id = OutputId {
             tx_hash: txid,
@@ -521,10 +599,8 @@ mod tests {
         let out2 = Output::new_v1(20, &pk, &[6u8; 32]);
         let outputs = vec![out1, out2];
 
-        // Compute sighash via function
         let s1 = sighash(&[output_id], &outputs);
 
-        // Compute expected via manual hasher
         let mut hasher = Blake2s256::new();
         hasher.update(&txid);
         hasher.update(&output_id.index.to_be_bytes());
@@ -541,7 +617,6 @@ mod tests {
 
     #[test]
     fn test_transaction_hash() {
-        // Build a transaction with one input and one output
         let input = Input::new_unsigned(OutputId {
             tx_hash: [1u8; 32],
             index: 0,
@@ -554,7 +629,6 @@ mod tests {
 
         let tx_hash = tx.hash();
 
-        // Manual hash
         let mut hasher = Blake2s256::new();
         hasher.update(&tx.inputs.len().to_be_bytes());
         for inp in &tx.inputs {
@@ -576,171 +650,101 @@ mod tests {
 
     #[test]
     fn test_transaction_fee() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
-
-        // Build funding (previous) transaction that creates a UTXO
         let data = [12u8; 32];
         let mask = [0u8; 32];
+        let utxo_id = OutputId::new([1u8; 32], 0);
 
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
+        let mut indexer = MockIndexer::default();
+        indexer.insert(
+            utxo_id,
+            Output {
                 version: Version::V1,
                 amount: 100,
                 data,
                 commitment: mask,
-            }],
-        };
-        let funding_txid = funding_tx.hash();
+            },
+        );
 
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Now build a spending transaction that consumes the funding UTXO
-        let output_id = OutputId {
-            tx_hash: funding_txid,
-            index: 0,
-        };
         let new_outputs = vec![
             Output::new_v1(60, &mask, &data),
             Output::new_v1(30, &mask, &data),
         ]; // total output: 90
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-        let sighash = sighash(&[output_id], &new_outputs);
+        let sighash = sighash(&[utxo_id], &new_outputs);
         let input =
-            Input::new_unsigned(output_id).sign(signing_key.verifying_key().as_bytes(), sighash);
+            Input::new_unsigned(utxo_id).sign(signing_key.verifying_key().as_bytes(), sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
             outputs: new_outputs,
         };
 
-        // The input amount is 100, output total is 90, so fee should be 10
-        let fee = spending_tx.fee(&indexer);
-        assert_eq!(fee, 10);
+        assert_eq!(spending_tx.fee(&indexer), 10);
     }
 
     #[test]
     fn test_transaction_verify_invalid_public_key() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
-
-        // Build funding (previous) transaction that creates a UTXO
-        let data = [12u8; 32];
-        // Here the commitment is a mask since it's a coinbase transaction
-        // A zero mask allows for any pubkey
-        let mask = [0u8; 32];
-        let reward = calculate_reward(&mask);
-
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
+        // UTXO with an invalid commitment (not a valid public key)
+        let utxo_id = OutputId::new([1u8; 32], 0);
+        let mut indexer = MockIndexer::default();
+        indexer.insert(
+            utxo_id,
+            Output {
                 version: Version::V1,
                 amount: 100,
-                data,
-                commitment: mask,
-            }],
-        };
-        let funding_txid = funding_tx.hash();
-
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Now build a spending transaction that consumes the funding UTXO
-        let input = Input::new_unsigned(OutputId {
-            tx_hash: funding_txid,
-            index: 0,
-        });
+                data: [12u8; 32],
+                commitment: [0u8; 32], // not a valid public key
+            },
+        );
 
         let spending_tx = Transaction {
-            inputs: vec![input],
-            outputs: vec![Output {
-                version: Version::V1,
-                amount: 100 - reward,
-                data: [0u8; 32],
-                commitment: [0u8; 32],
-            }],
+            inputs: vec![Input::new_unsigned(utxo_id)],
+            outputs: vec![Output::new_v1(99, &[0u8; 32], &[0u8; 32])],
         };
 
-        // Now verification should fail parsing the funding output's commitment as a public key
         match spending_tx.verify(&indexer) {
             Err(TransactionError::Execution(_)) => {}
-            other => panic!("Expected InvalidSignature error, got: {:?}", other),
+            other => panic!("Expected Execution error, got: {:?}", other),
         }
     }
 
     #[test]
     fn test_signed_sighash_verification() {
-        // Create a signing key and derive the public key
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let public_key: [u8; 32] = signing_key.verifying_key().to_bytes();
 
-        // Prepare a fake transaction id and outputs
-        let txid: [u8; 32] = [9u8; 32];
         let output_id = OutputId {
-            tx_hash: txid,
+            tx_hash: [9u8; 32],
             index: 1,
         };
-
         let outputs = vec![Output::new_v1(10, &public_key, &[5u8; 32])];
 
-        // Compute the sighash
         let sighash = sighash(&[output_id], &outputs);
-
-        // Sign the sighash
         let signature = signing_key.sign(&sighash);
 
-        // Verify the signature using the public key
         let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key).unwrap();
         assert!(verifying_key.verify_strict(&sighash, &signature).is_ok());
     }
 
     #[test]
     fn test_transaction_verify_invalid_input_output_totals() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
-
-        // Build funding (previous) transaction that creates a UTXO
+        let pubkey = signing_key.verifying_key().to_bytes();
         let data = [12u8; 32];
-        // Here the commitment is a mask since it's a coinbase transaction
-        // A zero mask allows for any pubkey
-        let mask = [0u8; 32];
 
-        let funding_tx = Transaction::new(
-            vec![],
-            vec![
-                Output::new_v0(100, &data, &mask),
-                Output::new_v1(100, signing_key.verifying_key().as_bytes(), &data),
-            ],
-        );
-        let funding_txid = funding_tx.hash();
+        let utxo_id = OutputId::new([1u8; 32], 0);
+        let mut indexer = MockIndexer::default().with_balance_check();
+        indexer.insert(utxo_id, Output::new_v1(100, &pubkey, &data));
 
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Now build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
-            tx_hash: funding_txid,
-            index: 1,
-        };
-        let input = Input::new_unsigned(utxo_id);
-        let new_outputs = vec![Output::new_v1(150, &data, &mask)]; // Any commitment will work with the mask chosen before
+        // Try to spend 150 from a 100-value UTXO
+        let new_outputs = vec![Output::new_v1(150, &data, &[0u8; 32])];
         let sighash = sighash(&[utxo_id], &new_outputs);
 
         let spending_tx = Transaction {
-            inputs: vec![input.sign(signing_key.as_bytes(), sighash)],
+            inputs: vec![Input::new_unsigned(utxo_id).sign(signing_key.as_bytes(), sighash)],
             outputs: new_outputs,
         };
 
-        // Now verification should fail due to mismatched input and output totals
         match spending_tx.verify(&indexer) {
             Err(TransactionError::InvalidBalance { .. }) => {}
             other => panic!("Expected InvalidBalance error, got: {:?}", other),
@@ -749,99 +753,58 @@ mod tests {
 
     #[test]
     fn test_transaction_verify_valid_coinbase() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
-
-        // Build funding (previous) transaction that creates a UTXO
+        let utxo_id = OutputId::new([1u8; 32], 0);
         let data = [12u8; 32];
-        // Here the commitment is a mask since it's a coinbase transaction
-        // A zero mask allows for any pubkey
         let mask = [0u8; 32];
-        let reward = calculate_reward(&mask);
+        let amount = 200;
 
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
+        // The lead_output matches the first input, so verify() treats this as a coinbase
+        let mut indexer = MockIndexer::default().with_lead_output(utxo_id);
+        indexer.insert(
+            utxo_id,
+            Output {
                 version: Version::V0,
-                amount: 2 * reward,
+                amount,
                 data,
                 commitment: mask,
-            }],
-        };
-        let funding_txid = funding_tx.hash();
+            },
+        );
 
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Now build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
-            tx_hash: funding_txid,
-            index: 0,
-        };
         let new_outputs = vec![Output {
             version: Version::V0,
-            amount: reward,
+            amount: amount / 2,
             data,
             commitment: mask,
         }];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let input = Input::new_unsigned(utxo_id).sign(
-            &[11u8; 32], // same public key used to construct commitment
-            sighash,
-        );
+        let input = Input::new_unsigned(utxo_id).sign(&[11u8; 32], sighash);
 
         let spending_tx = Transaction {
             inputs: vec![input],
             outputs: new_outputs,
         };
 
-        // Now verification should succeed
         match spending_tx.verify(&indexer) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
         }
     }
+
     #[test]
     fn test_transaction_verify_v2() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
-        // Create a signing key for the funding transaction
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
 
-        // Build funding (previous) transaction that creates a UTXO
-        let mut data = [0u8; 32];
-        data.as_mut_slice().write(&p2pkh()).unwrap();
-        let mask = [0u8; 32]; // A zero mask allows for any pubkey
-        let reward = calculate_reward(&mask);
+        // Build a V2 UTXO whose data contains a p2pkh script
+        let mut script_data = [0u8; 32];
+        script_data.as_mut_slice().write(&p2pkh()).unwrap();
 
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![
-                Output {
-                    version: Version::V0,
-                    amount: reward,
-                    data,
-                    commitment: mask,
-                },
-                Output::new_v2(reward, &pubkey, &data),
-            ],
-        };
-        let funding_txid = funding_tx.hash();
+        let utxo_id = OutputId::new([1u8; 32], 0);
+        let amount = 50;
+        let mut indexer = MockIndexer::default().with_balance_check();
+        indexer.insert(utxo_id, Output::new_v2(amount, &pubkey, &script_data));
 
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Now build a spending transaction that consumes the second UTXO
-        let utxo_id = OutputId {
-            tx_hash: funding_txid,
-            index: 1,
-        };
-        let new_outputs = vec![Output::new_v1(reward, &mask, &data)];
+        let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &script_data)];
         let sighash = sighash(&[utxo_id], &new_outputs);
         let input = Input::new_unsigned(utxo_id).sign(signing_key.as_bytes(), sighash);
 
@@ -850,44 +813,21 @@ mod tests {
             outputs: new_outputs,
         };
 
-        // Now verification should succeed
         match spending_tx.verify(&indexer) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
         }
     }
+
     #[test]
     fn test_transaction_verify_too_many_inputs() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
+        let indexer = MockIndexer::default();
+        let txid = [1u8; 32];
 
-        // Build funding (previous) transaction that creates a UTXO
-        let data = [12u8; 32];
-        let mask = [0u8; 32];
-        let reward = calculate_reward(&mask);
-
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
-                version: Version::V1,
-                amount: reward,
-                data,
-                commitment: mask,
-            }],
-        };
-        let funding_txid = funding_tx.hash();
-
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Generate inputs exceeding the maximum allowed
-        let max_allowed = MAX_ALLOWED + 1;
         let mut inputs = Vec::new();
-        for i in 0..=max_allowed {
+        for i in 0..=(MAX_ALLOWED + 1) {
             let utxo_id = OutputId {
-                tx_hash: funding_txid,
+                tx_hash: txid,
                 index: i as u8,
             };
             let sighash = sighash(&[utxo_id], &[]);
@@ -896,116 +836,58 @@ mod tests {
 
         let spending_tx = Transaction {
             inputs,
-            outputs: vec![Output {
-                version: Version::V1,
-                amount: reward,
-                data,
-                commitment: mask,
-            }],
+            outputs: vec![Output::new_v1(1, &[0u8; 32], &[0u8; 32])],
         };
 
-        // Now verification should fail due to too many inputs
         match spending_tx.verify(&indexer) {
             Err(TransactionError::TooManyInputs) => {}
             other => panic!("Expected TooManyInputs error, got: {:?}", other),
         }
     }
+
     #[test]
     fn test_transaction_verify_too_many_outputs() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
+        let indexer = MockIndexer::default();
 
-        // Build funding (previous) transaction that creates a UTXO
-        let data = [12u8; 32];
-        let mask = [0u8; 32];
-        let reward = calculate_reward(&mask);
-
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
-                version: Version::V1,
-                amount: reward,
-                data,
-                commitment: mask,
-            }],
-        };
-        let funding_txid = funding_tx.hash();
-
-        // Create a block containing the funding transaction and add to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Generate outputs exceeding the maximum allowed
-        let max_allowed = MAX_ALLOWED + 1;
-        let outputs: Vec<Output> = (0..=max_allowed)
-            .map(|_| Output {
-                version: Version::V1,
-                amount: reward,
-                data,
-                commitment: mask,
-            })
+        let outputs: Vec<Output> = (0..=(MAX_ALLOWED + 1))
+            .map(|_| Output::new_v1(1, &[0u8; 32], &[0u8; 32]))
             .collect();
 
         let spending_tx = Transaction {
-            inputs: vec![Input::new_unsigned(OutputId {
-                tx_hash: funding_txid,
-                index: 0,
-            })],
+            inputs: vec![Input::new_unsigned(OutputId::new([1u8; 32], 0))],
             outputs,
         };
 
-        // Now verification should fail due to too many outputs
         match spending_tx.verify(&indexer) {
             Err(TransactionError::TooManyOutputs) => {}
             other => panic!("Expected TooManyOutputs error, got: {:?}", other),
         }
     }
+
     #[test]
     fn test_transaction_verify_v3_invalid_witness_script() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
-        // Create a signing key for the funding transaction
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
 
-        // Construct a witness (script) that will be run for V3
         let witness = check_sig_script().to_vec();
-        // For this invalid test we intentionally set utxo.data to something else
-        let bad_data = [0u8; 32];
-
-        // commitment must match the pubkey used to spend
+        let bad_data = [0u8; 32]; // does NOT match blake2s(witness)
         let commitment = commitment(&pubkey, None);
+        let amount = 42;
 
-        let reward = 42; // arbitrary non-zero amount for test
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output {
+        let utxo_id = OutputId::new([1u8; 32], 0);
+        let mut indexer = MockIndexer::default().with_balance_check();
+        indexer.insert(
+            utxo_id,
+            Output {
                 version: Version::V3,
-                amount: reward,
-                data: bad_data, // does NOT equal blake2s(witness)
+                amount,
+                data: bad_data,
                 commitment,
-            }],
-        };
-        let funding_txid = funding_tx.hash();
+            },
+        );
 
-        // Add funding block to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
-            tx_hash: funding_txid,
-            index: 0,
-        };
-        let new_outputs = vec![Output::new_v1(reward, &[0u8; 32], &[0u8; 32])];
-
-        // sighash for spending tx (what the signature must sign)
+        let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &[0u8; 32])];
         let sighash = sighash(&[utxo_id], &new_outputs);
-
-        // Use the witness and place it on the input; but since utxo.data != hash(witness)
-        // the verify() should return InvalidWitnessScript error before executing the witness.
         let input = Input::new_unsigned(utxo_id)
             .with_witness(witness)
             .sign(signing_key.as_bytes(), sighash);
@@ -1023,39 +905,18 @@ mod tests {
 
     #[test]
     fn test_transaction_verify_v3_valid_witness() {
-        // Create a indexer with one block containing a funding transaction
-        let mut indexer = InMemoryIndexer::new();
-        // Create a signing key for the funding transaction
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
 
-        // Construct a witness (script) that will be run for V3
         let witness = check_sig_script().to_vec();
+        let amount = 42;
 
-        let reward = 42; // arbitrary non-zero amount for test
-        let funding_tx = Transaction {
-            inputs: vec![],
-            outputs: vec![Output::new_v3(reward, &pubkey, &[0; 32], &witness)],
-        };
-        let funding_txid = funding_tx.hash();
+        let utxo_id = OutputId::new([1u8; 32], 0);
+        let mut indexer = MockIndexer::default().with_balance_check();
+        indexer.insert(utxo_id, Output::new_v3(amount, &pubkey, &[0; 32], &witness));
 
-        // Add funding block to indexer
-        let mut block = Block::new(0, [0u8; 32]);
-        block.transactions.push(funding_tx);
-        indexer.add_block(&block).unwrap();
-
-        // Build a spending transaction that consumes the funding UTXO
-        let utxo_id = OutputId {
-            tx_hash: funding_txid,
-            index: 0,
-        };
-        let new_outputs = vec![Output::new_v1(reward, &[0u8; 32], &[0u8; 32])];
-
-        // sighash for spending tx (what the signature must sign)
+        let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &[0u8; 32])];
         let sighash = sighash(&[utxo_id], &new_outputs);
-
-        // Place the witness on the input; since utxo.data == hash(witness),
-        // the VM will run the witness which will verify the signature and succeed.
         let input = Input::new_unsigned(utxo_id)
             .with_witness(witness)
             .sign(signing_key.as_bytes(), sighash);
