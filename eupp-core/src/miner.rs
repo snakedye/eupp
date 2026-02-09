@@ -14,7 +14,7 @@ minting output and a miner reward output are created and included in a new block
 
 use blake2::{Blake2s256, Digest};
 
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 
 use crate::{
     PublicKey,
@@ -42,14 +42,14 @@ pub fn build_mining_tx<R>(
     secret_key: &[u8; 32],
     prev_block_hash: &Hash,
     prev_tx_hash: &TransactionHash,
-    lead_utxo: &Output,
+    lead_output: &Output,
     range: R,
 ) -> Option<(SigningKey, Transaction)>
 where
     R: IntoIterator<Item = usize>,
 {
     // Mask is stored in previous minting output's data
-    let mask = lead_utxo.data;
+    let mask = lead_output.data;
 
     let signing_key = SigningKey::from_bytes(secret_key);
     let verifying_key = signing_key.verifying_key();
@@ -68,7 +68,7 @@ where
             };
             // Calculate block reward
             let reward = calculate_reward(&mask);
-            let new_supply = lead_utxo.amount.saturating_sub(reward);
+            let new_supply = lead_output.amount.saturating_sub(reward);
 
             // Build outputs: new mint (carry forward mask) and miner reward
             let new_mint_output = Output::new_v0(new_supply, &mask, &nonce);
@@ -78,11 +78,8 @@ where
             // Compute sighash
             let sighash = sighash(&[lead_utxo_id], &outputs);
 
-            // Sign
-            let signature = signing_key.sign(sighash.as_ref());
-
             // Build input revealing pk and signature
-            let input = Input::new(lead_utxo_id, pk_bytes, signature.to_bytes());
+            let input = Input::new_unsigned(lead_utxo_id).sign(signing_key.as_bytes(), sighash);
 
             let tx = Transaction {
                 inputs: vec![input],
@@ -104,8 +101,8 @@ pub fn build_next_block<L: Indexer>(
 ) -> Option<(SigningKey, crate::block::Block)> {
     let prev_block = indexer.get_last_block_metadata()?;
     let prev_block_hash = prev_block.hash;
-    let lead_utxo_id = prev_block.lead_utxo;
-    let lead_utxo = indexer.get_utxo(&lead_utxo_id)?;
+    let lead_utxo_id = prev_block.lead_output;
+    let lead_utxo = indexer.get_output(&lead_utxo_id)?;
 
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let (signing_key, mining_tx) = build_mining_tx(

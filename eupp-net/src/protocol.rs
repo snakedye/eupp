@@ -1,10 +1,14 @@
 use eupp_core::block::Block;
 use eupp_core::transaction::{Output, OutputId, Transaction, TransactionHash};
-use eupp_core::{Hash, block::BlockHeader, ledger::Query};
+use eupp_core::{Hash, block::BlockHeader, deserialize_arr, ledger::Query, serialize_to_hex};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NetworkInfo {
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
     /// The hash of the current tip block.
     pub tip_hash: Hash,
     /// The height of the current tip block.
@@ -13,8 +17,12 @@ pub struct NetworkInfo {
     pub available_supply: u64,
     /// The list of connected peers.
     pub peers: Vec<String>,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
     /// The cummulative difficulty of the blockchain in the amount of bits used.
-    pub cummulative_difficulty: usize,
+    pub cummulative_difficulty: [u8; 32],
 }
 
 /// Messages broadcast over gossipsub for all peers to see.
@@ -61,7 +69,7 @@ pub enum SyncResponse {
     BlockHeaders(Vec<BlockHeader>),
 }
 
-/// RPC requests sent directly to a peer (over libp2p request/response).
+/// RPC requests sent directly to a peer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RpcRequest {
     /// Return basic network info (tip hash, height, available supply).
@@ -92,4 +100,7 @@ pub enum RpcResponse {
 
     /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
+
+    /// An error response indicating that the request could not be fulfilled.
+    Error(String),
 }

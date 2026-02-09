@@ -27,14 +27,15 @@ This module is designed to be extensible and provides the building blocks for im
 custom blockchain indexing and ledger systems.
 */
 
-mod in_mem;
+mod iter;
 mod query;
+pub use iter::{BlockIter, BlockMetadataIter};
 
 use std::borrow::Cow;
 
-pub use in_mem::{FullInMemoryLedger, InMemoryIndexer};
+use ethnum::U256;
 pub use query::Query;
-use u256::U256;
+use serde::{Deserialize, Serialize};
 
 use crate::block::BlockHeader;
 
@@ -44,7 +45,7 @@ use super::{
     transaction::{Output, OutputId},
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Represents metadata for a block in the ledger.
 pub struct BlockMetadata {
     /// The block's version
@@ -62,28 +63,25 @@ pub struct BlockMetadata {
     /// The MAS Metric: Sum of all rewards from Genesis to this block.
     pub available_supply: u64,
 
-    /// The `OutputId` of the lead utxo
-    pub lead_utxo: OutputId,
+    /// The `OutputId` of the lead output
+    pub lead_output: OutputId,
 
     /// The cumulative work on this blockchain.
     pub cumulative_work: U256,
 
     /// The merkle root of the transaction tree.
     pub merkle_root: Hash,
+
+    /// The position of the block in the ledger.
+    pub cursor: Option<Cursor>,
 }
 
-#[derive(Clone, Copy)]
-/// Iterator over the blockchain from the tip to genesis.
-pub struct BlockIter<'a, L: ?Sized> {
-    current_hash: Hash,
-    ledger: &'a L,
-}
-
-#[derive(Clone, Copy)]
-/// Iterator over the blockchain metadata from the tip to genesis.
-pub struct BlockMetadataIter<'a, I: ?Sized> {
-    current_hash: Hash,
-    indexer: &'a I,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct Cursor {
+    /// The position of the block in the ledger.
+    pub pos: usize,
+    /// The length of the block.
+    pub len: usize,
 }
 
 impl BlockMetadata {
@@ -98,26 +96,8 @@ impl BlockMetadata {
     /// Return the locked supply on the blockchain.
     pub fn locked_supply(&self, indexer: &impl Indexer) -> u64 {
         indexer
-            .get_utxo(&self.lead_utxo)
+            .get_output(&self.lead_output)
             .map_or(0, |utxo| utxo.amount)
-    }
-}
-
-impl<'a, I: Indexer> Iterator for BlockMetadataIter<'a, I> {
-    type Item = Cow<'a, BlockMetadata>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.indexer
-            .get_block_metadata(&self.current_hash)
-            .inspect(|block| self.current_hash = block.prev_block_hash)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let height = self
-            .indexer
-            .metadata_iter()
-            .next()
-            .map(|meta| meta.height as usize);
-        (height.unwrap_or_default(), height)
     }
 }
 
@@ -128,47 +108,53 @@ pub trait Indexer {
     fn add_block(&mut self, block: &Block) -> Result<(), BlockError>;
 
     /// Retrieves metadata for a block identified by its hash.
-    fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>>;
+    fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>>;
+
+    /// Retrieves the hash of block at the top of the blockchain.
+    fn get_tip(&'_ self) -> Option<Hash>;
 
     /// Checks if a transaction output is spent.
     fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
-        self.get_utxo(output_id).is_none()
+        self.get_output(output_id).is_none()
     }
 
     /// Fetches an unspent transaction output (UTXO) by its identifier.
-    fn get_utxo(&self, output_id: &OutputId) -> Option<Output>;
+    fn get_output(&self, output_id: &OutputId) -> Option<Output>;
 
-    /// Returns an iterator over all UTXOs matching the given query.
-    fn query_utxos<'a>(
-        &'a self,
-        query: &'a Query,
-    ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a>;
+    /// Returns a list of all outputs matching the given query.
+    fn query_outputs(&self, query: &Query) -> Vec<(OutputId, Output)>;
 
     /// Fetches the block hash of a UTXO by its identifier.
-    fn get_utxo_block_hash(&self, output_id: &OutputId) -> Option<Hash>;
+    fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash>;
 
     /// Retrieves metadata for the most recently added block.
-    fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>>;
+    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
+        self.get_tip()
+            .and_then(|hash| self.get_block_metadata(&hash))
+    }
 
     /// Retrieves the hash of the block containing the given transaction.
-    fn get_transaction_block_hash(
+    fn get_block_from_transaction(
         &self,
         tx_hash: &super::transaction::TransactionHash,
     ) -> Option<Hash> {
-        self.get_utxo_block_hash(&OutputId::new(*tx_hash, 0))
+        self.get_block_from_output(&OutputId::new(*tx_hash, 0))
     }
+}
 
-    fn metadata_iter(&self) -> BlockMetadataIter<'_, Self> {
+pub trait IndexerExt: Indexer {
+    /// Returns an iterator over the block metadata starting from the most recently added block
+    /// and traversing back to the genesis block.
+    fn metadata(&self) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
-            current_hash: self
-                .get_last_block_metadata()
-                .map(|meta| meta.hash)
-                .unwrap_or_default(),
+            current_hash: self.get_tip().unwrap_or_default(),
             indexer: self,
         }
     }
 
-    fn metadata_iter_from(&self, hash: &Hash) -> BlockMetadataIter<'_, Self> {
+    /// Returns an iterator over the block metadata starting from a specific block hash
+    /// and traversing back to the genesis block.
+    fn metadata_from(&self, hash: &Hash) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
             current_hash: *hash,
             indexer: self,
@@ -176,48 +162,52 @@ pub trait Indexer {
     }
 }
 
-impl<'a, L: Ledger> Iterator for BlockIter<'a, L> {
-    type Item = Cow<'a, Block>;
+impl<T: Indexer + ?Sized> IndexerExt for T {}
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.ledger
-            .get_block(&self.current_hash)
-            .inspect(|block| self.current_hash = block.prev_block_hash)
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let height = self
-            .ledger
-            .get_last_block_metadata()
-            .map(|meta| meta.height as usize);
-        (height.unwrap_or_default(), height)
-    }
-}
+// Implementation moved to `iter.rs`
 
 /// A Ledger represents the authoritative archival store of blocks.
 /// It extends Indexer to provide access to full block data.
 pub trait Ledger: Indexer {
     /// Retrieves a full block by its hash.
-    fn get_block(&self, hash: &Hash) -> Option<Cow<Block>>;
+    fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>>;
+}
 
+/// A trait for converting an object into a `Ledger`.
+pub trait LedgerView {
+    /// The associated type representing a `Ledger` reference.
+    type Ledger<'a>: Ledger + 'a
+    where
+        Self: 'a;
+
+    /// Converts the current object into a `Ledger`.
+    fn as_ledger<'a>(&'a self) -> Option<&'a Self::Ledger<'a>> {
+        None
+    }
+}
+
+pub trait LedgerExt: Ledger {
     /// Returns an iterator over blocks starting from the tip to oldest.
-    fn block_iter(&self) -> BlockIter<Self> {
+    fn blocks(&'_ self) -> BlockIter<'_, Self>
+    where
+        Self: Indexer,
+    {
         BlockIter {
-            current_hash: self
-                .get_last_block_metadata()
-                .map(|meta| meta.hash)
-                .unwrap_or_default(),
+            current_hash: self.get_tip().unwrap_or_default(),
             ledger: self,
         }
     }
 
     /// Returns an iterator over blocks starting from a given hash.
-    fn block_iter_from(&self, hash: &Hash) -> BlockIter<Self> {
+    fn blocks_from(&'_ self, hash: &Hash) -> BlockIter<'_, Self> {
         BlockIter {
             current_hash: *hash,
             ledger: self,
         }
     }
 }
+
+impl<T: Ledger + ?Sized> LedgerExt for T {}
 
 #[cfg(test)]
 mod tests {
@@ -225,15 +215,15 @@ mod tests {
     use std::collections::HashMap;
 
     #[derive(Default)]
-    struct MockIterator {
+    struct MockLedger {
         blocks: HashMap<Hash, Block>,
         metadata: HashMap<Hash, BlockMetadata>,
     }
 
-    impl Indexer for MockIterator {
+    impl Indexer for MockLedger {
         fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
             let hash = block.header().hash();
-            let lead_utxo = OutputId::new([0; 32], 0);
+            let lead_output = OutputId::new([0; 32], 0);
             self.blocks.insert(hash, block.clone());
             self.metadata.insert(
                 hash,
@@ -243,60 +233,62 @@ mod tests {
                     prev_block_hash: block.prev_block_hash,
                     merkle_root: [0; 32],
                     height: 0,
-                    cumulative_work: U256::zero(),
+                    cumulative_work: U256::MIN,
                     available_supply: 0,
-                    lead_utxo,
+                    cursor: None,
+                    lead_output,
                 },
             );
             Ok(())
         }
 
-        fn get_block_metadata(&self, hash: &Hash) -> Option<Cow<BlockMetadata>> {
+        fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
             self.metadata.get(hash).map(Cow::Borrowed)
         }
 
-        fn get_utxo(&self, _output_id: &OutputId) -> Option<Output> {
+        fn get_output(&self, _output_id: &OutputId) -> Option<Output> {
             None
         }
 
-        fn query_utxos<'a>(
-            &'a self,
-            _query: &'a Query,
-        ) -> Box<dyn Iterator<Item = (OutputId, Output)> + 'a> {
+        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
             unimplemented!()
         }
 
-        fn get_utxo_block_hash(&self, _output_id: &OutputId) -> Option<Hash> {
+        fn get_block_from_output(&self, _output_id: &OutputId) -> Option<Hash> {
             None
         }
 
-        fn get_last_block_metadata(&self) -> Option<Cow<BlockMetadata>> {
+        fn get_tip(&'_ self) -> Option<Hash> {
+            None
+        }
+
+        fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
             self.metadata.values().next().map(Cow::Borrowed)
         }
     }
 
-    impl Ledger for MockIterator {
-        fn get_block(&self, hash: &Hash) -> Option<Cow<Block>> {
+    impl Ledger for MockLedger {
+        fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
             self.blocks.get(hash).map(Cow::Borrowed)
         }
     }
 
     #[test]
     fn test_block_iter() {
-        let mut mock = MockIterator::default();
+        let mut mock = MockLedger::default();
         let genesis_hash = Hash::default();
         let block = Block::new(0, genesis_hash);
         let block_hash = block.header().hash();
         mock.add_block(&block).unwrap();
 
-        let mut iter = mock.block_iter_from(&block_hash);
+        let mut iter = mock.blocks_from(&block_hash);
         assert_eq!(iter.next().unwrap().header().hash(), block_hash);
         assert_eq!(iter.next(), None);
     }
 
     #[test]
     fn test_block_metadata_iter() {
-        let mut mock = MockIterator::default();
+        let mut mock = MockLedger::default();
         let block_hash = [1; 32];
         let metadata = BlockMetadata {
             version: 0,
@@ -305,12 +297,13 @@ mod tests {
             height: 0,
             available_supply: 0,
             merkle_root: [0; 32],
-            cumulative_work: U256::zero(),
-            lead_utxo: OutputId::new([0; 32], 0),
+            cumulative_work: U256::MIN,
+            lead_output: OutputId::new([0; 32], 0),
+            cursor: None,
         };
         mock.metadata.insert(block_hash, metadata);
 
-        let mut iter = mock.metadata_iter_from(&block_hash);
+        let mut iter = mock.metadata_from(&block_hash);
         assert_eq!(iter.next().unwrap().hash, block_hash);
         assert_eq!(iter.next(), None);
     }

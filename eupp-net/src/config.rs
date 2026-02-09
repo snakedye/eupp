@@ -8,8 +8,9 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 
+use eupp_core::PublicKey;
 use hex;
-use libp2p::identity::ed25519::SecretKey;
+use libp2p::identity::ed25519::{Keypair, SecretKey};
 
 /// Default number of blocks to fetch in a single synchronization chunk when not provided.
 const DEFAULT_BLOCK_CHUNK_SIZE: usize = 16;
@@ -42,6 +43,16 @@ pub struct Config {
 
     /// The number of blocks to fetch in a single synchronization chunk.
     pub block_chunk_size: usize,
+
+    /// Optional path to the indexing database (used by `eupp-db`).
+    ///
+    /// Environment variable: `EUPP_INDEX_DB_PATH`
+    pub index_db_path: Option<String>,
+
+    /// Optional path to the block file where all blocks are stored on disk.
+    ///
+    /// Environment variable: `EUPP_BLOCK_FILE`
+    pub block_file_path: Option<String>,
 }
 
 impl Default for Config {
@@ -51,6 +62,8 @@ impl Default for Config {
             secret_key_bytes: Default::default(),
             mining: false,
             block_chunk_size: DEFAULT_BLOCK_CHUNK_SIZE,
+            index_db_path: None,
+            block_file_path: None,
         }
     }
 }
@@ -63,6 +76,8 @@ impl Config {
     /// - `EUPP_SECRET_KEY` - required hex-encoded 32-byte ed25519 secret key
     /// - `EUPP_MINING` - optional boolean (true/false). Accepts `1`, `true`, `yes`, `on`.
     /// - `EUPP_BLOCK_CHUNK_SIZE` - optional usize, defaults to 16
+    /// - `EUPP_INDEX_DB_PATH` - optional path to the indexing database used by `eupp-db`
+    /// - `EUPP_BLOCK_FILE` - optional path to the block file where blocks are stored
     pub fn from_env() -> Result<Self, ConfigError> {
         // Load .env if present, ignore errors
         let _ = dotenv::dotenv();
@@ -100,6 +115,18 @@ impl Config {
             _ => DEFAULT_BLOCK_CHUNK_SIZE,
         };
 
+        // INDEX DB PATH (optional) - used by eupp-db
+        let index_db_path = match env::var("EUPP_INDEX_DB_PATH").ok() {
+            Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            _ => None,
+        };
+
+        // BLOCK FILE PATH (optional) - where blocks are stored on disk
+        let block_file_path = match env::var("EUPP_BLOCK_FILE").ok() {
+            Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            _ => None,
+        };
+
         // SECRET KEY (required) - expect hex encoded 32 bytes
         let sk_hex = env::var("EUPP_SECRET_KEY")
             .or_else(|_| env::var("SECRET_KEY"))
@@ -129,21 +156,37 @@ impl Config {
             secret_key_bytes,
             mining,
             block_chunk_size,
+            index_db_path,
+            block_file_path,
         })
     }
 
-    /// Attempt to convert the stored secret key bytes into a libp2p ed25519 `SecretKey`.
-    ///
-    /// Note: this conversion may fail if libp2p's API changes; the stored bytes are plain 32 bytes.
-    pub fn secret_key(&self) -> SecretKey {
-        let mut sk = self.secret_key_bytes;
-        SecretKey::try_from_bytes(&mut sk).expect("failed to convert secret key bytes to SecretKey")
+    /// Retrieve the secret key.
+    pub fn secret_key(&self) -> [u8; 32] {
+        self.secret_key_bytes
+    }
+
+    /// Retrieve the public key.
+    pub fn public_key(&self) -> PublicKey {
+        let sk = SecretKey::try_from_bytes(self.secret_key_bytes.clone().as_mut()).unwrap();
+        let kp = Keypair::from(sk);
+        kp.public().to_bytes()
     }
 
     /// Convenience: return the effective block chunk size (already present on the struct,
     /// but this method exists for symmetry/clarity).
     pub fn block_chunk_size(&self) -> usize {
         self.block_chunk_size
+    }
+
+    /// Optional path to the indexing database (if configured).
+    pub fn index_db_path(&self) -> Option<&str> {
+        self.index_db_path.as_deref()
+    }
+
+    /// Optional path to the block file where blocks are stored (if configured).
+    pub fn block_file_path(&self) -> Option<&str> {
+        self.block_file_path.as_deref()
     }
 }
 
