@@ -14,7 +14,7 @@ use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
 use eupp_core::transaction::{Transaction, TransactionError};
 use eupp_core::{VirtualSize, block::Block, miner};
 
-use futures::StreamExt;
+use libp2p::futures::StreamExt;
 use libp2p::{
     PeerId, StreamProtocol, SwarmBuilder, gossipsub, mdns,
     request_response::{self, ProtocolSupport},
@@ -156,7 +156,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         let _ = swarm
             .behaviour_mut()
             .gossipsub
-            .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
     }
 
     /// Handles incoming gossip messages and processes them based on their type.
@@ -169,7 +169,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     where
         L: Indexer + LedgerView,
     {
-        let msg: GossipMessage = bincode::deserialize(&message.data)?;
+        let msg: GossipMessage = postcard::from_bytes(&message.data)?;
         match msg {
             GossipMessage::Transaction(tx) => {
                 let mut mp = self.mempool.write().unwrap();
@@ -214,7 +214,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         let _ = swarm
                             .behaviour_mut()
                             .gossipsub
-                            .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
                     }
                 }
             }
@@ -248,7 +248,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 let _ = swarm
                     .behaviour_mut()
                     .gossipsub
-                    .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                    .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
             }
         }
     }
@@ -460,7 +460,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         let _ = swarm
                             .behaviour_mut()
                             .gossipsub
-                            .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
                         println!("-> Gossiping Tx {} from RPC", hex::encode(tx_hash));
                         let _ = responder.send(RpcResponse::TransactionHash(tx_hash));
                     }
@@ -516,7 +516,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     let _ = swarm
                         .behaviour_mut()
                         .gossipsub
-                        .publish(topic.clone(), bincode::serialize(&msg).unwrap());
+                        .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
                     break;
                 }
                 Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id))) => {

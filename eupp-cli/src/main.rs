@@ -1,9 +1,7 @@
-use anyhow::Result;
 use clap::Parser;
-use ed25519_dalek::SigningKey;
 use eupp_core::ledger::Query;
-use eupp_core::transaction::{Input, Output, Transaction, sighash};
-use eupp_core::{Hash, commitment};
+use eupp_core::transaction::{Input, Output, OutputId, Transaction, sighash};
+use eupp_core::{Hash, commitment, keypair};
 use hex;
 use std::time::Duration;
 
@@ -28,13 +26,16 @@ struct Args {
     amount: u64,
 }
 
-fn main() -> Result<()> {
+fn main() {
     let args = Args::parse();
 
     // --- Construct a transaction from CLI arguments ---
-    let secret_key_bytes = hex::decode(args.secret_key.as_bytes())?;
-    let signing_key = SigningKey::try_from(secret_key_bytes.as_slice())
-        .map_err(|e| anyhow::anyhow!("Failed to parse secret key: {}", e))?;
+    let secret_key_bytes = hex::decode(args.secret_key.as_bytes()).unwrap();
+    let signing_key = secret_key_bytes
+        .try_into()
+        .as_ref()
+        .map(keypair)
+        .expect("Failed to parse secret key!");
     let public_key = signing_key.verifying_key().to_bytes();
     let data = [0_u8; 32];
     let address = commitment(&public_key, Some(data.as_slice()));
@@ -47,29 +48,32 @@ fn main() -> Result<()> {
 
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
-        .build()?;
+        .build()
+        .expect("Failed to build client");
 
     // Fetch UTXOs
     let resp = client
         .post(format!("{base}/transactions/outputs"))
         .json(&query)
-        .send()?;
+        .send()
+        .unwrap();
 
     if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("Failed to fetch UTXOs: {}", resp.status()));
+        panic!("Failed to fetch UTXOs: {}", resp.status());
     }
 
     // Deserialize the response
-    let utxos: Vec<(eupp_core::transaction::OutputId, Output)> = resp.json()?;
+    let utxos: Vec<(OutputId, Output)> = resp.json().unwrap();
     let balance: u64 = utxos.iter().map(|(_, output)| output.amount()).sum();
     println!("Address: {}", hex::encode(address));
     println!("Balance: {} units", balance);
 
     // Determine recipient
     let recipient_pubkey = if let Some(remote_pubkey_hex) = args.remote_pubkey {
-        hex::decode(remote_pubkey_hex)?
+        hex::decode(remote_pubkey_hex)
+            .unwrap()
             .try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid remote_pubkey length, expected 32 bytes"))?
+            .expect("Invalid remote_pubkey length, expected 32 bytes")
     } else {
         public_key
     };
@@ -104,21 +108,17 @@ fn main() -> Result<()> {
     let resp = client
         .post(format!("{base}/transactions"))
         .json(&tx)
-        .send()?;
+        .send()
+        .unwrap();
 
     if !resp.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "Failed to broadcast transaction: {}",
-            resp.status()
-        ));
+        panic!("Failed to broadcast transaction: {}", resp.status());
     }
 
     // Expect a TransactionHash in the response body (array of bytes)
-    let broadcasted_hash: eupp_core::transaction::TransactionHash = resp.json()?;
+    let broadcasted_hash: eupp_core::transaction::TransactionHash = resp.json().unwrap();
     println!(
         "Transaction {} broadcasted successfully.",
         hex::encode(broadcasted_hash)
     );
-
-    Ok(())
 }

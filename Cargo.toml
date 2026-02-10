@@ -10,11 +10,8 @@ members = [ "eupp-cli","eupp-core", "eupp-db", "eupp-net"]
 eupp-core = { path = "./eupp-core" }
 eupp-net = { path = "./eupp-net" }
 eupp-db = { path = "./eupp-db" }
-tokio = { version = "1.0", features = ["full"] }
-blake2 = "0.10.6"
+tokio = { version = "1.0", features = ["rt-multi-thread"] }
 hex = "0.4.3"
 
 # HTTP API and serialization dependencies used by the top-level binary
 axum = { version = "0.6", features = ["json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
