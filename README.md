@@ -1,8 +1,12 @@
 # EUPP — Experimental UTXO Payment Protocol
 
 ## Introduction
-EUPP is a compact UTXO ledger that ties transaction semantics to consensus via the Lead UTXO model. It includes a stack-based VM for programmable spending conditions and a Chained Mask Proof-of-Work for block production. See [WHITEPAPER.md](./WHITEPAPER.md) for the full protocol rationale and design details.
+EUPP is a compact UTXO ledger that ties transaction semantics to consensus via the Lead UTXO model. It includes a stack-based VM for programmable spending conditions and a Chained Mask Proof-of-Work for block production.
 
+See [WHITEPAPER.md](./WHITEPAPER.md) for the full protocol rationale and design details.
+
+> [!WARNING]
+> AI is used in the development and coding of this project.
 
 ## Components
 - [eupp](./) — Node binary. Boots and runs a local node, orchestrates networking, mempool, block assembly, consensus validation, and persistence.
@@ -19,28 +23,28 @@ EUPP is a compact UTXO ledger that ties transaction semantics to consensus via t
 ## Quick start
 
 Clone:
-```
+```sh
 git clone https://github.com/snakedye/eupp.git
 cd eupp
 ```
 
 ## Build
-```
+```sh
 cargo build --workspace --release
 ```
 
 Build one crate:
-```
+```sh
 cargo build -p eupp --release
 ```
 
 ## Run (single node)
 1. Create a 32-byte secret (hex, 64 chars), e.g.:
-```
+```sh
 openssl rand -hex 32
 ```
 2. Export and run:
-```
+```sh
 export EUPP_SECRET_KEY=<your-64-hex>
 cargo run -p eupp --release
 ```
@@ -48,12 +52,12 @@ cargo run -p eupp --release
 ## Notes
 - The node reads configuration from `.env` or environment variables. See [.env.template](./.env.template).
 - Use `eupp-cli` to inspect peers, construct and broadcast transactions:
-```eupp/README.md#L8-8
+```sh
 cargo run -p eupp-cli -- --help
 ```
 
-## Contributing & Info
-- Read the protocol rationale: [WHITEPAPER.md](./WHITEPAPER.md)
-- Open issues or PRs for bugs and features
+## Contributing
+1. Read the [WHITEPAPER.md](./WHITEPAPER.md)
+2. Open issues or PRs for bugs and features
 
 That's it — enough to build and run a local node.
