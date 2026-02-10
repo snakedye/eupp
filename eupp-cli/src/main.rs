@@ -112,7 +112,10 @@ fn main() {
         .unwrap();
 
     if !resp.status().is_success() {
-        panic!("Failed to broadcast transaction: {}", resp.status());
+        panic!(
+            "Failed to broadcast transaction: {:?}",
+            resp.text().unwrap()
+        );
     }
 
     // Expect a TransactionHash in the response body (array of bytes)

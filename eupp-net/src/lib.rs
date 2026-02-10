@@ -7,7 +7,7 @@ use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::config::Config;
 use crate::mempool::Mempool;
 use crate::protocol::{
-    GossipMessage, NetworkInfo, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
+    GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
 use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
 use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
@@ -36,7 +36,7 @@ struct PeerSyncState {
 }
 
 /// Represents a full node in the Eupp network.
-type RpcResponder = tokio::sync::oneshot::Sender<RpcResponse>;
+type RpcResponder = tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>;
 type RpcRequestMessage = (RpcRequest, RpcResponder);
 
 #[derive(Clone)]
@@ -51,12 +51,13 @@ impl RpcClient {
     }
 
     /// Send a request and await the response.
-    pub async fn request(&self, req: RpcRequest) -> Option<RpcResponse> {
+    pub async fn request(&self, req: RpcRequest) -> Result<RpcResponse, RpcError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Err(err) = self.inner.send((req, tx)).await {
-            error!("Failed to send RPC request: {}", err);
-        }
-        rx.await.ok()
+        self.inner
+            .send((req, tx))
+            .await
+            .map_err(|_| RpcError::ChannelClosed)?;
+        rx.await.map_err(|_| RpcError::ChannelClosed)?
     }
 }
 
@@ -410,7 +411,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     async fn handle_rpc_event(
         &mut self,
         request: RpcRequest,
-        responder: tokio::sync::oneshot::Sender<RpcResponse>,
+        responder: tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>,
         swarm: &mut Swarm<EuppBehaviour>,
         topic: gossipsub::IdentTopic,
     ) where
@@ -433,14 +434,11 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         })
                         .unwrap_or_default();
 
-                    if let Err(_) = responder.send(RpcResponse::NetworkInfo(info)) {
+                    if let Err(_) = responder.send(Ok(RpcResponse::NetworkInfo(info))) {
                         error!("Failed to send NetworkInfo RPC response: receiver dropped");
                     }
                 } else {
-                    // Best-effort: drop response on lock failure
-                    if let Err(_) =
-                        responder.send(RpcResponse::Error("An error occurred".to_string()))
-                    {
+                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
                         error!("Failed to send error RPC response: receiver dropped");
                     }
                 }
@@ -456,26 +454,24 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         }
                         _ => 0u64,
                     };
-                    if let Err(_) = responder.send(RpcResponse::Confirmations(confirmations)) {
+                    if let Err(_) = responder.send(Ok(RpcResponse::Confirmations(confirmations))) {
                         error!("Failed to send Confirmations RPC response: receiver dropped");
                     }
                 } else {
-                    if let Err(_) = responder.send(RpcResponse::Confirmations(0)) {
-                        error!(
-                            "Failed to send Confirmations fallback RPC response: receiver dropped"
-                        );
+                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
+                        error!("Failed to send error RPC response: receiver dropped");
                     }
                 }
             }
             RpcRequest::GetUtxos { query } => {
                 if let Ok(lg) = self.ledger.read() {
                     let outputs = lg.query_outputs(&query);
-                    if let Err(_) = responder.send(RpcResponse::Utxos(outputs)) {
+                    if let Err(_) = responder.send(Ok(RpcResponse::Utxos(outputs))) {
                         error!("Failed to send Utxos RPC response: receiver dropped");
                     }
                 } else {
-                    if let Err(_) = responder.send(RpcResponse::Utxos(Vec::new())) {
-                        error!("Failed to send Utxos fallback RPC response: receiver dropped");
+                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
+                        error!("Failed to send error RPC response: receiver dropped");
                     }
                 }
             }
@@ -495,15 +491,15 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             error!(?err, "Failed to publish Transaction via gossip");
                         }
                         info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC");
-                        if let Err(_) = responder.send(RpcResponse::TransactionHash(tx_hash)) {
+                        if let Err(_) = responder.send(Ok(RpcResponse::TransactionHash(tx_hash))) {
                             error!("Failed to send TransactionHash RPC response: receiver dropped");
                         }
                     }
                     Err(e) => {
-                        if let Err(_) = responder.send(RpcResponse::Error(format!(
+                        if let Err(_) = responder.send(Err(RpcError::Handler(format!(
                             "Failed to add transaction to mempool: {:?}",
                             e
-                        ))) {
+                        )))) {
                             error!("Failed to send error RPC response: receiver dropped");
                         }
                     }
