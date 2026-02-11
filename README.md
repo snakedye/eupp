@@ -5,7 +5,7 @@ EUPP is a compact UTXO ledger that ties transaction semantics to consensus via t
 
 See [WHITEPAPER.md](./WHITEPAPER.md) for the full protocol rationale and design details.
 
-> [!WARNING]
+> [!NOTE]
 > AI is used in the development and coding of this project.
 
 ## Components
