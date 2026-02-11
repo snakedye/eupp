@@ -7,7 +7,7 @@ use eupp_core::{
 use eupp_db::RedbIndexer;
 use eupp_net::{EuppNode, config::Config, mempool::SimpleMempool};
 use std::net::SocketAddr;
-use tracing::{error, info};
+use tracing::{Level, error, info};
 mod api;
 
 #[tokio::main]
@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(Level::INFO.as_str())),
         )
         .init();
 
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app = api::router(rpc_client);
 
             // Bind address (use port from config if present, otherwise 3000)
-            let bind_port = config.port.unwrap_or(3000);
+            let bind_port = config.api_port.unwrap_or(3000);
             let addr = SocketAddr::from(([0, 0, 0, 0], bind_port));
             info!(address = %addr, "Starting HTTP API");
 

@@ -653,9 +653,12 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             })?
             .build();
 
-        let topic = gossipsub::IdentTopic::new("eupp-testnet");
+        let topic = gossipsub::IdentTopic::new(self.config.network_name());
         swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
-        let listen_addr = "/ip4/0.0.0.0/tcp/0";
+        let listen_addr = match self.config.p2p_port {
+            Some(port) => format!("/ip4/0.0.0.0/tcp/{}", port),
+            None => "/ip4/0.0.0.0/tcp/0".to_string(),
+        };
         swarm.listen_on(listen_addr.parse()?)?;
 
         // Set up channels for mining communication
