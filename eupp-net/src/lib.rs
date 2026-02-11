@@ -7,7 +7,7 @@ use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::config::Config;
 use crate::mempool::Mempool;
 use crate::protocol::{
-    GossipMessage, NetworkInfo, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
+    GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
 use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
 use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
@@ -23,6 +23,7 @@ use libp2p::{
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use tokio::sync::mpsc::Sender;
+use tracing::{debug, error, info};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -35,7 +36,7 @@ struct PeerSyncState {
 }
 
 /// Represents a full node in the Eupp network.
-type RpcResponder = tokio::sync::oneshot::Sender<RpcResponse>;
+type RpcResponder = tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>;
 type RpcRequestMessage = (RpcRequest, RpcResponder);
 
 #[derive(Clone)]
@@ -50,12 +51,13 @@ impl RpcClient {
     }
 
     /// Send a request and await the response.
-    pub async fn request(&self, req: RpcRequest) -> Option<RpcResponse> {
+    pub async fn request(&self, req: RpcRequest) -> Result<RpcResponse, RpcError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if let Err(err) = self.inner.send((req, tx)).await {
-            eprintln!("Failed to send RPC request: {}", err);
-        }
-        rx.await.ok()
+        self.inner
+            .send((req, tx))
+            .await
+            .map_err(|_| RpcError::ChannelClosed)?;
+        rx.await.map_err(|_| RpcError::ChannelClosed)?
     }
 }
 
@@ -103,16 +105,17 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     where
         L: Indexer,
     {
-        println!(
-            "Initiating sync with peer {}, starting from their tip",
-            peer_id,
+        info!(
+            peer_id = %peer_id,
+            "Initiating sync with peer, starting from their tip",
         );
         *self.sync_target.write().unwrap() = Some(peer_id);
         let lg = self.ledger.read().unwrap();
         let to = lg.get_last_block_metadata().map(|meta| meta.hash);
 
         // send_request returns an OutboundRequestId; ignore the return value.
-        let _ = swarm
+        debug!(peer_id = %peer_id, "Sending GetBlockHeaders request to peer");
+        swarm
             .behaviour_mut()
             .sync
             .send_request(&peer_id, SyncRequest::GetBlockHeaders { from: None, to });
@@ -144,19 +147,22 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         // Clear provisional sync target; we'll select the best peer after tip responses arrive.
         self.sync_target.write().unwrap().take();
         if let Some((peer_id, _)) = self.find_sync_target() {
-            println!(
-                "ChainTip gathering complete, initiating sync with {}",
-                peer_id
+            info!(
+                peer_id = %peer_id,
+                "ChainTip gathering complete, initiating sync",
             );
             self.initiate_sync(swarm, peer_id);
         }
 
         // Broadcast GetChainTip over gossipsub
         let msg = GossipMessage::GetChainTip;
-        let _ = swarm
+        if let Err(err) = swarm
             .behaviour_mut()
             .gossipsub
-            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
+            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+        {
+            error!(?err, "Failed to publish GetChainTip via gossip");
+        }
     }
 
     /// Handles incoming gossip messages and processes them based on their type.
@@ -176,9 +182,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 let lg = self.ledger.read().unwrap();
                 let tx_hash = tx.hash();
                 if let Ok(_) = mp.add(tx, &*lg) {
-                    println!(
-                        "<- Recv Tx {} via gossip, added to mempool.",
-                        hex::encode(tx_hash)
+                    info!(
+                        tx_hash = %hex::encode(tx_hash),
+                        "<- Recv Tx via gossip, added to mempool",
                     );
                 }
             }
@@ -191,9 +197,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     }
 
                     if let Ok(_) = added_res {
-                        println!(
-                            "<- Recv Block {} via gossip",
-                            hex::encode(block.header().hash())
+                        info!(
+                            block_hash = %hex::encode(block.header().hash()),
+                            "<- Recv Block via gossip",
                         );
                     }
                 }
@@ -211,10 +217,13 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             hash: meta.hash,
                             supply: meta.available_supply,
                         };
-                        let _ = swarm
+                        if let Err(err) = swarm
                             .behaviour_mut()
                             .gossipsub
-                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
+                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+                        {
+                            error!(?err, "Failed to publish ChainTip via gossip");
+                        }
                     }
                 }
             }
@@ -241,14 +250,17 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     ) {
         if let mdns::Event::Discovered(list) = event {
             for (peer_id, _multiaddr) in list {
-                println!("Discovered a new peer: {peer_id}");
+                info!(peer_id = %peer_id, "Discovered a new peer");
                 swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                 // Ask peers to advertise their chain tip via gossip.
                 let msg = GossipMessage::GetChainTip;
-                let _ = swarm
+                if let Err(err) = swarm
                     .behaviour_mut()
                     .gossipsub
-                    .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
+                    .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+                {
+                    error!(?err, "Failed to publish GetChainTip to new peer via gossip");
+                }
             }
         }
     }
@@ -285,7 +297,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                     .sync
                                     .send_response(channel, SyncResponse::BlockHeaders(headers))
                                 {
-                                    eprintln!("Failed to send BlocksHash response: {:?}", e);
+                                    error!("Failed to send BlocksHash response: {:?}", e);
                                 }
                             }
                         }
@@ -312,7 +324,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                         .sync
                                         .send_response(channel, SyncResponse::Blocks(blocks))
                                     {
-                                        eprintln!("Failed to send Blocks response: {:?}", e);
+                                        error!("Failed to send Blocks response: {:?}", e);
                                     }
                                 }
                             }
@@ -321,13 +333,14 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     request_response::Message::Response { response, .. } => match response {
                         SyncResponse::BlockHeaders(headers) => {
                             if headers.len() <= 1 {
-                                println!("Syncing done.");
+                                info!("Syncing done.");
                                 *self.sync_target.write().unwrap() = None;
                                 return;
                             }
                             self.block_fetch_queue = headers;
                             // This will start the block fetch process
-                            let _ = swarm.behaviour_mut().sync.send_request(
+                            debug!(peer = %peer, "Sending initial GetBlocks request to peer");
+                            swarm.behaviour_mut().sync.send_request(
                                 &peer,
                                 SyncRequest::GetBlocks {
                                     from: Some([0; 32]),
@@ -342,14 +355,14 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                 for block in blocks.iter().rev() {
                                     match lg.add_block(block) {
                                         Ok(_) => {
-                                            println!(
-                                                "<- Synced Block {}",
-                                                hex::encode(block.header().hash())
+                                            info!(
+                                                block_hash = %hex::encode(block.header().hash()),
+                                                "<- Synced Block",
                                             );
                                         }
                                         // Terminate sync if there's an invalid proof of work.
                                         Err(BlockError::ChallengeError) => {
-                                            eprintln!("Invalid proof of work!");
+                                            error!("Invalid proof of work!");
                                             *self.sync_target.write().unwrap() = None;
                                             return;
                                         }
@@ -359,7 +372,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                 // If there are no pending blocks, send a request to continue syncing
                                 if self.block_fetch_queue.is_empty() {
                                     let to = blocks.first().map(|block| block.header().hash());
-                                    let _ = swarm.behaviour_mut().sync.send_request(
+                                    debug!(peer = %peer, "Sending GetBlockHeaders request to continue sync");
+                                    swarm.behaviour_mut().sync.send_request(
                                         &peer,
                                         SyncRequest::GetBlockHeaders { from: None, to },
                                     );
@@ -373,7 +387,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                 {
                                     let from = chunk.first().map(|h| h.hash());
                                     let to = chunk.last().map(|h| h.hash());
-                                    let _ = swarm
+                                    debug!(peer = %peer, "Sending GetBlocks request for next chunk");
+                                    swarm
                                         .behaviour_mut()
                                         .sync
                                         .send_request(&peer, SyncRequest::GetBlocks { from, to });
@@ -396,7 +411,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     async fn handle_rpc_event(
         &mut self,
         request: RpcRequest,
-        responder: tokio::sync::oneshot::Sender<RpcResponse>,
+        responder: tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>,
         swarm: &mut Swarm<EuppBehaviour>,
         topic: gossipsub::IdentTopic,
     ) where
@@ -419,10 +434,13 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         })
                         .unwrap_or_default();
 
-                    let _ = responder.send(RpcResponse::NetworkInfo(info));
+                    if let Err(_) = responder.send(Ok(RpcResponse::NetworkInfo(info))) {
+                        error!("Failed to send NetworkInfo RPC response: receiver dropped");
+                    }
                 } else {
-                    // Best-effort: drop response on lock failure
-                    let _ = responder.send(RpcResponse::Error("An error occurred".to_string()));
+                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
+                        error!("Failed to send error RPC response: receiver dropped");
+                    }
                 }
             }
             RpcRequest::GetConfirmations { tx_hash } => {
@@ -436,17 +454,25 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         }
                         _ => 0u64,
                     };
-                    let _ = responder.send(RpcResponse::Confirmations(confirmations));
+                    if let Err(_) = responder.send(Ok(RpcResponse::Confirmations(confirmations))) {
+                        error!("Failed to send Confirmations RPC response: receiver dropped");
+                    }
                 } else {
-                    let _ = responder.send(RpcResponse::Confirmations(0));
+                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
+                        error!("Failed to send error RPC response: receiver dropped");
+                    }
                 }
             }
             RpcRequest::GetUtxos { query } => {
                 if let Ok(lg) = self.ledger.read() {
                     let outputs = lg.query_outputs(&query);
-                    let _ = responder.send(RpcResponse::Utxos(outputs));
+                    if let Err(_) = responder.send(Ok(RpcResponse::Utxos(outputs))) {
+                        error!("Failed to send Utxos RPC response: receiver dropped");
+                    }
                 } else {
-                    let _ = responder.send(RpcResponse::Utxos(Vec::new()));
+                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
+                        error!("Failed to send error RPC response: receiver dropped");
+                    }
                 }
             }
             RpcRequest::SendRawTransaction { tx } => {
@@ -457,18 +483,25 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 match mempool.add(tx.clone(), &*lg) {
                     Ok(_) => {
                         let msg = GossipMessage::Transaction(tx);
-                        let _ = swarm
+                        if let Err(err) = swarm
                             .behaviour_mut()
                             .gossipsub
-                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
-                        println!("-> Gossiping Tx {} from RPC", hex::encode(tx_hash));
-                        let _ = responder.send(RpcResponse::TransactionHash(tx_hash));
+                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+                        {
+                            error!(?err, "Failed to publish Transaction via gossip");
+                        }
+                        info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC");
+                        if let Err(_) = responder.send(Ok(RpcResponse::TransactionHash(tx_hash))) {
+                            error!("Failed to send TransactionHash RPC response: receiver dropped");
+                        }
                     }
                     Err(e) => {
-                        let _ = responder.send(RpcResponse::Error(format!(
+                        if let Err(_) = responder.send(Err(RpcError::Handler(format!(
                             "Failed to add transaction to mempool: {:?}",
                             e
-                        )));
+                        )))) {
+                            error!("Failed to send error RPC response: receiver dropped");
+                        }
                     }
                 }
             }
@@ -501,9 +534,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         loop {
             match lg.add_block(&block) {
                 Ok(_) => {
-                    println!(
-                        "-> Send Block via gossip {}",
-                        hex::encode(block.header().hash())
+                    info!(
+                        block_hash = %hex::encode(block.header().hash()),
+                        "-> Send Block via gossip",
                     );
 
                     // Remove transactions included in the block from the mempool
@@ -513,10 +546,13 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
 
                     // Broadcast new block via gossip
                     let msg = GossipMessage::NewBlock(block);
-                    let _ = swarm
+                    if let Err(err) = swarm
                         .behaviour_mut()
                         .gossipsub
-                        .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap());
+                        .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+                    {
+                        error!(?err, "Failed to publish NewBlock via gossip");
+                    }
                     break;
                 }
                 Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id))) => {
@@ -527,7 +563,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 Err(err) => {
                     // Clear mempool on other errors and log
                     self.mempool.write().unwrap().clear();
-                    eprintln!("Failed to add block to ledger: {:?}", err);
+                    error!(?err, "Failed to add block to ledger");
                     break;
                 }
             }
@@ -645,14 +681,14 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     },
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                         if let Err(e) = self.handle_gossip_message(message, &mut swarm, topic.clone()).await {
-                             eprintln!("Failed to handle gossip message: {:?}", e);
+                             error!("Failed to handle gossip message: {:?}", e);
                         }
                     },
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Sync(event)) => {
                         self.handle_sync_event(event, &mut swarm).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        println!("Local node listening on: {address}");
+                        info!(address = %address, "Local node listening on");
                     }
                     _ => {}
                 },

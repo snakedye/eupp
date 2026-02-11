@@ -15,3 +15,5 @@ hex = "0.4.3"
 
 # HTTP API and serialization dependencies used by the top-level binary
 axum = { version = "0.6", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
