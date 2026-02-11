@@ -34,6 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_fs(config.block_file_path().expect("Block file path not found"))
         .unwrap();
 
+    // Store the public key in the recovery table
+    ledger.store("public_key", public_key)?;
+
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.
     // A mask requiring 2.5 bytes of zeros for a valid PoW solution.

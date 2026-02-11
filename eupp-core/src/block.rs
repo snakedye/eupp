@@ -30,6 +30,8 @@ validated and added to the chain. It assumes the presence of an `Indexer` trait 
 accessing blockchain data and a `Transaction` structure for representing transactions.
 */
 
+use std::error::Error;
+
 use crate::{
     miner::mining_solution,
     transaction::{OutputId, TransactionError},
@@ -82,7 +84,7 @@ pub struct BlockHeader {
 }
 
 /// Represents errors that can occur when validating blocks.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum BlockError {
     /// The previous block hash is invalid or not found.
     InvalidBlockHash(String),
@@ -97,12 +99,67 @@ pub enum BlockError {
     /// An error occurred in one of the block's transactions.
     TransactionError(super::transaction::TransactionError),
     /// An error occurred while indexing the block.
-    Other(String),
+    Other(Box<dyn Error>),
+}
+
+impl PartialEq for BlockError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (BlockError::InvalidBlockHash(a), BlockError::InvalidBlockHash(b)) => a == b,
+            (BlockError::InvalidBlockSize(a), BlockError::InvalidBlockSize(b)) => a == b,
+            (BlockError::ChallengeError, BlockError::ChallengeError) => true,
+            (BlockError::InvalidVersion(a), BlockError::InvalidVersion(b)) => a == b,
+            (
+                BlockError::SupplyError {
+                    min_expected: min_a,
+                    actual: actual_a,
+                },
+                BlockError::SupplyError {
+                    min_expected: min_b,
+                    actual: actual_b,
+                },
+            ) => min_a == min_b && actual_a == actual_b,
+            (BlockError::TransactionError(a), BlockError::TransactionError(b)) => a == b,
+            (BlockError::Other(_), BlockError::Other(_)) => false,
+            _ => false,
+        }
+    }
 }
 
 impl From<TransactionError> for BlockError {
     fn from(err: TransactionError) -> Self {
         BlockError::TransactionError(err)
+    }
+}
+
+impl<T: Error + 'static> From<T> for BlockError {
+    fn from(err: T) -> Self {
+        BlockError::Other(Box::new(err))
+    }
+}
+
+impl std::fmt::Display for BlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockError::InvalidBlockHash(msg) => write!(f, "Invalid block hash: {}", msg),
+            BlockError::InvalidBlockSize(size) => {
+                write!(f, "Invalid block size: {} exceeds maximum allowed", size)
+            }
+            BlockError::ChallengeError => write!(f, "Mining challenge was not solved correctly"),
+            BlockError::InvalidVersion(version) => {
+                write!(f, "Invalid lead UTXO version: {}", version)
+            }
+            BlockError::SupplyError {
+                min_expected,
+                actual,
+            } => write!(
+                f,
+                "Supply error: actual {} is outside allowed range (min expected: {})",
+                actual, min_expected
+            ),
+            BlockError::TransactionError(err) => write!(f, "Transaction error: {:?}", err),
+            BlockError::Other(err) => write!(f, "Other error: {}", err),
+        }
     }
 }
 

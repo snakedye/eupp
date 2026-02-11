@@ -20,7 +20,7 @@ use redb::{
 
 use crate::fs::{FileBlockStore, LedgerError};
 
-const TIP_KEY: &str = "tip";
+const MAIN_CHAIN_TIP_KEY: &str = "main_chain_tip";
 
 const RECOVERY_TABLE: TableDefinition<&str, Vec<u8>> = TableDefinition::new("recovery_table");
 const METADATA_TABLE: TableDefinition<Hash, BlockMetadataValue> =
@@ -188,11 +188,25 @@ impl<S, Fs> RedbIndexer<S, Fs> {
         let read_tx = db.begin_read().unwrap();
         let recovery_table = read_tx.open_table(RECOVERY_TABLE).ok()?;
         recovery_table
-            .get(TIP_KEY)
+            .get(MAIN_CHAIN_TIP_KEY)
             .ok()
             .flatten()
             .map(|tip| tip.value().try_into().ok())
             .flatten()
+    }
+    /// Stores a key-value pair in the recovery table.
+    pub fn store<'a, T: Into<Vec<u8>>>(
+        &self,
+        key: impl Borrow<&'a str>,
+        value: T,
+    ) -> Result<(), redb::Error> {
+        let write_tx = self.db.begin_write()?;
+        {
+            let mut table = write_tx.open_table(RECOVERY_TABLE)?;
+            table.insert(key, value.into())?;
+        }
+        write_tx.commit()?;
+        Ok(())
     }
     /// Sets the scanner function for the indexer.
     pub fn with_scanner<F>(self, scanner: F) -> RedbIndexer<F, Fs>
@@ -242,9 +256,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
             .enumerate()
         {
             let output_id = input.output_id();
-            let spent_output = utxo_set
-                .remove(output_id)
-                .map_err(|err| BlockError::Other(err.to_string()))?;
+            let spent_output = utxo_set.remove(output_id)?;
             match spent_output {
                 Some(output) if i == 0 => prev_lead_output = Some((output_id, output.value())),
                 Some(_) => {}
@@ -256,9 +268,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
 
         // We re-insert the lead UTXO to allow for forks
         if let Some((prev_lead_utxo, prev_lead_output)) = prev_lead_output {
-            utxo_set
-                .insert(prev_lead_utxo, prev_lead_output)
-                .map_err(|err| BlockError::Other(err.to_string()))?;
+            utxo_set.insert(prev_lead_utxo, prev_lead_output)?;
         }
 
         let block_hash = block.header().hash();
@@ -272,16 +282,10 @@ impl<S, Fs> RedbIndexer<S, Fs> {
         }) {
             let output_id = OutputId::new(tx_id, i as u8);
             if (self.scanner)(output) {
-                address_table
-                    .insert(output.address(), output_id.clone())
-                    .map_err(|err| BlockError::Other(err.to_string()))?;
+                address_table.insert(output.address(), output_id.clone())?;
             }
-            utxo_set
-                .insert(output_id, output)
-                .map_err(|err| BlockError::Other(err.to_string()))?;
-            tx_table
-                .insert(tx_id, block_hash)
-                .map_err(|err| BlockError::Other(err.to_string()))?;
+            utxo_set.insert(output_id, output)?;
+            tx_table.insert(tx_id, block_hash)?;
         }
         Ok(())
     }
@@ -379,24 +383,18 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
             {
                 // Update the tip to the new metadata hash.
                 self.tip = Some(metadata.hash);
-                recovery_table
-                    .insert(TIP_KEY, metadata.hash.to_vec())
-                    .map_err(|err| BlockError::Other(err.to_string()))?;
+                recovery_table.insert(MAIN_CHAIN_TIP_KEY, metadata.hash.to_vec())?;
             }
 
-            metadata_table
-                .insert(metadata.hash, metadata)
-                .map_err(|err| BlockError::Other(err.to_string()))?;
+            metadata_table.insert(metadata.hash, metadata)?;
         }
 
         if let Some(fs) = self.get_fs() {
-            fs.commit()
-                .map_err(|err| BlockError::Other(err.to_string()))?;
+            fs.commit()?;
         }
 
-        write_tx
-            .commit()
-            .map_err(|err| BlockError::Other(err.to_string()))
+        write_tx.commit()?;
+        Ok(())
     }
     fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
         let read_tx = self.db.begin_read().ok()?;
