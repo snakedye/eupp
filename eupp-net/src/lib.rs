@@ -12,7 +12,7 @@ use crate::protocol::{
 use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
 use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
 use eupp_core::transaction::{Transaction, TransactionError};
-use eupp_core::{VirtualSize, block::Block, miner};
+use eupp_core::{VirtualSize, block::Block, miner, set_n_bits};
 
 use libp2p::futures::StreamExt;
 use libp2p::{
@@ -154,14 +154,16 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             self.initiate_sync(swarm, peer_id);
         }
 
-        // Broadcast GetChainTip over gossipsub
-        let msg = GossipMessage::GetChainTip;
-        if let Err(err) = swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
-        {
-            error!(?err, "Failed to publish GetChainTip via gossip");
+        // Broadcast GetChainTip over gossipsub if there's a peer connected
+        if swarm.connected_peers().next().is_some() {
+            let msg = GossipMessage::GetChainTip;
+            if let Err(err) = swarm
+                .behaviour_mut()
+                .gossipsub
+                .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+            {
+                error!(?err, "Failed to publish GetChainTip via gossip");
+            }
         }
     }
 
@@ -570,7 +572,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         }
     }
 
-    fn spawn_mining_loop(&self, block_tx: Sender<Block>)
+    fn spawn_mining_loop(&self, block_tx: Sender<Block>, difficulty: usize)
     where
         L: Indexer,
     {
@@ -580,10 +582,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
 
         tokio::spawn(async move {
             // Delay to allow initial setup before starting the loop
-            tokio::time::sleep(Duration::from_secs(5)).await;
             loop {
                 if sync_target_miner.read().unwrap().is_some() {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
                 let metadata = {
@@ -594,9 +594,10 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     })
                 };
                 let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
-                    tokio::time::sleep(Duration::from_secs(1)).await; // Retry after a short delay
                     continue;
                 };
+                let mut mask = [0_u8; 32];
+                set_n_bits(&mut mask, difficulty);
                 let start = OsRng.try_next_u64().unwrap() as usize;
                 let result = tokio::task::spawn_blocking(move || {
                     miner::build_mining_tx(
@@ -604,17 +605,19 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         &prev_block_hash,
                         &lead_utxo_id.tx_hash,
                         &lead_utxo,
+                        Some(&mask),
                         start..start + 10_000,
                     )
                 })
                 .await
                 .unwrap();
-                if let Some((_key, mining_tx)) = result {
+                if let Some(mining_tx) = result {
                     let mut block = Block::new(0, prev_block_hash);
                     block.transactions.push(mining_tx);
                     if block_tx.send(block).await.is_err() {
                         break;
                     }
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 tokio::task::yield_now().await;
             }
@@ -668,9 +671,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
         f(RpcClient::new(rpc_tx));
 
-        // Spawn mining loop only if mining is enabled in the config
-        if self.config.mining {
-            self.spawn_mining_loop(block_tx);
+        // Spawn mining loop only if mining difficulty is configured
+        if let Some(difficulty) = self.config.mining_difficulty {
+            self.spawn_mining_loop(block_tx, difficulty);
         }
 
         let mut sync_check_interval = tokio::time::interval(Duration::from_secs(5)); // Periodic sync check

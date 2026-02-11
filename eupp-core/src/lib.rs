@@ -61,6 +61,19 @@ pub fn mask_difficulty(mask: &[u8; 32]) -> u32 {
     mask.iter().map(|byte| byte.count_ones()).sum()
 }
 
+/// Set the first `n` bits of a 32-byte array to 1.
+/// Bits are filled starting from byte index 0, LSB-first within each byte.
+pub fn set_n_bits(arr: &mut [u8; 32], n: usize) {
+    let full_bytes = n / 8;
+    let remaining_bits = n % 8;
+
+    arr[..full_bytes.min(32)].fill(0xFF);
+
+    if remaining_bits > 0 && full_bytes < 32 {
+        arr[full_bytes] |= (1u8 << remaining_bits) - 1;
+    }
+}
+
 /// Calculate block reward using an asymptotic curve.
 pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     const MAX_REWARD: u64 = 1_000_000;

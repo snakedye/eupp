@@ -43,8 +43,9 @@ pub fn build_mining_tx<R>(
     prev_block_hash: &Hash,
     prev_tx_hash: &TransactionHash,
     lead_output: &Output,
+    new_mask: Option<&Hash>,
     range: R,
-) -> Option<(SigningKey, Transaction)>
+) -> Option<Transaction>
 where
     R: IntoIterator<Item = usize>,
 {
@@ -60,7 +61,7 @@ where
         nonce[..8].copy_from_slice(&attempt.to_be_bytes());
         let solution = mining_solution(prev_block_hash, &pk_bytes, &nonce);
 
-        // Check mask against the raw public key bytes (README semantics)
+        // Check mask against the raw public key bytes (WHITEPAPER semantics)
         if matches_mask(&mask, &solution) {
             let lead_utxo_id = OutputId {
                 tx_hash: *prev_tx_hash,
@@ -71,7 +72,7 @@ where
             let new_supply = lead_output.amount.saturating_sub(reward);
 
             // Build outputs: new mint (carry forward mask) and miner reward
-            let new_mint_output = Output::new_v0(new_supply, &mask, &nonce);
+            let new_mint_output = Output::new_v0(new_supply, new_mask.unwrap_or(&mask), &nonce);
             let miner_reward_output = Output::new_v1(reward.min(new_supply), &pk_bytes, &[0; 32]);
             let outputs = vec![new_mint_output, miner_reward_output];
 
@@ -86,7 +87,7 @@ where
                 outputs,
             };
 
-            return Some((signing_key, tx));
+            return Some(tx);
         }
     }
 
@@ -95,21 +96,23 @@ where
 
 /// Build the next block by mining a valid mining transaction and assembling the block.
 pub fn build_next_block<L: Indexer>(
-    secret_key: &[u8; 32],
     indexer: &L,
+    secret_key: &[u8; 32],
+    mask: Option<&Hash>,
     max_attempts: usize,
-) -> Option<(SigningKey, crate::block::Block)> {
+) -> Option<crate::block::Block> {
     let prev_block = indexer.get_last_block_metadata()?;
     let prev_block_hash = prev_block.hash;
     let lead_utxo_id = prev_block.lead_output;
     let lead_utxo = indexer.get_output(&lead_utxo_id)?;
 
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
-    let (signing_key, mining_tx) = build_mining_tx(
+    let mining_tx = build_mining_tx(
         secret_key,
         &prev_block_hash,
         &lead_utxo_id.tx_hash,
         &lead_utxo,
+        mask,
         0..max_attempts,
     )?;
 
@@ -119,7 +122,7 @@ pub fn build_next_block<L: Indexer>(
     // Include the mining transaction as the first transaction in the block
     block.transactions.push(mining_tx);
 
-    Some((signing_key, block))
+    Some(block)
 }
 
 #[cfg(test)]
@@ -148,13 +151,14 @@ mod tests {
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
+            None,
             0..1,
         );
         assert!(
             result.is_some(),
             "Expected mining to find a solution with permissive mask"
         );
-        let (_signing_key, tx) = result.unwrap();
+        let tx = result.unwrap();
 
         // Basic structural checks
         assert_eq!(tx.inputs.len(), 1);
@@ -193,6 +197,7 @@ mod tests {
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
+            None,
             0..0,
         );
         assert_eq!(tx_opt, None, "Expected None when max_attempts is zero");
@@ -229,6 +234,7 @@ mod tests {
             &prev_block_hash,
             &prev_tx_hash,
             &prev_mint_output,
+            None,
             0..max_attempts,
         );
         let elapsed = start.elapsed();
@@ -246,7 +252,7 @@ mod tests {
         );
 
         // Sanity check the found transaction
-        let (_signing_key, tx) = result.unwrap();
+        let tx = result.unwrap();
         assert_eq!(tx.inputs.len(), 1);
         assert_eq!(tx.outputs.len(), 2);
 

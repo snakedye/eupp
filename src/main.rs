@@ -38,12 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ledger.store("public_key", public_key)?;
 
     // Build coinbase (genesis) block
-    // The coinbase transaction contains the minting UTXO at output index 0.
-    // A mask requiring 2.5 bytes of zeros for a valid PoW solution.
-    let mut mask = [0_u8; 32];
-    mask[0] = 0xFF;
-    mask[1] = 0xFF;
-    mask[2] = 0xF0; // 20 bits of zeros
+    let mask = [0_u8; 32];
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
