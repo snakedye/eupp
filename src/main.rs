@@ -7,11 +7,19 @@ use eupp_core::{
 use eupp_db::RedbIndexer;
 use eupp_net::{EuppNode, config::Config, mempool::SimpleMempool};
 use std::net::SocketAddr;
+use tracing::{Level, error, info};
 mod api;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("EUPP node starting...");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(Level::INFO.as_str())),
+        )
+        .init();
+
+    info!("EUPP node starting...");
 
     // Create a config
     let config = Config::from_env()?;
@@ -25,6 +33,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .with_fs(config.block_file_path().expect("Block file path not found"))
         .unwrap();
+
+    // Store the public key in the recovery table
+    ledger.store("public_key", public_key)?;
 
     // Build coinbase (genesis) block
     // The coinbase transaction contains the minting UTXO at output index 0.
@@ -44,9 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Add genesis block to ledger
     if let Ok(_) = ledger.add_block(&genesis_block) {
-        println!(
-            "Added genesis block. Hash: {}",
-            hex::encode(&genesis_block_hash)
+        info!(
+            hash = %hex::encode(&genesis_block_hash),
+            "Added genesis block",
         );
     }
 
@@ -64,21 +75,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app = api::router(rpc_client);
 
             // Bind address (use port from config if present, otherwise 3000)
-            let bind_port = config.port.unwrap_or(3000);
+            let bind_port = config.api_port.unwrap_or(3000);
             let addr = SocketAddr::from(([0, 0, 0, 0], bind_port));
-            println!("Starting HTTP API on http://{}", addr);
+            info!(address = %addr, "Starting HTTP API");
 
             // Spawn the HTTP server as a background task, and run the node in the main task.
             let server = axum::Server::bind(&addr).serve(app.into_make_service());
             let _server_handle = tokio::spawn(async move {
                 if let Err(e) = server.await {
-                    eprintln!("HTTP server error: {:?}", e);
+                    error!("HTTP server error: {:?}", e);
                 }
             });
         })
         .await
     {
-        eprintln!("Node error: {:?}", e);
+        error!("Node error: {:?}", e);
     }
 
     Ok(())

@@ -100,6 +100,11 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     final_reward.max(MIN_REWARD)
 }
 
+/// Generate a keypair from a secret key.
+pub fn keypair(sk: &SecretKey) -> SigningKey {
+    SigningKey::from_bytes(sk)
+}
+
 /// Serialize a byte slice to a hexadecimal string.
 pub fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where

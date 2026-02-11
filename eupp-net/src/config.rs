@@ -17,21 +17,52 @@ const DEFAULT_BLOCK_CHUNK_SIZE: usize = 16;
 
 /// Error type for config parsing issues.
 #[derive(Debug)]
-pub struct ConfigError(String);
+pub struct ConfigError {
+    /// The environment variable that caused the error.
+    pub var: &'static str,
+    /// A description of what went wrong.
+    pub message: String,
+}
+
+impl ConfigError {
+    fn new(var: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            var,
+            message: message.into(),
+        }
+    }
+}
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ConfigError: {}", self.0)
+        write!(f, "{}: {}", self.var, self.message)
     }
 }
 
 impl Error for ConfigError {}
 
+/// Read an environment variable, returning `None` when unset or empty.
+/// The returned value is always trimmed.
+fn env_var(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Node configuration.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Optional TCP port to listen on.
-    pub port: Option<u16>,
+    /// Optional TCP port for the HTTP API.
+    ///
+    /// Environment variable: `EUPP_API_PORT`
+    pub api_port: Option<u16>,
+
+    /// Optional TCP port for libp2p peer-to-peer communication.
+    /// When not set, the OS assigns a random available port.
+    ///
+    /// Environment variable: `EUPP_P2P_PORT`
+    pub p2p_port: Option<u16>,
 
     /// Raw 32 bytes of the ed25519 secret key.
     ///
@@ -53,17 +84,24 @@ pub struct Config {
     ///
     /// Environment variable: `EUPP_BLOCK_FILE`
     pub block_file_path: Option<String>,
+
+    /// The gossipsub topic / network name used for peer communication (required).
+    ///
+    /// Environment variable: `EUPP_NETWORK_NAME`
+    pub network_name: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            port: None,
+            api_port: None,
+            p2p_port: None,
             secret_key_bytes: Default::default(),
             mining: false,
             block_chunk_size: DEFAULT_BLOCK_CHUNK_SIZE,
             index_db_path: None,
             block_file_path: None,
+            network_name: String::new(),
         }
     }
 }
@@ -72,92 +110,90 @@ impl Config {
     /// Load configuration from environment variables or a `.env` file.
     ///
     /// Recognized environment variables:
-    /// - `EUPP_PORT` - optional port (u16)
+    /// - `EUPP_API_PORT` - optional HTTP API port (u16)
+    /// - `EUPP_P2P_PORT` - optional libp2p port (u16), OS-assigned if omitted
     /// - `EUPP_SECRET_KEY` - required hex-encoded 32-byte ed25519 secret key
     /// - `EUPP_MINING` - optional boolean (true/false). Accepts `1`, `true`, `yes`, `on`.
     /// - `EUPP_BLOCK_CHUNK_SIZE` - optional usize, defaults to 16
     /// - `EUPP_INDEX_DB_PATH` - optional path to the indexing database used by `eupp-db`
     /// - `EUPP_BLOCK_FILE` - optional path to the block file where blocks are stored
+    /// - `EUPP_NETWORK_NAME` - required network name / gossipsub topic
     pub fn from_env() -> Result<Self, ConfigError> {
         // Load .env if present, ignore errors
         let _ = dotenv::dotenv();
 
-        // PORT (optional)
-        let port = match env::var("EUPP_PORT").ok() {
-            Some(s) if !s.trim().is_empty() => {
-                let p = s.trim().parse::<u16>().map_err(|e| {
-                    ConfigError(format!("failed to parse EUPP_PORT='{}' as u16: {}", s, e))
-                })?;
-                Some(p)
-            }
-            _ => None,
-        };
+        let api_port = env_var("EUPP_API_PORT")
+            .map(|s| {
+                s.parse::<u16>()
+                    .map_err(|e| ConfigError::new("EUPP_API_PORT", format!("invalid u16: {e}")))
+            })
+            .transpose()?;
 
-        // MINING (optional, default false)
-        let mining = match env::var("EUPP_MINING").ok() {
-            Some(s) if !s.trim().is_empty() => parse_bool(&s).map_err(|_| {
-                ConfigError(format!("failed to parse EUPP_MINING='{}' as boolean", s))
-            })?,
-            _ => false,
-        };
+        let p2p_port = env_var("EUPP_P2P_PORT")
+            .map(|s| {
+                s.parse::<u16>()
+                    .map_err(|e| ConfigError::new("EUPP_P2P_PORT", format!("invalid u16: {e}")))
+            })
+            .transpose()?;
 
-        // BLOCK_CHUNK_SIZE (optional, default DEFAULT_BLOCK_CHUNK_SIZE)
-        let block_chunk_size = match env::var("EUPP_BLOCK_CHUNK_SIZE").ok() {
-            Some(s) if !s.trim().is_empty() => {
-                let n = s.trim().parse::<usize>().map_err(|e| {
-                    ConfigError(format!(
-                        "failed to parse EUPP_BLOCK_CHUNK_SIZE='{}' as usize: {}",
-                        s, e
-                    ))
-                })?;
-                n
-            }
-            _ => DEFAULT_BLOCK_CHUNK_SIZE,
-        };
+        let mining = env_var("EUPP_MINING")
+            .map(|s| {
+                s.to_lowercase()
+                    .parse::<bool>()
+                    .map_err(|_| ConfigError::new("EUPP_MINING", format!("invalid boolean: {s}")))
+            })
+            .transpose()?
+            .unwrap_or(false);
 
-        // INDEX DB PATH (optional) - used by eupp-db
-        let index_db_path = match env::var("EUPP_INDEX_DB_PATH").ok() {
-            Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
-            _ => None,
-        };
+        let block_chunk_size = env_var("EUPP_BLOCK_CHUNK_SIZE")
+            .map(|s| {
+                s.parse::<usize>().map_err(|e| {
+                    ConfigError::new("EUPP_BLOCK_CHUNK_SIZE", format!("invalid usize: {e}"))
+                })
+            })
+            .transpose()?
+            .unwrap_or(DEFAULT_BLOCK_CHUNK_SIZE);
 
-        // BLOCK FILE PATH (optional) - where blocks are stored on disk
-        let block_file_path = match env::var("EUPP_BLOCK_FILE").ok() {
-            Some(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
-            _ => None,
-        };
+        let index_db_path = env_var("EUPP_INDEX_DB_PATH");
+        let block_file_path = env_var("EUPP_BLOCK_FILE");
 
-        // SECRET KEY (required) - expect hex encoded 32 bytes
-        let sk_hex = env::var("EUPP_SECRET_KEY")
-            .or_else(|_| env::var("SECRET_KEY"))
-            .map_err(|_| ConfigError("EUPP_SECRET_KEY (hex-encoded 32 bytes) not set".into()))?;
+        let network_name = env_var("EUPP_NETWORK_NAME")
+            .ok_or_else(|| ConfigError::new("EUPP_NETWORK_NAME", "not set"))?;
 
-        let sk_hex_trimmed = sk_hex.trim().trim_start_matches("0x");
+        let sk_hex = env_var("EUPP_SECRET_KEY")
+            .or_else(|| env_var("SECRET_KEY"))
+            .ok_or_else(|| {
+                ConfigError::new("EUPP_SECRET_KEY", "hex-encoded 32-byte key not set")
+            })?;
+
+        let sk_hex_trimmed = sk_hex.trim_start_matches("0x");
 
         let sk_vec = hex::decode(sk_hex_trimmed).map_err(|e| {
-            ConfigError(format!(
-                "failed to decode EUPP_SECRET_KEY as hex (expected 64 hex chars): {}",
-                e
-            ))
+            ConfigError::new(
+                "EUPP_SECRET_KEY",
+                format!("invalid hex (expected 64 hex chars): {e}"),
+            )
         })?;
 
         if sk_vec.len() != 32 {
-            return Err(ConfigError(format!(
-                "EUPP_SECRET_KEY must decode to 32 bytes (got {} bytes)",
-                sk_vec.len()
-            )));
+            return Err(ConfigError::new(
+                "EUPP_SECRET_KEY",
+                format!("must decode to 32 bytes (got {})", sk_vec.len()),
+            ));
         }
 
         let mut secret_key_bytes = [0u8; 32];
         secret_key_bytes.copy_from_slice(&sk_vec);
 
         Ok(Config {
-            port,
+            api_port,
+            p2p_port,
             secret_key_bytes,
             mining,
             block_chunk_size,
             index_db_path,
             block_file_path,
+            network_name,
         })
     }
 
@@ -188,29 +224,9 @@ impl Config {
     pub fn block_file_path(&self) -> Option<&str> {
         self.block_file_path.as_deref()
     }
-}
 
-/// Parse a boolean-like string. Accepts `1`, `true`, `yes`, `on` as true; `0`, `false`, `no`, `off` as false.
-fn parse_bool(s: &str) -> Result<bool, ()> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_bool_accepts_variants() {
-        for t in &["1", "true", "True", "YES", "on"] {
-            assert_eq!(parse_bool(t).unwrap(), true);
-        }
-        for f in &["0", "false", "False", "no", "OFF"] {
-            assert_eq!(parse_bool(f).unwrap(), false);
-        }
-        assert!(parse_bool("maybe").is_err());
+    /// The gossipsub topic / network name.
+    pub fn network_name(&self) -> &str {
+        &self.network_name
     }
 }

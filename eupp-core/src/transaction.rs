@@ -265,6 +265,25 @@ impl Output {
         }
     }
 
+    /// Creates a new V1 output locked to a pre-computed address (commitment hash).
+    ///
+    /// Use this when you only have the recipient's public key hash (address)
+    /// rather than their full public key.
+    ///
+    /// # Arguments
+    ///
+    /// * `amount` - The amount for the output.
+    /// * `address` - The recipient's address (commitment hash).
+    /// * `data` - Associated data for the output.
+    pub fn to_address(amount: u64, address: &Hash, data: &Hash) -> Self {
+        Self {
+            version: Version::V1,
+            amount,
+            data: *data,
+            commitment: *address,
+        }
+    }
+
     /// Creates a new V2 output (P2SH style).
     ///
     /// # Arguments

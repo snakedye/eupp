@@ -100,7 +100,27 @@ pub enum RpcResponse {
 
     /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
-
-    /// An error response indicating that the request could not be fulfilled.
-    Error(String),
 }
+
+/// Errors returned by [`RpcClient::request`].
+#[derive(Debug, Clone)]
+pub enum RpcError {
+    /// The internal channel is closed (node shut down or receiver dropped).
+    ChannelClosed,
+    /// A shared lock (e.g. ledger or mempool) could not be acquired.
+    LockError,
+    /// The RPC handler could not fulfil the request.
+    Handler(String),
+}
+
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RpcError::ChannelClosed => write!(f, "RPC channel closed"),
+            RpcError::LockError => write!(f, "failed to acquire internal lock"),
+            RpcError::Handler(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for RpcError {}
