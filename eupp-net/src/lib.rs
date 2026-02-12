@@ -10,9 +10,9 @@ use crate::protocol::{
     GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
 use eupp_core::VirtualSize;
-use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
+use eupp_core::block::{BlockHeader, MAX_BLOCK_SIZE};
 use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
-use eupp_core::transaction::{Transaction, TransactionError};
+use eupp_core::transaction::Transaction;
 
 use libp2p::futures::StreamExt;
 use libp2p::{
@@ -121,46 +121,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         SyncHandle(Arc::downgrade(&self.sync_target))
     }
 
-    /// Sets the node to syncing state and sends the initial GetBlocksHash request.
-    /// This is called after the ChainTip phase completes (or its timeout elapses).
-    fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId)
-    where
-        L: Indexer,
-    {
-        info!(
-            peer_id = %peer_id,
-            "Initiating sync with peer, starting from their tip",
-        );
-        *self.sync_target.write().unwrap() = Some(peer_id);
-        let lg = self.indexer.read().unwrap();
-        let to = lg.get_last_block_metadata().map(|meta| meta.hash);
-
-        // send_request returns an OutboundRequestId; ignore the return value.
-        debug!(peer_id = %peer_id, "Sending GetBlockHeaders request to peer");
-        swarm
-            .behaviour_mut()
-            .sync
-            .send_request(&peer_id, SyncRequest::GetBlockHeaders { from: None, to });
-    }
-
-    /// Identifies the best peer to sync with from the known peer states.
-    fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)>
-    where
-        L: Indexer,
-    {
-        let lg = self.indexer.read().ok()?;
-        let local_supply = lg
-            .get_last_block_metadata()
-            .map(|m| m.available_supply)
-            .unwrap_or(0);
-
-        self.peers_sync_state
-            .iter()
-            .filter(|(_, state)| state.supply > local_supply)
-            .max_by_key(|(_, state)| state.supply)
-            .map(|(peer_id, state)| (*peer_id, state.clone()))
-    }
-
     /// Requests the chain tip from peers and initiates synchronization if a suitable peer is found.
     fn request_chain_tip(&mut self, swarm: &mut Swarm<EuppBehaviour>, topic: gossipsub::IdentTopic)
     where
@@ -187,6 +147,45 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         }
     }
 
+    /// Identifies the best peer to sync with from the known peer states.
+    fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)>
+    where
+        L: Indexer,
+    {
+        let lg = self.indexer.read().ok()?;
+        let local_supply = lg
+            .get_last_block_metadata()
+            .map(|m| m.available_supply)
+            .unwrap_or(0);
+
+        self.peers_sync_state
+            .iter()
+            .filter(|(_, state)| state.supply > local_supply)
+            .max_by_key(|(_, state)| state.supply)
+            .map(|(peer_id, state)| (*peer_id, state.clone()))
+    }
+
+    /// Sets the node to syncing state and sends the initial GetBlocksHash request.
+    fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId)
+    where
+        L: Indexer,
+    {
+        info!(
+            peer_id = %peer_id,
+            "Initiating sync with peer, starting from their tip",
+        );
+        *self.sync_target.write().unwrap() = Some(peer_id);
+        let lg = self.indexer.read().unwrap();
+        let to = lg.get_last_block_metadata().map(|meta| meta.hash);
+
+        // send_request returns an OutboundRequestId; ignore the return value.
+        debug!(peer_id = %peer_id, "Sending GetBlockHeaders request to peer");
+        swarm
+            .behaviour_mut()
+            .sync
+            .send_request(&peer_id, SyncRequest::GetBlockHeaders { from: None, to });
+    }
+
     /// Handles incoming gossip messages and processes them based on their type.
     async fn handle_gossip_message(
         &mut self,
@@ -203,11 +202,21 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 let mut mp = self.mempool.write().unwrap();
                 let lg = self.indexer.read().unwrap();
                 let tx_hash = tx.hash();
-                if let Ok(_) = mp.add(tx, &*lg) {
-                    info!(
-                        tx_hash = %hex::encode(tx_hash),
-                        "<- Recv Tx via gossip, added to mempool",
-                    );
+
+                match mp.add(tx, &*lg) {
+                    Ok(_) => {
+                        info!(
+                            tx_hash = %hex::encode(tx_hash),
+                            "<- Recv Tx via gossip, added to mempool",
+                        );
+                    }
+                    Err(err) => {
+                        debug!(
+                            tx_hash = %hex::encode(tx_hash),
+                            error = ?err,
+                            "Failed to add gossiped tx to mempool",
+                        );
+                    }
                 }
             }
             GossipMessage::NewBlock(block) => {
@@ -218,11 +227,20 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         added_res = lg.add_block(&block);
                     }
 
-                    if let Ok(_) = added_res {
-                        info!(
-                            block_hash = %hex::encode(block.header().hash()),
-                            "<- Recv Block via gossip",
-                        );
+                    match added_res {
+                        Ok(_) => {
+                            info!(
+                                block_hash = %hex::encode(block.header().hash()),
+                                "<- Recv Block via gossip",
+                            );
+                        }
+                        Err(err) => {
+                            error!(
+                                block_hash = %hex::encode(block.header().hash()),
+                                error = ?err,
+                                "Failed to add gossiped block",
+                            );
+                        }
                     }
                 }
             }
@@ -253,7 +271,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 hash: _hash,
                 supply,
             } => {
-                // Record peer's advertised supply for later selection. Use message.source if available.
                 if let Some(source) = message.source {
                     self.peers_sync_state
                         .insert(source, PeerSyncState { supply });
@@ -515,17 +532,6 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             debug!(?err, "Failed to publish NewBlock via gossip");
                         }
                         Ok(RpcResponse::Ok)
-                    }
-                    Err(BlockError::TransactionError(TransactionError::InvalidOutput(
-                        output_id,
-                    ))) => {
-                        // Remove offending transaction from the mempool
-                        let mut mp = self.mempool.write().unwrap();
-                        mp.remove_transactions([output_id.tx_hash]);
-                        Err(RpcError::Handler(format!(
-                            "Invalid output: {:?}",
-                            output_id
-                        )))
                     }
                     Err(err) => {
                         // Clear mempool on other errors and log
