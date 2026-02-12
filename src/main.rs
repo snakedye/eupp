@@ -53,16 +53,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let coinbase_tx = Transaction {
         inputs: vec![], // coinbase has no inputs
-        outputs: vec![Output::new_v0(std::u64::MAX, &mask, &[0; 32])],
+        outputs: vec![Output::new_v0(u64::MAX, &mask, &[0; 32])],
     };
     let mut genesis_block = Block::new(0, [0u8; 32]);
     genesis_block.transactions.push(coinbase_tx);
     let genesis_block_hash = genesis_block.header().hash();
 
     // Add genesis block to ledger
-    if let Ok(_) = indexer.add_block(&genesis_block) {
+    if indexer.add_block(&genesis_block).is_ok() {
         info!(
-            hash = %hex::encode(&genesis_block_hash),
+            hash = %hex::encode(genesis_block_hash),
             "Added genesis block",
         );
     }

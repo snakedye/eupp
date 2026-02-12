@@ -49,7 +49,7 @@ impl<I, L: Ledger> LedgerView for NodeStore<I, L> {
         = L
     where
         Self: 'a;
-    fn as_ledger<'a>(&'a self) -> Option<&'a L> {
+    fn as_ledger(&self) -> Option<&L> {
         match self {
             Self::Pruned(_) => None,
             Self::Full(ledger) => Some(ledger),

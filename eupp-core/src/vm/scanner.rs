@@ -21,9 +21,9 @@ impl<'a> Scanner<'a> {
         Scanner { bytes, idx: 0 }
     }
 
-    pub fn remaining(&self) -> usize {
-        self.bytes.len().saturating_sub(self.idx)
-    }
+    // pub fn remaining(&self) -> usize {
+    //     self.bytes.len().saturating_sub(self.idx)
+    // }
 
     fn read_u8(&mut self) -> Option<u8> {
         if self.idx < self.bytes.len() {
