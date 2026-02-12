@@ -88,7 +88,7 @@ async fn send_raw_tx(
     Json(tx): Json<Transaction>,
 ) -> Result<Json<TransactionHash>, ApiError> {
     match client
-        .request(RpcRequest::SendRawTransaction { tx })
+        .request(RpcRequest::BroadcastTransaction { tx })
         .await?
     {
         RpcResponse::TransactionHash(h) => Ok(Json(h)),

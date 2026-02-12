@@ -208,18 +208,20 @@ impl Block {
 
     /// Verifies that the `Block` is valid.
     pub fn verify<L: Indexer>(&self, indexer: &L) -> Result<(), BlockError> {
-        // We only check if there's a previous block
-        // Otherwise this block is the genesis block and we don't need to verify it
-        if indexer.get_last_block_metadata().is_some() {
+        // If this block is not a genesis block
+        if self.prev_block_hash != Hash::default() {
             let prev_block_hash = self.prev_block_hash;
 
             // Verify the previous block hash
-            let _ = indexer.get_block_metadata(&prev_block_hash).ok_or(
-                BlockError::InvalidBlockHash(format!(
-                    "Previous block hash not found: {}",
-                    hex::encode(&self.prev_block_hash)
-                )),
-            )?;
+            let prev_block_metadata =
+                indexer
+                    .get_block_metadata(&prev_block_hash)
+                    .ok_or_else(|| {
+                        BlockError::InvalidBlockHash(format!(
+                            "Previous block hash not found: {}",
+                            hex::encode(&self.prev_block_hash)
+                        ))
+                    })?;
 
             // Verify the challenge
             let lead_input = self
@@ -228,14 +230,14 @@ impl Block {
                 .and_then(|tx| tx.inputs.first())
                 .ok_or(crate::transaction::TransactionError::MissingInputs)?;
             let this_lead_utxo = self.lead_output().ok_or(BlockError::ChallengeError)?;
-            let prev_lead_utxo = indexer.get_output(&lead_input.output_id).ok_or(
-                crate::transaction::TransactionError::InvalidOutput(lead_input.output_id),
-            )?;
+            let prev_lead_utxo = indexer.get_output(&lead_input.output_id).ok_or_else(|| {
+                crate::transaction::TransactionError::InvalidOutput(lead_input.output_id)
+            })?;
 
-            // Check that the lead output belongs to the previous block
-            self.prev_lead_output()
-                .filter(|&output_id| *output_id == lead_input.output_id())
-                .ok_or_else(|| TransactionError::InvalidOutput(lead_input.output_id()))?;
+            // Check that the lead input references the previous block's lead output
+            if lead_input.output_id() != prev_block_metadata.lead_output {
+                return Err(TransactionError::InvalidOutput(lead_input.output_id()).into());
+            }
 
             let (mask, nonce) = prev_lead_utxo
                 .mask()
@@ -278,11 +280,10 @@ impl Block {
                 .map(|output| output.amount)
                 .sum();
             if total_output > total_input + fees {
-                return Err(crate::transaction::TransactionError::InvalidBalance {
+                Err(crate::transaction::TransactionError::InvalidBalance {
                     total_input,
                     total_output,
-                }
-                .into());
+                })?;
             }
 
             // Verify that the new lead utxo is v0 only
@@ -646,6 +647,47 @@ mod tests {
             Err(BlockError::InvalidVersion(_)) => (),
             e => panic!("Expected BlockError::InvalidVersion, got {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_block_with_wrong_lead_input() {
+        // The lead input of a new block must reference the previous block's
+        // lead output. Here we craft a block whose lead input spends a
+        // *different* valid UTXO, which should be rejected.
+        let genesis = genesis_block([0; 32]);
+        let genesis_hash = genesis.header().hash();
+        let genesis_tx_hash = genesis.transactions[0].hash();
+
+        // Add a second (non-lead) UTXO to the indexer so the lead input can
+        // reference a valid but wrong output.
+        let wrong_output_id = OutputId::new(genesis_tx_hash, 1);
+        let extra_output = Output::new_v0(1, &[0; 32], &[0; 32]);
+
+        let mut indexer = MockIndexer::default().with_genesis(&genesis);
+        indexer.utxos.insert(wrong_output_id, extra_output);
+
+        // Build a mining transaction that spends the wrong UTXO instead of
+        // the genesis lead output (index 0).
+        let sk: SecretKey = [1; 32];
+        let mut transaction = Transaction::new(vec![], vec![]);
+        transaction
+            .inputs
+            .push(Input::new_unsigned(wrong_output_id).sign(&sk, [0; 32]));
+        transaction
+            .outputs
+            .push(Output::new_v0(1, &[0; 32], &[0; 32]));
+
+        let mut block = Block::new(1, genesis_hash);
+        block.transactions.push(transaction);
+
+        let result = block.verify(&indexer);
+        assert_eq!(
+            result,
+            Err(BlockError::TransactionError(
+                TransactionError::InvalidOutput(wrong_output_id)
+            )),
+            "Block whose lead input does not reference the previous block's lead output should be rejected"
+        );
     }
 
     #[test]

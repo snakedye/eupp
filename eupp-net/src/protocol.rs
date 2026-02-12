@@ -83,23 +83,32 @@ pub enum RpcRequest {
 
     /// Broadcast a raw transaction to the network.
     /// Expect a `TransactionHash` in the response on success.
-    SendRawTransaction { tx: Transaction },
+    BroadcastTransaction { tx: Transaction },
+
+    /// Broadcast a mined block to the network.
+    BroadcastBlock { block: Block },
 }
 
 /// RPC responses for `RpcRequest`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RpcResponse {
-    /// Response to `GetNetworkInfo`.
+    /// Success.
+    Ok,
+
+    /// Detailed network information.
     NetworkInfo(NetworkInfo),
 
-    /// Response to `GetConfirmations`.
+    /// The number of confirmations for a given transaction hash.
     Confirmations(u64),
 
     /// All matched UTXOs in one response: pairs of (OutputId, Output).
     Utxos(Vec<(OutputId, Output)>),
 
-    /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
+    /// The hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
+
+    /// All transactions currently in the mempool.
+    Transactions(Vec<Transaction>),
 }
 
 /// Errors returned by [`RpcClient::request`].

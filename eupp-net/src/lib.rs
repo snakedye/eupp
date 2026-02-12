@@ -9,10 +9,10 @@ use crate::mempool::Mempool;
 use crate::protocol::{
     GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
+use eupp_core::VirtualSize;
 use eupp_core::block::{BlockError, BlockHeader, MAX_BLOCK_SIZE};
 use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
 use eupp_core::transaction::{Transaction, TransactionError};
-use eupp_core::{VirtualSize, block::Block, miner, set_n_bits};
 
 use libp2p::futures::StreamExt;
 use libp2p::{
@@ -20,14 +20,13 @@ use libp2p::{
     request_response::{self, ProtocolSupport},
     swarm::{Swarm, SwarmEvent},
 };
-use rand::TryRngCore;
-use rand::rngs::OsRng;
-use tokio::sync::mpsc::Sender;
 use tracing::{debug, error, info};
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use tokio::{sync::mpsc, time::Duration};
+use std::sync::{Arc, RwLock, Weak};
+use std::time::Duration;
+use tokio::sync::mpsc;
+
 /// Represents the synchronization state of a peer, including its advertised supply.
 #[derive(Clone, Debug)]
 struct PeerSyncState {
@@ -39,9 +38,21 @@ struct PeerSyncState {
 type RpcResponder = tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>;
 type RpcRequestMessage = (RpcRequest, RpcResponder);
 
+/// An RPC client to interact with the Eupp node.
 #[derive(Clone)]
 pub struct RpcClient {
     inner: tokio::sync::mpsc::Sender<RpcRequestMessage>,
+}
+
+/// An handle to the synchronization state of the Eupp node.
+pub struct SyncHandle(Weak<RwLock<Option<PeerId>>>);
+
+impl SyncHandle {
+    pub fn is_synced(&self) -> bool {
+        self.0
+            .upgrade()
+            .map_or(false, |lock| lock.read().unwrap().is_some())
+    }
 }
 
 impl RpcClient {
@@ -63,8 +74,8 @@ impl RpcClient {
 
 /// Represents a full node in the Eupp network.
 pub struct EuppNode<L, M: Mempool> {
-    /// The ledger that maintains the blockchain state.
-    ledger: Arc<RwLock<L>>,
+    /// The indexer that maintains the blockchain state.
+    indexer: Arc<RwLock<L>>,
 
     /// The mempool that holds transactions waiting to be included in a block.
     mempool: Arc<RwLock<M>>,
@@ -87,7 +98,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     pub fn new(config: Config, ledger: L, mempool: M) -> Self {
         Self {
             config,
-            ledger: Arc::new(RwLock::new(ledger)),
+            indexer: Arc::new(RwLock::new(ledger)),
             mempool: Arc::new(RwLock::new(mempool)),
             block_fetch_queue: Vec::new(),
             peers_sync_state: HashMap::new(),
@@ -95,8 +106,19 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         }
     }
 
-    fn is_syncing(&self) -> bool {
+    /// Returns a the Indexer.
+    pub fn indexer(&self) -> Arc<RwLock<L>> {
+        self.indexer.clone()
+    }
+
+    /// Returns true if the node is currently syncing.
+    pub fn is_syncing(&self) -> bool {
         self.sync_target.read().unwrap().is_some()
+    }
+
+    /// Returns an handle to the synchronization state of the Eupp node.
+    pub fn sync_handle(&self) -> SyncHandle {
+        SyncHandle(Arc::downgrade(&self.sync_target))
     }
 
     /// Sets the node to syncing state and sends the initial GetBlocksHash request.
@@ -110,7 +132,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             "Initiating sync with peer, starting from their tip",
         );
         *self.sync_target.write().unwrap() = Some(peer_id);
-        let lg = self.ledger.read().unwrap();
+        let lg = self.indexer.read().unwrap();
         let to = lg.get_last_block_metadata().map(|meta| meta.hash);
 
         // send_request returns an OutboundRequestId; ignore the return value.
@@ -126,7 +148,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     where
         L: Indexer,
     {
-        let lg = self.ledger.read().ok()?;
+        let lg = self.indexer.read().ok()?;
         let local_supply = lg
             .get_last_block_metadata()
             .map(|m| m.available_supply)
@@ -155,15 +177,13 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         }
 
         // Broadcast GetChainTip over gossipsub if there's a peer connected
-        if swarm.connected_peers().next().is_some() {
-            let msg = GossipMessage::GetChainTip;
-            if let Err(err) = swarm
-                .behaviour_mut()
-                .gossipsub
-                .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
-            {
-                error!(?err, "Failed to publish GetChainTip via gossip");
-            }
+        let msg = GossipMessage::GetChainTip;
+        if let Err(err) = swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+        {
+            debug!(?err, "Failed to publish GetChainTip via gossip");
         }
     }
 
@@ -181,7 +201,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         match msg {
             GossipMessage::Transaction(tx) => {
                 let mut mp = self.mempool.write().unwrap();
-                let lg = self.ledger.read().unwrap();
+                let lg = self.indexer.read().unwrap();
                 let tx_hash = tx.hash();
                 if let Ok(_) = mp.add(tx, &*lg) {
                     info!(
@@ -194,7 +214,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 if !self.is_syncing() {
                     let added_res;
                     {
-                        let mut lg = self.ledger.write().unwrap();
+                        let mut lg = self.indexer.write().unwrap();
                         added_res = lg.add_block(&block);
                     }
 
@@ -209,7 +229,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
             GossipMessage::GetChainTip => {
                 // Respond by publishing our ChainTip via gossipsub.
                 if let Some(lg) = self
-                    .ledger
+                    .indexer
                     .read()
                     .ok()
                     .filter(|lg| lg.as_ledger().is_some())
@@ -224,7 +244,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             .gossipsub
                             .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                         {
-                            error!(?err, "Failed to publish ChainTip via gossip");
+                            debug!(?err, "Failed to publish ChainTip via gossip");
                         }
                     }
                 }
@@ -261,7 +281,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     .gossipsub
                     .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                 {
-                    error!(?err, "Failed to publish GetChainTip to new peer via gossip");
+                    debug!(?err, "Failed to publish GetChainTip to new peer via gossip");
                 }
             }
         }
@@ -282,7 +302,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         request, channel, ..
                     } => match request {
                         SyncRequest::GetBlockHeaders { from, to } => {
-                            if let Ok(lg) = self.ledger.read() {
+                            if let Ok(lg) = self.indexer.read() {
                                 let iter = match from {
                                     Some(from) => lg.metadata_from(&from),
                                     None => lg.metadata(),
@@ -290,7 +310,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                 let halt = to
                                     .and_then(|hash| lg.get_block_metadata(&hash))
                                     .map(|meta| meta.prev_block_hash);
-                                let headers = iter
+                                let headers: Vec<_> = iter
                                     .take_while(|meta| Some(meta.hash) != halt)
                                     .map(|meta| meta.header())
                                     .collect();
@@ -304,8 +324,13 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             }
                         }
                         SyncRequest::GetBlocks { from, to } => {
-                            if let Ok(lg) = self.ledger.read() {
+                            if let Ok(lg) = self.indexer.read() {
                                 if let Some(lg) = lg.as_ledger() {
+                                    debug!(
+                                        "Sending Blocks from {} to {}",
+                                        hex::encode(from.unwrap_or_default()),
+                                        hex::encode(to.unwrap_or_default())
+                                    );
                                     let (block_iter, metadata_iter) = match from {
                                         Some(from) => {
                                             (lg.blocks_from(&from), lg.metadata_from(&from))
@@ -353,7 +378,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         SyncResponse::Blocks(blocks) => {
                             let sync_peer = *self.sync_target.read().unwrap();
                             if Some(peer) == sync_peer {
-                                let mut lg = self.ledger.write().unwrap();
+                                let mut lg = self.indexer.write().unwrap();
                                 for block in blocks.iter().rev() {
                                     match lg.add_block(block) {
                                         Ok(_) => {
@@ -362,13 +387,11 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                                                 "<- Synced Block",
                                             );
                                         }
-                                        // Terminate sync if there's an invalid proof of work.
-                                        Err(BlockError::ChallengeError) => {
-                                            error!("Invalid proof of work!");
+                                        Err(err) => {
+                                            error!("Failed to add block: {}", err);
                                             *self.sync_target.write().unwrap() = None;
                                             return;
                                         }
-                                        _ => {}
                                     }
                                 }
                                 // If there are no pending blocks, send a request to continue syncing
@@ -413,75 +436,112 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     async fn handle_rpc_event(
         &mut self,
         request: RpcRequest,
-        responder: tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>,
         swarm: &mut Swarm<EuppBehaviour>,
         topic: gossipsub::IdentTopic,
-    ) where
+    ) -> Result<RpcResponse, RpcError>
+    where
         L: Indexer,
     {
         match request {
             RpcRequest::GetNetworkInfo => {
-                if let Ok(lg) = self.ledger.read() {
-                    let info = lg
-                        .get_last_block_metadata()
-                        .map(|meta| NetworkInfo {
-                            tip_hash: meta.hash,
-                            tip_height: meta.height as u64,
-                            available_supply: meta.available_supply,
-                            peers: swarm
-                                .connected_peers()
-                                .map(|peer_id| peer_id.to_base58())
-                                .collect(),
-                            cummulative_difficulty: meta.cumulative_work.to_le_bytes(),
-                        })
-                        .unwrap_or_default();
+                let lg = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let info = lg
+                    .get_last_block_metadata()
+                    .map(|meta| NetworkInfo {
+                        tip_hash: meta.hash,
+                        tip_height: meta.height as u64,
+                        available_supply: meta.available_supply,
+                        peers: swarm
+                            .connected_peers()
+                            .map(|peer_id| peer_id.to_base58())
+                            .collect(),
+                        cummulative_difficulty: meta.cumulative_work.to_le_bytes(),
+                    })
+                    .unwrap_or_default();
 
-                    if let Err(_) = responder.send(Ok(RpcResponse::NetworkInfo(info))) {
-                        error!("Failed to send NetworkInfo RPC response: receiver dropped");
-                    }
-                } else {
-                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
-                        error!("Failed to send error RPC response: receiver dropped");
-                    }
-                }
+                Ok(RpcResponse::NetworkInfo(info))
             }
             RpcRequest::GetConfirmations { tx_hash } => {
-                if let Ok(lg) = self.ledger.read() {
-                    let tip_metadata = lg.get_last_block_metadata();
-                    let tx_block_hash = lg.get_block_from_transaction(&tx_hash);
-                    let confirmations = match (tip_metadata, tx_block_hash) {
-                        (Some(tip), Some(block_hash)) => {
-                            let block_metadata = lg.get_block_metadata(&block_hash).unwrap();
-                            tip.height.saturating_sub(block_metadata.height) as u64
-                        }
-                        _ => 0u64,
-                    };
-                    if let Err(_) = responder.send(Ok(RpcResponse::Confirmations(confirmations))) {
-                        error!("Failed to send Confirmations RPC response: receiver dropped");
+                let lg = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let tip_metadata = lg.get_last_block_metadata();
+                let tx_block_hash = lg.get_block_from_transaction(&tx_hash);
+                let confirmations = match (tip_metadata, tx_block_hash) {
+                    (Some(tip), Some(block_hash)) => {
+                        let block_metadata = lg.get_block_metadata(&block_hash).unwrap();
+                        tip.height.saturating_sub(block_metadata.height) as u64
                     }
-                } else {
-                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
-                        error!("Failed to send error RPC response: receiver dropped");
-                    }
-                }
+                    _ => 0u64,
+                };
+                Ok(RpcResponse::Confirmations(confirmations))
             }
             RpcRequest::GetUtxos { query } => {
-                if let Ok(lg) = self.ledger.read() {
-                    let outputs = lg.query_outputs(&query);
-                    if let Err(_) = responder.send(Ok(RpcResponse::Utxos(outputs))) {
-                        error!("Failed to send Utxos RPC response: receiver dropped");
+                let lg = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let outputs = lg.query_outputs(&query);
+                Ok(RpcResponse::Utxos(outputs))
+            }
+            RpcRequest::BroadcastBlock { mut block } => {
+                {
+                    let mp = self.mempool.read().unwrap();
+                    let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
+                    let selected = mp.get_transactions().scan(remaining, |remaining, tx| {
+                        // Select transactions for the block
+                        let tx_vsize = tx.vsize();
+                        *remaining = remaining.saturating_sub(tx_vsize);
+                        (*remaining > 0).then(|| tx.into_owned())
+                    });
+                    block.transactions.extend(selected);
+                }
+
+                let mut lg = self.indexer.write().map_err(|_| RpcError::LockError)?;
+                match lg.add_block(&block) {
+                    Ok(_) => {
+                        info!(
+                            block_hash = %hex::encode(block.header().hash()),
+                            "-> Send Block via gossip",
+                        );
+
+                        // Remove transactions included in the block from the mempool
+                        let mut mp = self.mempool.write().unwrap();
+                        let added_tx_hashes = block.transactions.iter().map(Transaction::hash);
+                        mp.remove_transactions(added_tx_hashes);
+
+                        // Broadcast new block via gossip
+                        let msg = GossipMessage::NewBlock(block);
+                        if let Err(err) = swarm
+                            .behaviour_mut()
+                            .gossipsub
+                            .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
+                        {
+                            debug!(?err, "Failed to publish NewBlock via gossip");
+                        }
+                        Ok(RpcResponse::Ok)
                     }
-                } else {
-                    if let Err(_) = responder.send(Err(RpcError::LockError)) {
-                        error!("Failed to send error RPC response: receiver dropped");
+                    Err(BlockError::TransactionError(TransactionError::InvalidOutput(
+                        output_id,
+                    ))) => {
+                        // Remove offending transaction from the mempool
+                        let mut mp = self.mempool.write().unwrap();
+                        mp.remove_transactions([output_id.tx_hash]);
+                        Err(RpcError::Handler(format!(
+                            "Invalid output: {:?}",
+                            output_id
+                        )))
+                    }
+                    Err(err) => {
+                        // Clear mempool on other errors and log
+                        self.mempool.write().unwrap().clear();
+                        Err(RpcError::Handler(format!(
+                            "Failed to add block to ledger: {:?}",
+                            err
+                        )))
                     }
                 }
             }
-            RpcRequest::SendRawTransaction { tx } => {
+            RpcRequest::BroadcastTransaction { tx } => {
                 // Attempt to add to local mempool, then gossip.
                 let tx_hash = tx.hash();
                 let mut mempool = self.mempool.write().unwrap();
-                let lg = self.ledger.read().unwrap();
+                let lg = self.indexer.read().unwrap();
                 match mempool.add(tx.clone(), &*lg) {
                     Ok(_) => {
                         let msg = GossipMessage::Transaction(tx);
@@ -490,138 +550,18 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             .gossipsub
                             .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                         {
-                            error!(?err, "Failed to publish Transaction via gossip");
+                            debug!(?err, "Failed to publish Transaction via gossip");
                         }
                         info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC");
-                        if let Err(_) = responder.send(Ok(RpcResponse::TransactionHash(tx_hash))) {
-                            error!("Failed to send TransactionHash RPC response: receiver dropped");
-                        }
+                        Ok(RpcResponse::TransactionHash(tx_hash))
                     }
-                    Err(e) => {
-                        if let Err(_) = responder.send(Err(RpcError::Handler(format!(
-                            "Failed to add transaction to mempool: {:?}",
-                            e
-                        )))) {
-                            error!("Failed to send error RPC response: receiver dropped");
-                        }
-                    }
+                    Err(e) => Err(RpcError::Handler(format!(
+                        "Failed to add transaction to mempool: {:?}",
+                        e
+                    ))),
                 }
             }
         }
-    }
-
-    /// Handle a mined block: select mempool transactions, attempt to add to ledger,
-    /// remove included txs from mempool, and gossip the new block.
-    fn handle_mined_block(
-        &mut self,
-        mut block: Block,
-        swarm: &mut Swarm<EuppBehaviour>,
-        topic: gossipsub::IdentTopic,
-    ) where
-        L: Indexer,
-    {
-        {
-            let mp = self.mempool.read().unwrap();
-            let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
-            let selected = mp.get_transactions().scan(remaining, |remaining, tx| {
-                // Select transactions for the block
-                let tx_vsize = tx.vsize();
-                *remaining = remaining.saturating_sub(tx_vsize);
-                (*remaining > 0).then(|| tx.into_owned())
-            });
-            block.transactions.extend(selected);
-        }
-
-        let mut lg = self.ledger.write().unwrap();
-        loop {
-            match lg.add_block(&block) {
-                Ok(_) => {
-                    info!(
-                        block_hash = %hex::encode(block.header().hash()),
-                        "-> Send Block via gossip",
-                    );
-
-                    // Remove transactions included in the block from the mempool
-                    let mut mp = self.mempool.write().unwrap();
-                    let added_tx_hashes = block.transactions.iter().map(Transaction::hash);
-                    mp.remove_transactions(added_tx_hashes);
-
-                    // Broadcast new block via gossip
-                    let msg = GossipMessage::NewBlock(block);
-                    if let Err(err) = swarm
-                        .behaviour_mut()
-                        .gossipsub
-                        .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
-                    {
-                        error!(?err, "Failed to publish NewBlock via gossip");
-                    }
-                    break;
-                }
-                Err(BlockError::TransactionError(TransactionError::InvalidOutput(output_id))) => {
-                    // Remove offending transaction from the mempool
-                    let mut mp = self.mempool.write().unwrap();
-                    mp.remove_transactions([output_id.tx_hash]);
-                }
-                Err(err) => {
-                    // Clear mempool on other errors and log
-                    self.mempool.write().unwrap().clear();
-                    error!(?err, "Failed to add block to ledger");
-                    break;
-                }
-            }
-        }
-    }
-
-    fn spawn_mining_loop(&self, block_tx: Sender<Block>, difficulty: usize)
-    where
-        L: Indexer,
-    {
-        let ledger = Arc::clone(&self.ledger);
-        let sync_target_miner = Arc::clone(&self.sync_target);
-        let secret_key = self.config.secret_key();
-
-        tokio::spawn(async move {
-            // Delay to allow initial setup before starting the loop
-            loop {
-                if sync_target_miner.read().unwrap().is_some() {
-                    continue;
-                }
-                let metadata = {
-                    let lg = ledger.read().unwrap();
-                    lg.get_last_block_metadata().and_then(|prev_block| {
-                        lg.get_output(&prev_block.lead_output)
-                            .map(|lead_utxo| (prev_block.hash, prev_block.lead_output, lead_utxo))
-                    })
-                };
-                let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
-                    continue;
-                };
-                let mut mask = [0_u8; 32];
-                set_n_bits(&mut mask, difficulty);
-                let start = OsRng.try_next_u64().unwrap() as usize;
-                let result = tokio::task::spawn_blocking(move || {
-                    miner::build_mining_tx(
-                        &secret_key,
-                        &prev_block_hash,
-                        &lead_utxo_id.tx_hash,
-                        &lead_utxo,
-                        Some(&mask),
-                        start..start + 10_000,
-                    )
-                })
-                .await
-                .unwrap();
-                if let Some(mining_tx) = result {
-                    let mut block = Block::new(0, prev_block_hash);
-                    block.transactions.push(mining_tx);
-                    if block_tx.send(block).await.is_err() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-                tokio::task::yield_now().await;
-            }
-        });
     }
 
     /// Runs the main event loop for the node, handling network events and synchronization.
@@ -664,17 +604,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         };
         swarm.listen_on(listen_addr.parse()?)?;
 
-        // Set up channels for mining communication
-        let (block_tx, mut block_rx) = mpsc::channel(1);
-
         // RPC client channel
         let (rpc_tx, mut rpc_rx) = mpsc::channel::<RpcRequestMessage>(8);
         f(RpcClient::new(rpc_tx));
-
-        // Spawn mining loop only if mining difficulty is configured
-        if let Some(difficulty) = self.config.mining_difficulty {
-            self.spawn_mining_loop(block_tx, difficulty);
-        }
 
         let mut sync_check_interval = tokio::time::interval(Duration::from_secs(5)); // Periodic sync check
 
@@ -698,12 +630,11 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     }
                     _ => {}
                 },
-                Some(block) = block_rx.recv() => {
-                    self.handle_mined_block(block, &mut swarm, topic.clone());
-                }
                 Some((request, responder)) = rpc_rx.recv() => {
-                    // Handle internal RPC requests (this will respond via the oneshot responder)
-                    self.handle_rpc_event(request, responder, &mut swarm, topic.clone()).await;
+                    let result = self.handle_rpc_event(request, &mut swarm, topic.clone()).await;
+                    if let Err(_) = responder.send(result) {
+                        error!("Failed to send RPC response: receiver dropped");
+                    }
                 }
                 _ = sync_check_interval.tick() => {
                     // Broadcast GetChainTip periodically to gather peer chain tips

@@ -164,8 +164,6 @@ pub trait IndexerExt: Indexer {
 
 impl<T: Indexer + ?Sized> IndexerExt for T {}
 
-// Implementation moved to `iter.rs`
-
 /// A Ledger represents the authoritative archival store of blocks.
 /// It extends Indexer to provide access to full block data.
 pub trait Ledger: Indexer {
@@ -208,6 +206,50 @@ pub trait LedgerExt: Ledger {
 }
 
 impl<T: Ledger + ?Sized> LedgerExt for T {}
+
+impl<T> Indexer for T
+where
+    T: std::ops::DerefMut<Target = dyn Indexer>,
+{
+    fn add_block(&mut self, block: &Block) -> Result<(), BlockError> {
+        self.deref_mut().add_block(block)
+    }
+
+    fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
+        self.deref().get_block_metadata(hash)
+    }
+
+    fn get_tip(&'_ self) -> Option<Hash> {
+        self.deref().get_tip()
+    }
+
+    fn is_utxo_spent(&self, output_id: &OutputId) -> bool {
+        self.deref().is_utxo_spent(output_id)
+    }
+
+    fn get_output(&self, output_id: &OutputId) -> Option<Output> {
+        self.deref().get_output(output_id)
+    }
+
+    fn query_outputs(&self, query: &Query) -> Vec<(OutputId, Output)> {
+        self.deref().query_outputs(query)
+    }
+
+    fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash> {
+        self.deref().get_block_from_output(output_id)
+    }
+
+    fn get_last_block_metadata(&'_ self) -> Option<Cow<'_, BlockMetadata>> {
+        self.deref().get_last_block_metadata()
+    }
+
+    fn get_block_from_transaction(
+        &self,
+        tx_hash: &super::transaction::TransactionHash,
+    ) -> Option<Hash> {
+        self.deref().get_block_from_transaction(tx_hash)
+    }
+}
 
 #[cfg(test)]
 mod tests {

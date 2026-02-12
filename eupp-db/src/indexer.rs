@@ -15,7 +15,7 @@ use eupp_core::{
 };
 use redb::{
     Key, MultimapTable, MultimapTableDefinition, ReadableDatabase, ReadableTable,
-    ReadableTableMetadata, Table, TableDefinition, Value,
+    ReadableTableMetadata, Table, TableDefinition, Value, backends::InMemoryBackend,
 };
 
 use crate::fs::{FileBlockStore, LedgerError};
@@ -144,6 +144,20 @@ pub struct RedbIndexer<S = fn(&Output) -> bool, T = ()> {
     fs: T,
 }
 
+impl Default for RedbIndexer {
+    fn default() -> Self {
+        let db = redb::Database::builder()
+            .create_with_backend(InMemoryBackend::new())
+            .expect("Failed to create database");
+        RedbIndexer {
+            db,
+            tip: Default::default(),
+            scanner: |_| false,
+            fs: (),
+        }
+    }
+}
+
 impl RedbIndexer {
     /// Creates a new RedbIndexer instance.
     pub fn new(db: redb::Database) -> Self {
@@ -158,7 +172,9 @@ impl RedbIndexer {
 
 impl<T: AsRef<Path>> From<T> for RedbIndexer {
     fn from(path: T) -> Self {
-        let db = redb::Database::create(path).unwrap();
+        let db = redb::Database::builder()
+            .create(path)
+            .expect("Failed to create database");
         let tip = RedbIndexer::<()>::recover_tip(&db);
 
         RedbIndexer {
@@ -358,8 +374,8 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
                 version: header.version,
                 hash: header.hash(),
                 prev_block_hash: header.prev_block_hash,
-                lead_output: OutputId::new(block.transactions[0].hash(), 0),
                 merkle_root: header.merkle_root,
+                lead_output: OutputId::new(block.transactions[0].hash(), 0),
                 cumulative_work: prev_cumulative_work + block_work,
                 available_supply,
                 height,

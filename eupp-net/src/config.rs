@@ -73,7 +73,7 @@ pub struct Config {
     /// with this many leading zero-bytes required in the solution hash.
     ///
     /// Environment variable: `EUPP_MINING_DIFFICULTY`
-    pub mining_difficulty: Option<usize>,
+    pub difficulty: Option<usize>,
 
     /// The number of blocks to fetch in a single synchronization chunk.
     pub block_chunk_size: usize,
@@ -100,7 +100,7 @@ impl Default for Config {
             api_port: None,
             p2p_port: None,
             secret_key_bytes: Default::default(),
-            mining_difficulty: None,
+            difficulty: None,
             block_chunk_size: DEFAULT_BLOCK_CHUNK_SIZE,
             index_db_path: None,
             block_file_path: None,
@@ -191,7 +191,7 @@ impl Config {
             api_port,
             p2p_port,
             secret_key_bytes,
-            mining_difficulty,
+            difficulty: mining_difficulty,
             block_chunk_size,
             index_db_path,
             block_file_path,
