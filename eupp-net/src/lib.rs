@@ -327,9 +327,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             if let Ok(lg) = self.indexer.read() {
                                 if let Some(lg) = lg.as_ledger() {
                                     debug!(
-                                        "Sending Blocks from {} to {}",
-                                        hex::encode(from.unwrap_or_default()),
-                                        hex::encode(to.unwrap_or_default())
+                                        from = from.map(hex::encode),
+                                        to = to.map(hex::encode),
+                                        "Sending Blocks",
                                     );
                                     let (block_iter, metadata_iter) = match from {
                                         Some(from) => {
