@@ -11,7 +11,7 @@ use eupp_core::{
 };
 use eupp_db::RedbIndexer;
 use eupp_net::{EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool};
-use indexer::AnyIndexer;
+use indexer::NodeStore;
 use rand::{TryRngCore, rngs::OsRng};
 use std::{
     net::SocketAddr,
@@ -67,10 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Create a ledger from the indexer.
+    // Select the node store
     let ledger = match config.block_file_path() {
-        Some(path) => AnyIndexer::Ledger(indexer.with_fs(path)?),
-        None => AnyIndexer::Indexer(indexer),
+        Some(path) => NodeStore::Full(indexer.with_fs(path)?),
+        None => NodeStore::Pruned(indexer),
     };
 
     // Create a mempool
