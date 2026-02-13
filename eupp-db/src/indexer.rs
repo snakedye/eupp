@@ -6,18 +6,15 @@ use std::{
 
 use ethnum::U256;
 use eupp_core::{
-    Hash,
-    block::{Block, BlockError},
-    ledger::{BlockMetadata, Cursor, IndexerExt, Ledger, LedgerView},
-    mask_difficulty,
-    transaction::{Output, OutputId, TransactionError},
+    ledger::{BlockMetadata, Cursor, IndexerExt, Ledger},
+    mask_difficulty, *,
 };
 use redb::{
     Key, MultimapTable, MultimapTableDefinition, ReadableDatabase, ReadableTable,
     ReadableTableMetadata, Table, TableDefinition, Value, backends::InMemoryBackend,
 };
 
-use crate::FileStoreView;
+use crate::FileStore;
 
 const MAIN_CHAIN_TIP_KEY: &str = "main_chain_tip";
 
@@ -300,10 +297,10 @@ impl<S, Fs> RedbIndexer<S, Fs> {
 
 impl<F, T> eupp_core::ledger::Indexer for RedbIndexer<F, T>
 where
-    T: FileStoreView,
+    T: TryAsRef<FileStore>,
     F: Fn(&Output) -> bool,
 {
-    fn add_block(&mut self, block: &eupp_core::block::Block) -> Result<(), BlockError> {
+    fn add_block(&mut self, block: &eupp_core::Block) -> Result<(), BlockError> {
         let write_tx = self.db.begin_write().unwrap();
 
         {
@@ -351,7 +348,7 @@ where
             // Set the cursor to read the block
             cursor = self
                 .fs
-                .as_fs()
+                .try_as_ref()
                 .and_then(|fs| fs.append(block).ok())
                 .map(|(pos, len)| Cursor {
                     pos: pos as usize,
@@ -394,7 +391,7 @@ where
             metadata_table.insert(metadata.hash, metadata)?;
         }
 
-        if let Some(fs) = self.fs.as_fs() {
+        if let Some(fs) = self.fs.try_as_ref() {
             fs.commit()?;
         }
 
@@ -442,31 +439,26 @@ where
     }
 }
 
-impl<F, T> LedgerView for RedbIndexer<F, T>
+impl<'a, F, T> TryAsRef<dyn Ledger + 'a> for RedbIndexer<F, T>
 where
-    T: FileStoreView,
-    F: Fn(&Output) -> bool,
+    T: TryAsRef<FileStore> + 'a,
+    F: Fn(&Output) -> bool + 'a,
 {
-    type Ledger<'a>
-        = RedbIndexer<F, T>
-    where
-        Self: 'a;
-
-    fn as_ledger<'a>(&'a self) -> Option<&'a Self::Ledger<'a>> {
-        self.fs.as_fs().map(|_| self)
+    fn try_as_ref(&self) -> Option<&(dyn Ledger + 'a)> {
+        self.fs.try_as_ref().map(|_| self as &(dyn Ledger + 'a))
     }
 }
 
 impl<F, T> Ledger for RedbIndexer<F, T>
 where
-    T: FileStoreView,
+    T: TryAsRef<FileStore>,
     F: Fn(&Output) -> bool,
 {
     fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
         let mut iter = self.metadata_from(hash);
         if let Some(cursor) = iter.next().and_then(|metadata| metadata.cursor) {
             self.fs
-                .as_fs()?
+                .try_as_ref()?
                 .get(cursor.pos as u64, cursor.len)
                 .ok()
                 .map(Cow::Owned)
@@ -482,12 +474,7 @@ mod tests {
 
     use super::*;
 
-    use eupp_core::block::Block;
-    use eupp_core::block::BlockError;
     use eupp_core::ledger::{Indexer, Query};
-    use eupp_core::transaction::TransactionError;
-    use eupp_core::transaction::sighash;
-    use eupp_core::transaction::{Input, Output, OutputId, Transaction};
     use redb::Database;
     use redb::backends::InMemoryBackend;
 

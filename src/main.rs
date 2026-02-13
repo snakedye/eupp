@@ -2,12 +2,7 @@ mod api;
 mod indexer;
 
 use eupp_core::{
-    SecretKey,
-    block::Block,
-    commitment,
-    ledger::Indexer,
-    miner,
-    transaction::{Output, Transaction, Version},
+    Block, Output, SecretKey, Transaction, Version, commitment, ledger::Indexer, miner,
 };
 use eupp_db::{FileStore, RedbIndexer};
 use eupp_net::{EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool};

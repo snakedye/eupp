@@ -5,8 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use eupp_core::ledger::Query;
-use eupp_core::transaction::{Output, OutputId, Transaction, TransactionHash};
+use eupp_core::{Output, OutputId, Transaction, TransactionHash, ledger::Query};
 use eupp_net::RpcClient;
 use eupp_net::protocol::{self as protocol, RpcError, RpcRequest, RpcResponse};
 

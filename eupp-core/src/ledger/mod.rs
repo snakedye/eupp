@@ -166,22 +166,9 @@ impl<T: Indexer + ?Sized> IndexerExt for T {}
 
 /// A Ledger represents the authoritative archival store of blocks.
 /// It extends Indexer to provide access to full block data.
-pub trait Ledger: Indexer {
+pub trait Ledger {
     /// Retrieves a full block by its hash.
     fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>>;
-}
-
-/// A trait for converting an object into a `Ledger`.
-pub trait LedgerView {
-    /// The associated type representing a `Ledger` reference.
-    type Ledger<'a>: Ledger + 'a
-    where
-        Self: 'a;
-
-    /// Converts the current object into a `Ledger`.
-    fn as_ledger<'a>(&'a self) -> Option<&'a Self::Ledger<'a>> {
-        None
-    }
 }
 
 pub trait LedgerExt: Ledger {

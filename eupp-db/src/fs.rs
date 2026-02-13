@@ -129,8 +129,7 @@ mod tests {
     use std::env;
     use std::fs;
 
-    use eupp_core::block::Block;
-    use eupp_core::transaction::Output;
+    use eupp_core::{Block, Output};
 
     fn temp_path(name: &str) -> PathBuf {
         let mut p = env::temp_dir();
@@ -147,7 +146,7 @@ mod tests {
 
         // Build a simple block
         let mut block = Block::new(0, [0u8; 32]);
-        let tx = eupp_core::transaction::Transaction {
+        let tx = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(123, &[1u8; 32], &[2u8; 32])],
         };
@@ -174,7 +173,7 @@ mod tests {
 
         // Build the first block
         let mut block1 = Block::new(0, [0u8; 32]);
-        let tx1 = eupp_core::transaction::Transaction {
+        let tx1 = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(789, &[5u8; 32], &[6u8; 32])],
         };
@@ -185,7 +184,7 @@ mod tests {
 
         // Build the second block
         let mut block2 = Block::new(1, [1u8; 32]);
-        let tx2 = eupp_core::transaction::Transaction {
+        let tx2 = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(101112, &[7u8; 32], &[8u8; 32])],
         };
@@ -225,7 +224,7 @@ mod tests {
     fn uncommitted_block_not_persisted() {
         let path = temp_path("uncommitted");
         let mut block = Block::new(0, [0u8; 32]);
-        let tx = eupp_core::transaction::Transaction {
+        let tx = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(456, &[3u8; 32], &[4u8; 32])],
         };

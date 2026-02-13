@@ -2,11 +2,19 @@ use blake2::Digest;
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
-pub mod block;
+mod block;
 pub mod ledger;
 pub mod miner;
-pub mod transaction;
+mod transaction;
 pub mod vm;
+
+pub use block::*;
+pub use transaction::*;
+
+/// Like [`AsRef`], but returns `Option<&T>` instead of `&T`.
+pub trait TryAsRef<T: ?Sized> {
+    fn try_as_ref(&self) -> Option<&T>;
+}
 
 /// 32-byte Ed25519 public key
 pub type PublicKey = [u8; 32];
@@ -125,6 +133,12 @@ where
 {
     let s = String::deserialize(deserializer)?;
     hex::decode(&s).map_err(serde::de::Error::custom)
+}
+
+impl<T> TryAsRef<T> for T {
+    fn try_as_ref(&self) -> Option<&T> {
+        Some(self)
+    }
 }
 
 #[cfg(test)]

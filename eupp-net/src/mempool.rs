@@ -1,5 +1,5 @@
 use eupp_core::ledger::Indexer;
-use eupp_core::transaction::{Transaction, TransactionError, TransactionHash};
+use eupp_core::{Transaction, TransactionError, TransactionHash};
 use std::borrow::Cow;
 use std::collections::HashMap;
 

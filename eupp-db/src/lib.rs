@@ -1,25 +1,13 @@
 mod fs;
 mod indexer;
 
+pub use fs::FileStore;
 pub use indexer::RedbIndexer;
 
-pub use crate::fs::FileStore;
+use eupp_core::TryAsRef;
 
-pub trait FileStoreView {
-    type Data<'a>: serde::Serialize;
-    fn as_fs(&self) -> Option<&FileStore>;
-}
-
-impl FileStoreView for () {
-    type Data<'a> = &'a eupp_core::block::Block;
-    fn as_fs(&self) -> Option<&FileStore> {
+impl TryAsRef<FileStore> for () {
+    fn try_as_ref(&self) -> Option<&FileStore> {
         None
-    }
-}
-
-impl FileStoreView for FileStore {
-    type Data<'a> = &'a eupp_core::block::Block;
-    fn as_fs(&self) -> Option<&FileStore> {
-        Some(self)
     }
 }
