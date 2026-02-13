@@ -9,10 +9,10 @@ use crate::mempool::Mempool;
 use crate::protocol::{
     GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
-use eupp_core::VirtualSize;
-use eupp_core::block::{BlockHeader, MAX_BLOCK_SIZE};
-use eupp_core::ledger::{Indexer, IndexerExt, LedgerExt, LedgerView};
-use eupp_core::transaction::Transaction;
+use eupp_core::{
+    ledger::{Indexer, IndexerExt, Ledger, LedgerExt},
+    *,
+};
 
 use libp2p::futures::StreamExt;
 use libp2p::{
@@ -73,9 +73,9 @@ impl RpcClient {
 }
 
 /// Represents a full node in the Eupp network.
-pub struct EuppNode<L, M: Mempool> {
+pub struct EuppNode<I, M: Mempool> {
     /// The indexer that maintains the blockchain state.
-    indexer: Arc<RwLock<L>>,
+    indexer: Arc<RwLock<I>>,
 
     /// The mempool that holds transactions waiting to be included in a block.
     mempool: Arc<RwLock<M>>,
@@ -93,12 +93,12 @@ pub struct EuppNode<L, M: Mempool> {
     config: Config,
 }
 
-impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
+impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M> {
     /// Creates a new instance of `EuppNode` with the given ledger and mempool.
-    pub fn new(config: Config, ledger: L, mempool: M) -> Self {
+    pub fn new(config: Config, indexer: I, mempool: M) -> Self {
         Self {
             config,
-            indexer: Arc::new(RwLock::new(ledger)),
+            indexer: Arc::new(RwLock::new(indexer)),
             mempool: Arc::new(RwLock::new(mempool)),
             block_fetch_queue: Vec::new(),
             peers_sync_state: HashMap::new(),
@@ -107,7 +107,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     }
 
     /// Returns a the Indexer.
-    pub fn indexer(&self) -> Arc<RwLock<L>> {
+    pub fn indexer(&self) -> Arc<RwLock<I>> {
         self.indexer.clone()
     }
 
@@ -124,7 +124,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     /// Requests the chain tip from peers and initiates synchronization if a suitable peer is found.
     fn request_chain_tip(&mut self, swarm: &mut Swarm<EuppBehaviour>, topic: gossipsub::IdentTopic)
     where
-        L: Indexer,
+        I: Indexer,
     {
         // Clear provisional sync target; we'll select the best peer after tip responses arrive.
         self.sync_target.write().unwrap().take();
@@ -150,10 +150,10 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     /// Identifies the best peer to sync with from the known peer states.
     fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)>
     where
-        L: Indexer,
+        I: Indexer,
     {
-        let lg = self.indexer.read().ok()?;
-        let local_supply = lg
+        let idxer = self.indexer.read().ok()?;
+        let local_supply = idxer
             .get_last_block_metadata()
             .map(|m| m.available_supply)
             .unwrap_or(0);
@@ -168,15 +168,15 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     /// Sets the node to syncing state and sends the initial GetBlocksHash request.
     fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId)
     where
-        L: Indexer,
+        I: Indexer,
     {
         info!(
             peer_id = %peer_id,
             "Initiating sync with peer, starting from their tip",
         );
         *self.sync_target.write().unwrap() = Some(peer_id);
-        let lg = self.indexer.read().unwrap();
-        let to = lg.get_last_block_metadata().map(|meta| meta.hash);
+        let idxer = self.indexer.read().unwrap();
+        let to = idxer.get_last_block_metadata().map(|meta| meta.hash);
 
         // send_request returns an OutboundRequestId; ignore the return value.
         debug!(peer_id = %peer_id, "Sending GetBlockHeaders request to peer");
@@ -194,16 +194,16 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         topic: gossipsub::IdentTopic,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        L: Indexer + LedgerView,
+        I: Indexer + TryAsRef<dyn Ledger>,
     {
         let msg: GossipMessage = postcard::from_bytes(&message.data)?;
         match msg {
             GossipMessage::Transaction(tx) => {
                 let mut mp = self.mempool.write().unwrap();
-                let lg = self.indexer.read().unwrap();
+                let idxer = self.indexer.read().unwrap();
                 let tx_hash = tx.hash();
 
-                match mp.add(tx, &*lg) {
+                match mp.add(tx, &*idxer) {
                     Ok(_) => {
                         info!(
                             tx_hash = %hex::encode(tx_hash),
@@ -223,8 +223,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 if !self.is_syncing() {
                     let added_res;
                     {
-                        let mut lg = self.indexer.write().unwrap();
-                        added_res = lg.add_block(&block);
+                        let mut idxer = self.indexer.write().unwrap();
+                        added_res = idxer.add_block(&block);
                     }
 
                     match added_res {
@@ -250,7 +250,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     .indexer
                     .read()
                     .ok()
-                    .filter(|lg| lg.as_ledger().is_some())
+                    .filter(|idxer| idxer.try_as_ref().is_some())
                 {
                     if let Some(meta) = lg.get_last_block_metadata() {
                         let msg = GossipMessage::ChainTip {
@@ -310,7 +310,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         event: request_response::Event<SyncRequest, SyncResponse>,
         swarm: &mut Swarm<EuppBehaviour>,
     ) where
-        L: Indexer + LedgerView,
+        I: Indexer + TryAsRef<dyn Ledger>,
     {
         match event {
             request_response::Event::Message { peer, message, .. } => {
@@ -319,13 +319,13 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         request, channel, ..
                     } => match request {
                         SyncRequest::GetBlockHeaders { from, to } => {
-                            if let Ok(lg) = self.indexer.read() {
+                            if let Ok(indexer) = self.indexer.read() {
                                 let iter = match from {
-                                    Some(from) => lg.metadata_from(&from),
-                                    None => lg.metadata(),
+                                    Some(from) => indexer.metadata_from(&from),
+                                    None => indexer.metadata(),
                                 };
                                 let halt = to
-                                    .and_then(|hash| lg.get_block_metadata(&hash))
+                                    .and_then(|hash| indexer.get_block_metadata(&hash))
                                     .map(|meta| meta.prev_block_hash);
                                 let headers: Vec<_> = iter
                                     .take_while(|meta| Some(meta.hash) != halt)
@@ -341,21 +341,22 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                             }
                         }
                         SyncRequest::GetBlocks { from, to } => {
-                            if let Ok(lg) = self.indexer.read() {
-                                if let Some(lg) = lg.as_ledger() {
+                            if let Ok(idxer) = self.indexer.read() {
+                                if let Some(lg) = (*idxer).try_as_ref() {
                                     debug!(
                                         from = from.map(hex::encode),
                                         to = to.map(hex::encode),
                                         "Sending Blocks",
                                     );
-                                    let (block_iter, metadata_iter) = match from {
-                                        Some(from) => {
-                                            (lg.blocks_from(&from), lg.metadata_from(&from))
-                                        }
-                                        None => (lg.blocks(), lg.metadata()),
-                                    };
+                                    let from = from
+                                        .or_else(|| {
+                                            idxer.get_last_block_metadata().map(|meta| meta.hash)
+                                        })
+                                        .unwrap_or_default(); // The hash of a non-existent block in the index
+                                    let (block_iter, metadata_iter) =
+                                        (lg.blocks_from(&from), idxer.metadata_from(&from));
                                     let halt = to
-                                        .and_then(|hash| lg.get_block_metadata(&hash))
+                                        .and_then(|hash| idxer.get_block_metadata(&hash))
                                         .map(|meta| meta.prev_block_hash);
                                     let blocks = block_iter
                                         .zip(metadata_iter)
@@ -395,9 +396,9 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                         SyncResponse::Blocks(blocks) => {
                             let sync_peer = *self.sync_target.read().unwrap();
                             if Some(peer) == sync_peer {
-                                let mut lg = self.indexer.write().unwrap();
+                                let mut idxer = self.indexer.write().unwrap();
                                 for block in blocks.iter().rev() {
-                                    match lg.add_block(block) {
+                                    match idxer.add_block(block) {
                                         Ok(_) => {
                                             info!(
                                                 block_hash = %hex::encode(block.header().hash()),
@@ -457,12 +458,12 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         topic: gossipsub::IdentTopic,
     ) -> Result<RpcResponse, RpcError>
     where
-        L: Indexer,
+        I: Indexer,
     {
         match request {
             RpcRequest::GetNetworkInfo => {
-                let lg = self.indexer.read().map_err(|_| RpcError::LockError)?;
-                let info = lg
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let info = idxer
                     .get_last_block_metadata()
                     .map(|meta| NetworkInfo {
                         tip_hash: meta.hash,
@@ -479,12 +480,12 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 Ok(RpcResponse::NetworkInfo(info))
             }
             RpcRequest::GetConfirmations { tx_hash } => {
-                let lg = self.indexer.read().map_err(|_| RpcError::LockError)?;
-                let tip_metadata = lg.get_last_block_metadata();
-                let tx_block_hash = lg.get_block_from_transaction(&tx_hash);
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let tip_metadata = idxer.get_last_block_metadata();
+                let tx_block_hash = idxer.get_block_from_transaction(&tx_hash);
                 let confirmations = match (tip_metadata, tx_block_hash) {
                     (Some(tip), Some(block_hash)) => {
-                        let block_metadata = lg.get_block_metadata(&block_hash).unwrap();
+                        let block_metadata = idxer.get_block_metadata(&block_hash).unwrap();
                         tip.height.saturating_sub(block_metadata.height) as u64
                     }
                     _ => 0u64,
@@ -492,8 +493,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 Ok(RpcResponse::Confirmations(confirmations))
             }
             RpcRequest::GetUtxos { query } => {
-                let lg = self.indexer.read().map_err(|_| RpcError::LockError)?;
-                let outputs = lg.query_outputs(&query);
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let outputs = idxer.query_outputs(&query);
                 Ok(RpcResponse::Utxos(outputs))
             }
             RpcRequest::BroadcastBlock { mut block } => {
@@ -509,8 +510,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                     block.transactions.extend(selected);
                 }
 
-                let mut lg = self.indexer.write().map_err(|_| RpcError::LockError)?;
-                match lg.add_block(&block) {
+                let mut indexer = self.indexer.write().map_err(|_| RpcError::LockError)?;
+                match indexer.add_block(&block) {
                     Ok(_) => {
                         info!(
                             block_hash = %hex::encode(block.header().hash()),
@@ -547,8 +548,8 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
                 // Attempt to add to local mempool, then gossip.
                 let tx_hash = tx.hash();
                 let mut mempool = self.mempool.write().unwrap();
-                let lg = self.indexer.read().unwrap();
-                match mempool.add(tx.clone(), &*lg) {
+                let idxer = self.indexer.read().unwrap();
+                match mempool.add(tx.clone(), &*idxer) {
                     Ok(_) => {
                         let msg = GossipMessage::Transaction(tx);
                         if let Err(err) = swarm
@@ -574,7 +575,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     pub async fn run<F>(mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: FnOnce(RpcClient),
-        L: Indexer + LedgerView,
+        I: Indexer + TryAsRef<dyn Ledger>,
     {
         let mut swarm = SwarmBuilder::with_new_identity()
             .with_tokio()

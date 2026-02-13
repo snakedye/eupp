@@ -2,14 +2,9 @@ mod api;
 mod indexer;
 
 use eupp_core::{
-    SecretKey,
-    block::Block,
-    commitment,
-    ledger::Indexer,
-    miner,
-    transaction::{Output, Transaction, Version},
+    Block, Output, SecretKey, Transaction, Version, commitment, ledger::Indexer, miner,
 };
-use eupp_db::RedbIndexer;
+use eupp_db::{FileStore, RedbIndexer};
 use eupp_net::{EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool};
 use indexer::NodeStore;
 use rand::{TryRngCore, rngs::OsRng};
@@ -69,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Select the node store
     let ledger = match config.block_file_path() {
-        Some(path) => NodeStore::Full(indexer.with_fs(path)?),
+        Some(path) => NodeStore::Full(indexer.with_fs(FileStore::new(path)?)),
         None => NodeStore::Pruned(indexer),
     };
 

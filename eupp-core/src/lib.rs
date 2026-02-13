@@ -2,11 +2,19 @@ use blake2::Digest;
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
-pub mod block;
+mod block;
 pub mod ledger;
 pub mod miner;
-pub mod transaction;
+mod transaction;
 pub mod vm;
+
+pub use block::*;
+pub use transaction::*;
+
+/// Like [`AsRef`], but returns `Option<&T>` instead of `&T`.
+pub trait TryAsRef<T: ?Sized> {
+    fn try_as_ref(&self) -> Option<&T>;
+}
 
 /// 32-byte Ed25519 public key
 pub type PublicKey = [u8; 32];
@@ -34,12 +42,6 @@ pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) 
         hasher.update(chunk);
     }
     hasher.finalize().into()
-}
-
-/// Generate a new Ed25519 keypair.
-pub fn generate_keypair() -> SigningKey {
-    let sk: [u8; 32] = rand::random();
-    return SigningKey::from_bytes(&sk);
 }
 
 /// Generate a keypair from a secret key.
@@ -131,6 +133,15 @@ where
 {
     let s = String::deserialize(deserializer)?;
     hex::decode(&s).map_err(serde::de::Error::custom)
+}
+
+impl<U, T> TryAsRef<U> for T
+where
+    T: AsRef<U>,
+{
+    fn try_as_ref(&self) -> Option<&U> {
+        Some(self.as_ref())
+    }
 }
 
 #[cfg(test)]

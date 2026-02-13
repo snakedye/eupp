@@ -1,7 +1,6 @@
 use clap::{Parser, Subcommand};
-use eupp_core::ledger::Query;
-use eupp_core::transaction::{Input, Output, OutputId, Transaction, sighash};
-use eupp_core::{Hash, commitment, keypair};
+use eupp_core::{Hash, TransactionHash, commitment, keypair};
+use eupp_core::{Input, Output, OutputId, Transaction, ledger::Query, sighash};
 use std::time::Duration;
 
 /// A CLI for interacting with the Eupp node via its HTTP REST API.
@@ -140,7 +139,7 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
         );
     }
 
-    let broadcasted_hash: eupp_core::transaction::TransactionHash =
+    let broadcasted_hash: TransactionHash =
         resp.json().expect("Failed to parse broadcast response");
     println!(
         "Transaction {} broadcasted successfully.",
@@ -170,7 +169,7 @@ fn cmd_broadcast(peer: &str, tx_json: &str) {
         );
     }
 
-    let broadcasted_hash: eupp_core::transaction::TransactionHash =
+    let broadcasted_hash: TransactionHash =
         resp.json().expect("Failed to parse broadcast response");
     println!(
         "Transaction {} broadcasted successfully.",

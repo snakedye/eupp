@@ -342,14 +342,14 @@ impl Block {
 }
 
 /// A leaf node in the Merkle tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Leaf {
     dir: Option<Direction>,
     hash: TransactionHash,
 }
 
 /// The direction of a node in the Merkle tree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
     Left,
     Right,

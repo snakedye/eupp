@@ -921,7 +921,6 @@ dependencies = [
  "ed25519-dalek 3.0.0-pre.6",
  "ethnum",
  "hex",
- "rand 0.9.2",
  "serde",
 ]
 
@@ -931,8 +930,9 @@ version = "0.1.0"
 dependencies = [
  "ethnum",
  "eupp-core",
+ "postcard",
  "redb",
- "serde_json",
+ "serde",
 ]
 
 [[package]]
