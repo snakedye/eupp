@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     borrow::{Borrow, Cow},
     path::Path,
     usize,
@@ -18,7 +17,7 @@ use redb::{
     ReadableTableMetadata, Table, TableDefinition, Value, backends::InMemoryBackend,
 };
 
-use crate::fs::{FileBlockStore, LedgerError};
+use crate::FileStoreView;
 
 const MAIN_CHAIN_TIP_KEY: &str = "main_chain_tip";
 
@@ -50,13 +49,13 @@ impl Value for BlockMetadataValue {
     where
         Self: 'b,
     {
-        serde_json::to_vec(value).unwrap()
+        postcard::to_allocvec(value).unwrap()
     }
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
         Self: 'a,
     {
-        serde_json::from_slice(data).unwrap()
+        postcard::from_bytes(data).unwrap()
     }
     fn fixed_width() -> Option<usize> {
         None
@@ -79,13 +78,13 @@ impl Value for OutputValue {
     where
         Self: 'b,
     {
-        serde_json::to_vec(value).unwrap()
+        postcard::to_allocvec(value).unwrap()
     }
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
         Self: 'a,
     {
-        serde_json::from_slice(data).unwrap()
+        postcard::from_bytes(data).unwrap()
     }
     fn fixed_width() -> Option<usize> {
         None
@@ -108,13 +107,13 @@ impl Value for OutputKey {
     where
         Self: 'b,
     {
-        serde_json::to_vec(value).unwrap()
+        postcard::to_allocvec(value).unwrap()
     }
     fn from_bytes<'a>(data: &'a [u8]) -> Self::SelfType<'a>
     where
         Self: 'a,
     {
-        serde_json::from_slice(data).unwrap()
+        postcard::from_bytes(data).unwrap()
     }
     fn fixed_width() -> Option<usize> {
         None
@@ -126,13 +125,9 @@ impl Value for OutputKey {
 
 impl Key for OutputKey {
     fn compare(data1: &[u8], data2: &[u8]) -> std::cmp::Ordering {
-        let out_1 = serde_json::de::from_slice::<OutputId>(data1);
-        let out_2 = serde_json::de::from_slice::<OutputId>(data2);
-        out_1
-            .ok()
-            .zip(out_2.ok())
-            .map(|(out_1, out_2)| out_1.cmp(&out_2))
-            .unwrap()
+        let out_1 = postcard::from_bytes::<OutputId>(data1).unwrap();
+        let out_2 = postcard::from_bytes::<OutputId>(data2).unwrap();
+        out_1.cmp(&out_2)
     }
 }
 
@@ -188,17 +183,13 @@ impl<T: AsRef<Path>> From<T> for RedbIndexer {
 
 impl<S, Fs> RedbIndexer<S, Fs> {
     /// Enables the `Ledger` to be used with a file system.
-    pub fn with_fs(
-        self,
-        path: impl AsRef<Path>,
-    ) -> Result<RedbIndexer<S, FileBlockStore>, LedgerError> {
-        let fs = FileBlockStore::new(path.as_ref())?;
-        Ok(RedbIndexer {
+    pub fn with_fs<T>(self, fs: T) -> RedbIndexer<S, T> {
+        RedbIndexer {
             tip: self.tip,
             db: self.db,
             scanner: self.scanner,
             fs,
-        })
+        }
     }
     fn recover_tip(db: &redb::Database) -> Option<Hash> {
         let read_tx = db.begin_read().unwrap();
@@ -305,16 +296,13 @@ impl<S, Fs> RedbIndexer<S, Fs> {
         }
         Ok(())
     }
-    fn get_fs(&self) -> Option<&FileBlockStore>
-    where
-        Fs: Any,
-    {
-        let fs = &self.fs as &dyn Any;
-        fs.downcast_ref::<FileBlockStore>()
-    }
 }
 
-impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbIndexer<F, T> {
+impl<F, T> eupp_core::ledger::Indexer for RedbIndexer<F, T>
+where
+    T: FileStoreView,
+    F: Fn(&Output) -> bool,
+{
     fn add_block(&mut self, block: &eupp_core::block::Block) -> Result<(), BlockError> {
         let write_tx = self.db.begin_write().unwrap();
 
@@ -362,8 +350,9 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
 
             // Set the cursor to read the block
             cursor = self
-                .get_fs()
-                .and_then(|fs| fs.append_block(block).ok())
+                .fs
+                .as_fs()
+                .and_then(|fs| fs.append(block).ok())
                 .map(|(pos, len)| Cursor {
                     pos: pos as usize,
                     len,
@@ -405,7 +394,7 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
             metadata_table.insert(metadata.hash, metadata)?;
         }
 
-        if let Some(fs) = self.get_fs() {
+        if let Some(fs) = self.fs.as_fs() {
             fs.commit()?;
         }
 
@@ -453,23 +442,32 @@ impl<F: Fn(&Output) -> bool, T: 'static> eupp_core::ledger::Indexer for RedbInde
     }
 }
 
-impl<F: Fn(&Output) -> bool + 'static, T: 'static> LedgerView for RedbIndexer<F, T> {
+impl<F, T> LedgerView for RedbIndexer<F, T>
+where
+    T: FileStoreView,
+    F: Fn(&Output) -> bool,
+{
     type Ledger<'a>
-        = RedbIndexer<F, FileBlockStore>
+        = RedbIndexer<F, T>
     where
         Self: 'a;
 
     fn as_ledger<'a>(&'a self) -> Option<&'a Self::Ledger<'a>> {
-        (self as &dyn Any).downcast_ref::<RedbIndexer<F, FileBlockStore>>()
+        self.fs.as_fs().map(|_| self)
     }
 }
 
-impl<F: Fn(&Output) -> bool> Ledger for RedbIndexer<F, FileBlockStore> {
+impl<F, T> Ledger for RedbIndexer<F, T>
+where
+    T: FileStoreView,
+    F: Fn(&Output) -> bool,
+{
     fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>> {
         let mut iter = self.metadata_from(hash);
         if let Some(cursor) = iter.next().and_then(|metadata| metadata.cursor) {
             self.fs
-                .get_block(cursor.pos as u64, cursor.len)
+                .as_fs()?
+                .get(cursor.pos as u64, cursor.len)
                 .ok()
                 .map(Cow::Owned)
         } else {
@@ -480,6 +478,8 @@ impl<F: Fn(&Output) -> bool> Ledger for RedbIndexer<F, FileBlockStore> {
 
 #[cfg(test)]
 mod tests {
+    use crate::FileStore;
+
     use super::*;
 
     use eupp_core::block::Block;
@@ -664,7 +664,7 @@ mod tests {
         // ensure clean
         let _ = std::fs::remove_file(&path);
 
-        let mut indexer = RedbIndexer::new(db).with_fs(&path).unwrap();
+        let mut indexer = RedbIndexer::new(db).with_fs(FileStore::new(&path).unwrap());
 
         // Build and add the first block
         let data = [0u8; 32];

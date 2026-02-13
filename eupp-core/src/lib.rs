@@ -36,12 +36,6 @@ pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) 
     hasher.finalize().into()
 }
 
-/// Generate a new Ed25519 keypair.
-pub fn generate_keypair() -> SigningKey {
-    let sk: [u8; 32] = rand::random();
-    return SigningKey::from_bytes(&sk);
-}
-
 /// Generate a keypair from a secret key.
 pub fn keypair(sk: &SecretKey) -> SigningKey {
     SigningKey::from_bytes(sk)
