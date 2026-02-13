@@ -135,9 +135,12 @@ where
     hex::decode(&s).map_err(serde::de::Error::custom)
 }
 
-impl<T> TryAsRef<T> for T {
-    fn try_as_ref(&self) -> Option<&T> {
-        Some(self)
+impl<U, T> TryAsRef<U> for T
+where
+    T: AsRef<U>,
+{
+    fn try_as_ref(&self) -> Option<&U> {
+        Some(self.as_ref())
     }
 }
 

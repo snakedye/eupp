@@ -51,6 +51,12 @@ pub struct FileStore {
     file_end: AtomicU64,
 }
 
+impl AsRef<Self> for FileStore {
+    fn as_ref(&self) -> &Self {
+        self
+    }
+}
+
 impl FileStore {
     /// Create a new file-backed block store for the given path. The file will be created if it
     /// does not exist. The underlying file handle is opened and kept open for the lifetime of
