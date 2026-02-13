@@ -73,9 +73,9 @@ impl RpcClient {
 }
 
 /// Represents a full node in the Eupp network.
-pub struct EuppNode<L, M: Mempool> {
+pub struct EuppNode<I, M: Mempool> {
     /// The indexer that maintains the blockchain state.
-    indexer: Arc<RwLock<L>>,
+    indexer: Arc<RwLock<I>>,
 
     /// The mempool that holds transactions waiting to be included in a block.
     mempool: Arc<RwLock<M>>,
@@ -93,12 +93,12 @@ pub struct EuppNode<L, M: Mempool> {
     config: Config,
 }
 
-impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M> {
+impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M> {
     /// Creates a new instance of `EuppNode` with the given ledger and mempool.
-    pub fn new(config: Config, ledger: L, mempool: M) -> Self {
+    pub fn new(config: Config, indexer: I, mempool: M) -> Self {
         Self {
             config,
-            indexer: Arc::new(RwLock::new(ledger)),
+            indexer: Arc::new(RwLock::new(indexer)),
             mempool: Arc::new(RwLock::new(mempool)),
             block_fetch_queue: Vec::new(),
             peers_sync_state: HashMap::new(),
@@ -107,7 +107,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     }
 
     /// Returns a the Indexer.
-    pub fn indexer(&self) -> Arc<RwLock<L>> {
+    pub fn indexer(&self) -> Arc<RwLock<I>> {
         self.indexer.clone()
     }
 
@@ -124,7 +124,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     /// Requests the chain tip from peers and initiates synchronization if a suitable peer is found.
     fn request_chain_tip(&mut self, swarm: &mut Swarm<EuppBehaviour>, topic: gossipsub::IdentTopic)
     where
-        L: Indexer,
+        I: Indexer,
     {
         // Clear provisional sync target; we'll select the best peer after tip responses arrive.
         self.sync_target.write().unwrap().take();
@@ -150,7 +150,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     /// Identifies the best peer to sync with from the known peer states.
     fn find_sync_target(&self) -> Option<(PeerId, PeerSyncState)>
     where
-        L: Indexer,
+        I: Indexer,
     {
         let idxer = self.indexer.read().ok()?;
         let local_supply = idxer
@@ -168,7 +168,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     /// Sets the node to syncing state and sends the initial GetBlocksHash request.
     fn initiate_sync(&mut self, swarm: &mut Swarm<EuppBehaviour>, peer_id: PeerId)
     where
-        L: Indexer,
+        I: Indexer,
     {
         info!(
             peer_id = %peer_id,
@@ -194,7 +194,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         topic: gossipsub::IdentTopic,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        L: Indexer + TryAsRef<dyn Ledger>,
+        I: Indexer + TryAsRef<dyn Ledger>,
     {
         let msg: GossipMessage = postcard::from_bytes(&message.data)?;
         match msg {
@@ -310,7 +310,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         event: request_response::Event<SyncRequest, SyncResponse>,
         swarm: &mut Swarm<EuppBehaviour>,
     ) where
-        L: Indexer + TryAsRef<dyn Ledger>,
+        I: Indexer + TryAsRef<dyn Ledger>,
     {
         match event {
             request_response::Event::Message { peer, message, .. } => {
@@ -458,7 +458,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
         topic: gossipsub::IdentTopic,
     ) -> Result<RpcResponse, RpcError>
     where
-        L: Indexer,
+        I: Indexer,
     {
         match request {
             RpcRequest::GetNetworkInfo => {
@@ -575,7 +575,7 @@ impl<L: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<L, M
     pub async fn run<F>(mut self, f: F) -> Result<(), Box<dyn std::error::Error>>
     where
         F: FnOnce(RpcClient),
-        L: Indexer + TryAsRef<dyn Ledger>,
+        I: Indexer + TryAsRef<dyn Ledger>,
     {
         let mut swarm = SwarmBuilder::with_new_identity()
             .with_tokio()
