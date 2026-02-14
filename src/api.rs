@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use axum::{
     Json, Router,
+    extract::Query as HttpQuery,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use eupp_core::{Output, OutputId, Transaction, TransactionHash, ledger::Query};
+use eupp_core::{BlockHeader, Hash, Output, OutputId, Transaction, TransactionHash, ledger::Query};
 use eupp_net::RpcClient;
 use eupp_net::protocol::{self as protocol, RpcError, RpcRequest, RpcResponse};
 
@@ -33,14 +36,20 @@ impl IntoResponse for ApiError {
 /// Build and return an Axum `Router` wired to the provided `RpcClient`.
 pub fn router(state: RpcClient) -> Router {
     Router::new()
+        .route("/", get(root_handler))
         .route("/network", get(get_network_info))
         .route(
             "/transactions/:tx_hash/confirmations",
             get(get_confirmations),
         )
         .route("/transactions/outputs", post(query_outputs))
+        .route("/blocks", get(get_block))
         .route("/transactions", post(send_raw_tx))
         .with_state(state)
+}
+
+async fn root_handler() -> &'static str {
+    "Welcome to the Eupp API!"
 }
 
 async fn get_network_info(
@@ -56,15 +65,11 @@ async fn get_confirmations(
     State(client): State<RpcClient>,
     axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
 ) -> Result<Json<u64>, ApiError> {
-    let bytes = hex::decode(&tx_hash_hex)
+    let mut hash = Hash::default();
+    hex::decode_to_slice(tx_hash_hex, &mut hash)
         .map_err(|e| RpcError::Handler(format!("invalid tx hash: {e}")))?;
-    if bytes.len() != 32 {
-        return Err(RpcError::Handler("tx hash must be 32 bytes".to_string()).into());
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
     match client
-        .request(RpcRequest::GetConfirmations { tx_hash: arr })
+        .request(RpcRequest::GetConfirmations { tx_hash: hash })
         .await?
     {
         RpcResponse::Confirmations(n) => Ok(Json(n)),
@@ -79,6 +84,38 @@ async fn query_outputs(
     match client.request(RpcRequest::GetUtxos { query }).await? {
         RpcResponse::Utxos(list) => Ok(Json(list)),
         _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+    }
+}
+
+async fn get_block(
+    State(client): State<RpcClient>,
+    HttpQuery(params): HttpQuery<HashMap<String, String>>,
+) -> Result<Json<BlockHeader>, ApiError> {
+    // Prefer explicit block_hash if provided, otherwise fall back to tx_hash.
+    if let Some(block_hash_hex) = params.get("block_hash") {
+        let mut hash = Hash::default();
+        hex::decode_to_slice(block_hash_hex, &mut hash)
+            .map_err(|e| RpcError::Handler(format!("invalid block hash: {e}")))?;
+        match client
+            .request(RpcRequest::GetBlockByHash { block_hash: hash })
+            .await?
+        {
+            RpcResponse::BlockHeader(header) => Ok(Json(header)),
+            _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+        }
+    } else if let Some(tx_hash_hex) = params.get("tx_hash") {
+        let mut hash = Hash::default();
+        hex::decode_to_slice(tx_hash_hex, &mut hash)
+            .map_err(|e| RpcError::Handler(format!("invalid tx hash: {e}")))?;
+        match client
+            .request(RpcRequest::GetBlockByTxHash { tx_hash: hash })
+            .await?
+        {
+            RpcResponse::BlockHeader(header) => Ok(Json(header)),
+            _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+        }
+    } else {
+        Err(RpcError::Handler("missing block_hash or tx_hash parameter".to_string()).into())
     }
 }
 

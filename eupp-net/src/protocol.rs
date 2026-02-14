@@ -85,6 +85,12 @@ pub enum RpcRequest {
 
     /// Broadcast a mined block to the network.
     BroadcastBlock { block: Block },
+
+    /// Fetch a block header by its hash.
+    GetBlockByHash { block_hash: Hash },
+
+    /// Fetch a block header by a transaction hash.
+    GetBlockByTxHash { tx_hash: TransactionHash },
 }
 
 /// RPC responses for `RpcRequest`.
@@ -107,10 +113,13 @@ pub enum RpcResponse {
 
     /// All transactions currently in the mempool.
     Transactions(Vec<Transaction>),
+
+    /// The block header for a given block hash or transaction hash.
+    BlockHeader(BlockHeader),
 }
 
 /// Errors returned by [`RpcClient::request`].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RpcError {
     /// The internal channel is closed (node shut down or receiver dropped).
     ChannelClosed,

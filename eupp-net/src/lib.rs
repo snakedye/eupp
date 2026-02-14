@@ -461,6 +461,25 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
         I: Indexer,
     {
         match request {
+            RpcRequest::GetBlockByHash { block_hash } => {
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let block_metadata = idxer.get_block_metadata(&block_hash).ok_or_else(|| {
+                    RpcError::Handler("Block not found for the given hash".into())
+                })?;
+                let block_header = block_metadata.header();
+                Ok(RpcResponse::BlockHeader(block_header))
+            }
+            RpcRequest::GetBlockByTxHash { tx_hash } => {
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let block_hash = idxer.get_block_from_transaction(&tx_hash).ok_or_else(|| {
+                    RpcError::Handler("Block not found for the given transaction hash".into())
+                })?;
+                let block_metadata = idxer.get_block_metadata(&block_hash).ok_or_else(|| {
+                    RpcError::Handler("Block metadata not found for the given hash".into())
+                })?;
+                let block_header = block_metadata.header();
+                Ok(RpcResponse::BlockHeader(block_header))
+            }
             RpcRequest::GetNetworkInfo => {
                 let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
                 let info = idxer
