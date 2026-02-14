@@ -92,7 +92,7 @@ async fn get_block(
     HttpQuery(params): HttpQuery<HashMap<String, String>>,
 ) -> Result<Json<BlockHeader>, ApiError> {
     // Prefer explicit block_hash if provided, otherwise fall back to tx_hash.
-    if let Some(block_hash_hex) = params.get("block_hash") {
+    if let Some(block_hash_hex) = params.get("hash") {
         let hash = const_hex::decode_to_array(block_hash_hex)
             .map_err(|e| RpcError::BadRequest(format!("invalid block hash: {e}")))?;
         match client
@@ -102,7 +102,7 @@ async fn get_block(
             RpcResponse::BlockHeader(header) => Ok(Json(header)),
             resp => Err(RpcError::UnexpectedResponse(resp).into()),
         }
-    } else if let Some(tx_hash_hex) = params.get("tx_hash") {
+    } else if let Some(tx_hash_hex) = params.get("tx_id") {
         let hash = const_hex::decode_to_array(tx_hash_hex)
             .map_err(|e| RpcError::BadRequest(format!("invalid tx hash: {e}")))?;
         match client
@@ -113,7 +113,7 @@ async fn get_block(
             resp => Err(RpcError::UnexpectedResponse(resp).into()),
         }
     } else {
-        Err(RpcError::BadRequest("missing block_hash or tx_hash parameter".to_string()).into())
+        Err(RpcError::BadRequest("missing hash or tx_id parameter".to_string()).into())
     }
 }
 

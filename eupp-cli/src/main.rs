@@ -25,7 +25,7 @@ enum Command {
 
         /// The public key hash (address/commitment) of the recipient (hex-encoded, 32 bytes).
         #[arg(long)]
-        address: String,
+        address: Option<String>,
 
         /// The amount to send in the transaction.
         #[arg(long)]
@@ -54,7 +54,7 @@ fn base_url(peer: &str) -> String {
     peer.trim_end_matches('/').to_string()
 }
 
-fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
+fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amount: u64) {
     let base = base_url(peer);
     let client = build_client();
 
@@ -66,8 +66,9 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
     let self_address = commitment(&public_key, Some(data.as_slice()));
 
     // Parse the recipient address (public key hash / commitment)
-    let recipient_address: Hash =
-        hex::decode_to_array(address_hex).expect("Invalid hex for recipient address");
+    let recipient_address: Hash = address_hex
+        .map(|hex| hex::decode_to_array(hex).expect("Invalid hex for recipient address"))
+        .unwrap_or(self_address);
 
     // Build query for our own UTXOs
     let query = Query::new().with_address(self_address);
@@ -110,6 +111,7 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
         .map(|(output_id, _)| {
             Input::new_unsigned(*output_id).sign(signing_key.as_bytes(), sighash_val)
         })
+        .take(100)
         .collect();
     let tx = Transaction::new(inputs, new_outputs);
 
@@ -197,7 +199,7 @@ fn main() {
             secret_key,
             address,
             amount,
-        } => cmd_send_to(&cli.peer, &secret_key, &address, amount),
+        } => cmd_send_to(&cli.peer, &secret_key, address.as_ref(), amount),
         Command::Broadcast { tx } => cmd_broadcast(&cli.peer, &tx),
         Command::Network => cmd_network(&cli.peer),
     }
