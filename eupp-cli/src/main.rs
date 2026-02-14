@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use const_hex as hex;
 use eupp_core::{Hash, TransactionHash, commitment, keypair};
 use eupp_core::{Input, Output, OutputId, Transaction, ledger::Query, sighash};
 use std::time::Duration;
@@ -58,22 +59,15 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
     let client = build_client();
 
     // Parse the secret key
-    let secret_key_bytes = hex::decode(secret_key).expect("Invalid hex for secret key");
-    let signing_key = secret_key_bytes
-        .try_into()
-        .as_ref()
-        .map(keypair)
-        .expect("Failed to parse secret key (expected 32 bytes)");
+    let secret_key = hex::decode_to_array(secret_key).expect("Invalid hex for secret key");
+    let signing_key = keypair(&secret_key);
     let public_key = signing_key.verifying_key().to_bytes();
     let data = [0_u8; 32];
     let self_address = commitment(&public_key, Some(data.as_slice()));
 
     // Parse the recipient address (public key hash / commitment)
-    let recipient_bytes = hex::decode(address_hex).expect("Invalid hex for recipient address");
-    let recipient_address: Hash = recipient_bytes
-        .as_slice()
-        .try_into()
-        .expect("Recipient address must be exactly 32 bytes");
+    let recipient_address: Hash =
+        hex::decode_to_array(address_hex).expect("Invalid hex for recipient address");
 
     // Build query for our own UTXOs
     let query = Query::new().with_address(self_address);

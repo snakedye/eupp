@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Add genesis block to ledger
     if indexer.add_block(&genesis_block).is_ok() {
         info!(
-            hash = %hex::encode(genesis_block_hash),
+            hash = %const_hex::encode(genesis_block_hash),
             "Added genesis block",
         );
     }

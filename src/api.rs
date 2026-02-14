@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use eupp_core::{BlockHeader, Hash, Output, OutputId, Transaction, TransactionHash, ledger::Query};
+use eupp_core::{BlockHeader, Output, OutputId, Transaction, TransactionHash, ledger::Query};
 use eupp_net::RpcClient;
 use eupp_net::protocol::{self as protocol, RpcError, RpcRequest, RpcResponse};
 
@@ -27,7 +27,8 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             RpcError::ChannelClosed => StatusCode::INTERNAL_SERVER_ERROR,
             RpcError::LockError => StatusCode::INTERNAL_SERVER_ERROR,
-            RpcError::Handler(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RpcError::UnexpectedResponse(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            RpcError::BadRequest(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, self.0.to_string()).into_response()
     }
@@ -57,7 +58,7 @@ async fn get_network_info(
 ) -> Result<Json<protocol::NetworkInfo>, ApiError> {
     match client.request(RpcRequest::GetNetworkInfo).await? {
         RpcResponse::NetworkInfo(info) => Ok(Json(info)),
-        _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+        resp => Err(RpcError::UnexpectedResponse(resp).into()),
     }
 }
 
@@ -65,15 +66,14 @@ async fn get_confirmations(
     State(client): State<RpcClient>,
     axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
 ) -> Result<Json<u64>, ApiError> {
-    let mut hash = Hash::default();
-    hex::decode_to_slice(tx_hash_hex, &mut hash)
-        .map_err(|e| RpcError::Handler(format!("invalid tx hash: {e}")))?;
+    let hash = const_hex::decode_to_array(tx_hash_hex)
+        .map_err(|e| RpcError::BadRequest(format!("invalid tx hash: {e}")))?;
     match client
         .request(RpcRequest::GetConfirmations { tx_hash: hash })
         .await?
     {
         RpcResponse::Confirmations(n) => Ok(Json(n)),
-        _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+        resp => Err(RpcError::UnexpectedResponse(resp).into()),
     }
 }
 
@@ -83,7 +83,7 @@ async fn query_outputs(
 ) -> Result<Json<Vec<(OutputId, Output)>>, ApiError> {
     match client.request(RpcRequest::GetUtxos { query }).await? {
         RpcResponse::Utxos(list) => Ok(Json(list)),
-        _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+        resp => Err(RpcError::UnexpectedResponse(resp).into()),
     }
 }
 
@@ -93,29 +93,27 @@ async fn get_block(
 ) -> Result<Json<BlockHeader>, ApiError> {
     // Prefer explicit block_hash if provided, otherwise fall back to tx_hash.
     if let Some(block_hash_hex) = params.get("block_hash") {
-        let mut hash = Hash::default();
-        hex::decode_to_slice(block_hash_hex, &mut hash)
-            .map_err(|e| RpcError::Handler(format!("invalid block hash: {e}")))?;
+        let hash = const_hex::decode_to_array(block_hash_hex)
+            .map_err(|e| RpcError::BadRequest(format!("invalid block hash: {e}")))?;
         match client
             .request(RpcRequest::GetBlockByHash { block_hash: hash })
             .await?
         {
             RpcResponse::BlockHeader(header) => Ok(Json(header)),
-            _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+            resp => Err(RpcError::UnexpectedResponse(resp).into()),
         }
     } else if let Some(tx_hash_hex) = params.get("tx_hash") {
-        let mut hash = Hash::default();
-        hex::decode_to_slice(tx_hash_hex, &mut hash)
-            .map_err(|e| RpcError::Handler(format!("invalid tx hash: {e}")))?;
+        let hash = const_hex::decode_to_array(tx_hash_hex)
+            .map_err(|e| RpcError::BadRequest(format!("invalid tx hash: {e}")))?;
         match client
             .request(RpcRequest::GetBlockByTxHash { tx_hash: hash })
             .await?
         {
             RpcResponse::BlockHeader(header) => Ok(Json(header)),
-            _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+            resp => Err(RpcError::UnexpectedResponse(resp).into()),
         }
     } else {
-        Err(RpcError::Handler("missing block_hash or tx_hash parameter".to_string()).into())
+        Err(RpcError::BadRequest("missing block_hash or tx_hash parameter".to_string()).into())
     }
 }
 
@@ -128,6 +126,6 @@ async fn send_raw_tx(
         .await?
     {
         RpcResponse::TransactionHash(h) => Ok(Json(h)),
-        _ => Err(RpcError::Handler("unexpected response".to_string()).into()),
+        resp => Err(RpcError::UnexpectedResponse(resp).into()),
     }
 }

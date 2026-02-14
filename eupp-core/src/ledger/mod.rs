@@ -37,7 +37,7 @@ use ethnum::U256;
 pub use query::Query;
 use serde::{Deserialize, Serialize};
 
-use crate::block::BlockHeader;
+use crate::{BlockHeader, deserialize_arr, serialize_to_hex};
 
 use super::{
     Hash,
@@ -51,9 +51,17 @@ pub struct BlockMetadata {
     /// The block's version
     pub version: u8,
 
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
     /// The unique identifier of this block
     pub hash: Hash,
 
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
     /// Pointer to the parent for traversing the tree
     pub prev_block_hash: Hash,
 
@@ -69,6 +77,10 @@ pub struct BlockMetadata {
     /// The cumulative work on this blockchain.
     pub cumulative_work: U256,
 
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
     /// The merkle root of the transaction tree.
     pub merkle_root: Hash,
 

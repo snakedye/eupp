@@ -44,6 +44,7 @@ use super::{
     transaction::{Output, Transaction, TransactionHash},
 };
 use blake2::{Blake2s256, Digest};
+use const_hex as hex;
 use serde::{Deserialize, Serialize};
 
 /// The maximum block size in vbytes.
@@ -87,7 +88,7 @@ pub struct BlockHeader {
 #[derive(Debug)]
 pub enum BlockError {
     /// The previous block hash is invalid or not found.
-    InvalidBlockHash(String),
+    InvalidBlockHash(Hash),
     /// The block size exceeds the maximum allowed size.
     InvalidBlockSize(usize),
     /// The mining challenge was not solved correctly.
@@ -141,7 +142,9 @@ impl<T: Error + 'static> From<T> for BlockError {
 impl std::fmt::Display for BlockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockError::InvalidBlockHash(msg) => write!(f, "Invalid block hash: {}", msg),
+            BlockError::InvalidBlockHash(hash) => {
+                write!(f, "Invalid block hash: {}", hex::encode(hash))
+            }
             BlockError::InvalidBlockSize(size) => {
                 write!(f, "Invalid block size: {} exceeds maximum allowed", size)
             }
@@ -213,15 +216,9 @@ impl Block {
             let prev_block_hash = self.prev_block_hash;
 
             // Verify the previous block hash
-            let prev_block_metadata =
-                indexer
-                    .get_block_metadata(&prev_block_hash)
-                    .ok_or_else(|| {
-                        BlockError::InvalidBlockHash(format!(
-                            "Previous block hash not found: {}",
-                            hex::encode(&self.prev_block_hash)
-                        ))
-                    })?;
+            let prev_block_metadata = indexer
+                .get_block_metadata(&prev_block_hash)
+                .ok_or_else(|| BlockError::InvalidBlockHash(self.prev_block_hash))?;
 
             // Verify the challenge
             let lead_input = self

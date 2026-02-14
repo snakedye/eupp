@@ -8,7 +8,7 @@ eupp-core = { path = "../eupp-core" }
 libp2p = { version = "0.56", features = ["gossipsub", "mdns", "tcp", "noise", "yamux", "tokio", "request-response", "cbor"] }
 tokio = { version = "1.0", features = ["sync", "time", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
-hex = "0.4.3"
+const-hex = "1.17.0"
 postcard = { version = "1.1", features = ["alloc"] }
 dotenv = "0.15.0"
 tracing = "0.1"
