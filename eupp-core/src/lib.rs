@@ -9,6 +9,7 @@ mod transaction;
 pub mod vm;
 
 pub use block::*;
+use const_hex as hex;
 pub use transaction::*;
 
 /// Like [`AsRef`], but returns `Option<&T>` instead of `&T`.
@@ -120,10 +121,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
-    vec.as_slice()
-        .try_into()
-        .map_err(|_| serde::de::Error::custom(format!("Expected array of length {}", N)))
+    hex::decode_to_array(&s).map_err(serde::de::Error::custom)
 }
 
 /// Deserialize a hexadecimal string into a vector.

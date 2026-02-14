@@ -85,6 +85,12 @@ pub enum RpcRequest {
 
     /// Broadcast a mined block to the network.
     BroadcastBlock { block: Block },
+
+    /// Fetch a block header by its hash.
+    GetBlockByHash { block_hash: Hash },
+
+    /// Fetch a block header by a transaction hash.
+    GetBlockByTxHash { tx_hash: TransactionHash },
 }
 
 /// RPC responses for `RpcRequest`.
@@ -107,17 +113,22 @@ pub enum RpcResponse {
 
     /// All transactions currently in the mempool.
     Transactions(Vec<Transaction>),
+
+    /// The block header for a given block hash or transaction hash.
+    BlockHeader(BlockHeader),
 }
 
 /// Errors returned by [`RpcClient::request`].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RpcError {
     /// The internal channel is closed (node shut down or receiver dropped).
     ChannelClosed,
     /// A shared lock (e.g. ledger or mempool) could not be acquired.
     LockError,
-    /// The RPC handler could not fulfil the request.
-    Handler(String),
+    /// Unexpected response from the RPC server.
+    UnexpectedResponse(RpcResponse),
+    /// The request was malformed.
+    BadRequest(String),
 }
 
 impl std::fmt::Display for RpcError {
@@ -125,7 +136,8 @@ impl std::fmt::Display for RpcError {
         match self {
             RpcError::ChannelClosed => write!(f, "RPC channel closed"),
             RpcError::LockError => write!(f, "failed to acquire internal lock"),
-            RpcError::Handler(msg) => write!(f, "{msg}"),
+            RpcError::UnexpectedResponse(resp) => write!(f, "unexpected response: {:?}", resp),
+            RpcError::BadRequest(err) => write!(f, "bad request: {}", err),
         }
     }
 }

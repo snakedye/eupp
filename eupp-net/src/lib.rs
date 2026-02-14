@@ -9,6 +9,7 @@ use crate::mempool::Mempool;
 use crate::protocol::{
     GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
 };
+use const_hex as hex;
 use eupp_core::{
     ledger::{Indexer, IndexerExt, Ledger, LedgerExt},
     *,
@@ -461,6 +462,23 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
         I: Indexer,
     {
         match request {
+            RpcRequest::GetBlockByHash { block_hash } => {
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let block_metadata = idxer.get_block_metadata(&block_hash).ok_or_else(|| {
+                    RpcError::BadRequest("Block not found for the given hash".into())
+                })?;
+                Ok(RpcResponse::BlockHeader(block_metadata.header()))
+            }
+            RpcRequest::GetBlockByTxHash { tx_hash } => {
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let block_hash = idxer.get_block_from_transaction(&tx_hash).ok_or_else(|| {
+                    RpcError::BadRequest("Block not found for the given transaction hash".into())
+                })?;
+                let block_metadata = idxer.get_block_metadata(&block_hash).ok_or_else(|| {
+                    RpcError::BadRequest("Block metadata not found for the given hash".into())
+                })?;
+                Ok(RpcResponse::BlockHeader(block_metadata.header()))
+            }
             RpcRequest::GetNetworkInfo => {
                 let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
                 let info = idxer
@@ -537,10 +555,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                     Err(err) => {
                         // Clear mempool on other errors and log
                         self.mempool.write().unwrap().clear();
-                        Err(RpcError::Handler(format!(
-                            "Failed to add block to ledger: {:?}",
-                            err
-                        )))
+                        Err(RpcError::BadRequest(err.to_string()))
                     }
                 }
             }
@@ -562,7 +577,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                         info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC");
                         Ok(RpcResponse::TransactionHash(tx_hash))
                     }
-                    Err(e) => Err(RpcError::Handler(format!(
+                    Err(e) => Err(RpcError::BadRequest(format!(
                         "Failed to add transaction to mempool: {:?}",
                         e
                     ))),

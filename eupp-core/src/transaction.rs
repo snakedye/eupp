@@ -16,6 +16,7 @@ use super::{
 };
 use super::{Signature, VirtualSize};
 use blake2::{Blake2s256, Digest};
+use const_hex as hex;
 use ed25519_dalek::{SecretKey, Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use std::fmt;
