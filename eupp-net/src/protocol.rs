@@ -1,4 +1,7 @@
-use eupp_core::{ledger::Query, *};
+use eupp_core::{
+    ledger::{BlockMetadata, Query},
+    *,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -21,6 +24,43 @@ pub struct NetworkInfo {
     )]
     /// The cummulative difficulty of the blockchain in the amount of bits used.
     pub cummulative_difficulty: [u8; 32],
+}
+
+/// The block summary is a lightweight representation of a block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockSummary {
+    /// The block's version
+    pub version: u8,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The unique identifier of this block
+    pub hash: Hash,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// Pointer to the parent for traversing the tree
+    pub prev_block_hash: Hash,
+
+    /// The vertical position in the chain (Genesis = 0)
+    pub height: u32,
+
+    /// The MAS Metric: Sum of all rewards from Genesis to this block.
+    pub available_supply: u64,
+
+    /// The hash of the mining transaction.
+    pub lead_tx_hash: Hash,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The merkle root of the transaction tree.
+    pub merkle_root: Hash,
 }
 
 /// Messages broadcast over gossipsub for all peers to see.
@@ -87,7 +127,7 @@ pub enum RpcRequest {
     BroadcastBlock { block: Block },
 
     /// Fetch a block header by its hash.
-    GetBlockByHash { block_hash: Hash },
+    GetBlockByHash { hash: Hash },
 
     /// Fetch a block header by a transaction hash.
     GetBlockByTxHash { tx_hash: TransactionHash },
@@ -114,8 +154,8 @@ pub enum RpcResponse {
     /// All transactions currently in the mempool.
     Transactions(Vec<Transaction>),
 
-    /// The block header for a given block hash or transaction hash.
-    BlockHeader(BlockHeader),
+    /// The summary of a block.
+    BlockSummary(BlockSummary),
 }
 
 /// Errors returned by [`RpcClient::request`].
@@ -143,3 +183,18 @@ impl std::fmt::Display for RpcError {
 }
 
 impl std::error::Error for RpcError {}
+
+impl<T: AsRef<BlockMetadata>> From<T> for BlockSummary {
+    fn from(value: T) -> Self {
+        let metadata = value.as_ref();
+        Self {
+            version: metadata.version,
+            hash: metadata.hash,
+            prev_block_hash: metadata.prev_block_hash,
+            lead_tx_hash: metadata.lead_output.tx_hash,
+            height: metadata.height,
+            available_supply: metadata.available_supply,
+            merkle_root: metadata.merkle_root,
+        }
+    }
+}

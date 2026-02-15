@@ -5,7 +5,12 @@ use eupp_core::{
     Block, Output, SecretKey, Transaction, Version, commitment, ledger::Indexer, miner,
 };
 use eupp_db::{FileStore, RedbIndexer};
-use eupp_net::{EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool};
+use eupp_net::{
+    EuppNode, RpcClient, SyncHandle,
+    config::Config,
+    mempool::SimpleMempool,
+    protocol::{RpcError, RpcResponse},
+};
 use indexer::NodeStore;
 use rand::{TryRngCore, rngs::OsRng};
 use std::{
@@ -142,9 +147,6 @@ async fn mining_loop<L: Indexer>(
     const BATCH_SIZE: usize = 10_000;
 
     loop {
-        // Sleep for a second before checking sync status
-        tokio::time::sleep(Duration::from_secs(5)).await;
-
         // Check sync status before sleeping to avoid unnecessary delay
         if sync.is_synced() {
             continue;

@@ -1,16 +1,13 @@
-use std::collections::HashMap;
-
 use axum::{
     Json, Router,
-    extract::Query as HttpQuery,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use eupp_core::{BlockHeader, Output, OutputId, Transaction, TransactionHash, ledger::Query};
-use eupp_net::RpcClient;
+use eupp_core::{Output, OutputId, Transaction, TransactionHash, ledger::Query};
 use eupp_net::protocol::{self as protocol, RpcError, RpcRequest, RpcResponse};
+use eupp_net::{RpcClient, protocol::BlockSummary};
 
 /// Newtype wrapper around [`RpcError`] so we can implement [`IntoResponse`]
 /// in this crate (orphan-rule workaround).
@@ -43,8 +40,9 @@ pub fn router(state: RpcClient) -> Router {
             "/transactions/:tx_hash/confirmations",
             get(get_confirmations),
         )
+        .route("/transactions/:tx_hash/block", get(get_block_from_tx_id))
         .route("/transactions/outputs", post(query_outputs))
-        .route("/blocks", get(get_block))
+        .route("/blocks/:hash", get(get_block))
         .route("/transactions", post(send_raw_tx))
         .with_state(state)
 }
@@ -77,6 +75,21 @@ async fn get_confirmations(
     }
 }
 
+async fn get_block_from_tx_id(
+    State(client): State<RpcClient>,
+    axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
+) -> Result<Json<BlockSummary>, ApiError> {
+    let tx_hash = const_hex::decode_to_array(tx_hash_hex)
+        .map_err(|e| RpcError::BadRequest(format!("invalid tx hash: {e}")))?;
+    match client
+        .request(RpcRequest::GetBlockByTxHash { tx_hash })
+        .await?
+    {
+        RpcResponse::BlockSummary(summary) => Ok(Json(summary)),
+        resp => Err(RpcError::UnexpectedResponse(resp).into()),
+    }
+}
+
 async fn query_outputs(
     State(client): State<RpcClient>,
     Json(query): Json<Query>,
@@ -89,31 +102,13 @@ async fn query_outputs(
 
 async fn get_block(
     State(client): State<RpcClient>,
-    HttpQuery(params): HttpQuery<HashMap<String, String>>,
-) -> Result<Json<BlockHeader>, ApiError> {
-    // Prefer explicit block_hash if provided, otherwise fall back to tx_hash.
-    if let Some(block_hash_hex) = params.get("hash") {
-        let hash = const_hex::decode_to_array(block_hash_hex)
-            .map_err(|e| RpcError::BadRequest(format!("invalid block hash: {e}")))?;
-        match client
-            .request(RpcRequest::GetBlockByHash { block_hash: hash })
-            .await?
-        {
-            RpcResponse::BlockHeader(header) => Ok(Json(header)),
-            resp => Err(RpcError::UnexpectedResponse(resp).into()),
-        }
-    } else if let Some(tx_hash_hex) = params.get("tx_id") {
-        let hash = const_hex::decode_to_array(tx_hash_hex)
-            .map_err(|e| RpcError::BadRequest(format!("invalid tx hash: {e}")))?;
-        match client
-            .request(RpcRequest::GetBlockByTxHash { tx_hash: hash })
-            .await?
-        {
-            RpcResponse::BlockHeader(header) => Ok(Json(header)),
-            resp => Err(RpcError::UnexpectedResponse(resp).into()),
-        }
-    } else {
-        Err(RpcError::BadRequest("missing hash or tx_id parameter".to_string()).into())
+    axum::extract::Path(block_hash_hex): axum::extract::Path<String>,
+) -> Result<Json<BlockSummary>, ApiError> {
+    let hash = const_hex::decode_to_array(block_hash_hex)
+        .map_err(|e| RpcError::BadRequest(format!("invalid block hash: {e}")))?;
+    match client.request(RpcRequest::GetBlockByHash { hash }).await? {
+        RpcResponse::BlockSummary(summary) => Ok(Json(summary)),
+        resp => Err(RpcError::UnexpectedResponse(resp).into()),
     }
 }
 

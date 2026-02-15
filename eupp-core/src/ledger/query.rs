@@ -10,6 +10,8 @@ pub struct Query {
     pub to: Option<Hash>,
     /// Set of commitment hashes to include in the query.
     pub addresses: HashSet<Hash>,
+    /// The transaction ID
+    pub tx_id: Option<Hash>,
 }
 
 impl Query {
@@ -17,6 +19,7 @@ impl Query {
     pub fn new() -> Query {
         Self {
             to: None,
+            tx_id: None,
             addresses: HashSet::new(),
         }
     }
