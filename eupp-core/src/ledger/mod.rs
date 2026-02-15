@@ -37,7 +37,7 @@ use ethnum::U256;
 pub use query::Query;
 use serde::{Deserialize, Serialize};
 
-use crate::block::BlockHeader;
+use crate::BlockHeader;
 
 use super::{
     Hash,

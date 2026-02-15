@@ -7,10 +7,13 @@ use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::config::Config;
 use crate::mempool::Mempool;
 use crate::protocol::{
-    GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
+    BlockSummary, GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest,
+    SyncResponse,
 };
+use const_hex as hex;
+use ethnum::U256;
 use eupp_core::{
-    ledger::{Indexer, IndexerExt, Ledger, LedgerExt},
+    ledger::{Indexer, IndexerExt, Ledger, LedgerExt, Query},
     *,
 };
 
@@ -30,8 +33,8 @@ use tokio::sync::mpsc;
 /// Represents the synchronization state of a peer, including its advertised supply.
 #[derive(Clone, Debug)]
 struct PeerSyncState {
-    /// The total supply advertised by the peer.
-    supply: u64,
+    /// The cumulative work advertised by the peer.
+    cumulative_work: U256,
 }
 
 /// Represents a full node in the Eupp network.
@@ -48,7 +51,7 @@ pub struct RpcClient {
 pub struct SyncHandle(Weak<RwLock<Option<PeerId>>>);
 
 impl SyncHandle {
-    pub fn is_synced(&self) -> bool {
+    pub fn is_syncing(&self) -> bool {
         self.0
             .upgrade()
             .map_or(false, |lock| lock.read().unwrap().is_some())
@@ -62,13 +65,92 @@ impl RpcClient {
     }
 
     /// Send a request and await the response.
-    pub async fn request(&self, req: RpcRequest) -> Result<RpcResponse, RpcError> {
+    async fn request(&self, req: RpcRequest) -> Result<RpcResponse, RpcError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.inner
             .send((req, tx))
             .await
             .map_err(|_| RpcError::ChannelClosed)?;
         rx.await.map_err(|_| RpcError::ChannelClosed)?
+    }
+
+    /// Return basic network info (tip hash, height, available supply).
+    pub async fn get_network_info(&self) -> Result<NetworkInfo, RpcError> {
+        match self.request(RpcRequest::GetNetworkInfo).await? {
+            RpcResponse::NetworkInfo(info) => Ok(info),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Return confirmations for a given transaction hash.
+    pub async fn get_confirmations(&self, tx_hash: TransactionHash) -> Result<u64, RpcError> {
+        match self
+            .request(RpcRequest::GetConfirmations { tx_hash })
+            .await?
+        {
+            RpcResponse::Confirmations(conf) => Ok(conf),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Query UTXOs matching `Query`.
+    pub async fn get_outputs(&self, query: Query) -> Result<Vec<(OutputId, Output)>, RpcError> {
+        match self.request(RpcRequest::GetOutputs { query }).await? {
+            RpcResponse::Outputs(outputs) => Ok(outputs),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Broadcast a raw transaction to the network.
+    pub async fn broadcast_transaction(
+        &self,
+        tx: Transaction,
+    ) -> Result<TransactionHash, RpcError> {
+        match self
+            .request(RpcRequest::BroadcastTransaction { tx })
+            .await?
+        {
+            RpcResponse::TransactionHash(hash) => Ok(hash),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Broadcast a mined block to the network.
+    pub async fn broadcast_block(&self, block: Block) -> Result<(), RpcError> {
+        match self.request(RpcRequest::BroadcastBlock { block }).await? {
+            RpcResponse::Ok => Ok(()),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Fetch a block header by its hash.
+    pub async fn get_block_by_hash(&self, hash: Hash) -> Result<BlockSummary, RpcError> {
+        match self.request(RpcRequest::GetBlockByHash { hash }).await? {
+            RpcResponse::BlockSummary(summary) => Ok(summary),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Fetch a block header by a transaction hash.
+    pub async fn get_block_by_tx_hash(
+        &self,
+        tx_hash: TransactionHash,
+    ) -> Result<BlockSummary, RpcError> {
+        match self
+            .request(RpcRequest::GetBlockByTxHash { tx_hash })
+            .await?
+        {
+            RpcResponse::BlockSummary(summary) => Ok(summary),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Fetch the transactions in the mempool.
+    pub async fn get_mempool(&self) -> Result<Vec<Transaction>, RpcError> {
+        match self.request(RpcRequest::GetMempool).await? {
+            RpcResponse::Transactions(txs) => Ok(txs),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
     }
 }
 
@@ -104,11 +186,6 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
             peers_sync_state: HashMap::new(),
             sync_target: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Returns a the Indexer.
-    pub fn indexer(&self) -> Arc<RwLock<I>> {
-        self.indexer.clone()
     }
 
     /// Returns true if the node is currently syncing.
@@ -153,15 +230,15 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
         I: Indexer,
     {
         let idxer = self.indexer.read().ok()?;
-        let local_supply = idxer
+        let local_work = idxer
             .get_last_block_metadata()
-            .map(|m| m.available_supply)
-            .unwrap_or(0);
+            .map(|m| m.cumulative_work)
+            .unwrap_or_default();
 
         self.peers_sync_state
             .iter()
-            .filter(|(_, state)| state.supply > local_supply)
-            .max_by_key(|(_, state)| state.supply)
+            .filter(|(_, state)| state.cumulative_work > local_work)
+            .max_by_key(|(_, state)| state.cumulative_work)
             .map(|(peer_id, state)| (*peer_id, state.clone()))
     }
 
@@ -255,7 +332,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                     if let Some(meta) = lg.get_last_block_metadata() {
                         let msg = GossipMessage::ChainTip {
                             hash: meta.hash,
-                            supply: meta.available_supply,
+                            cumulative_work: meta.cumulative_work,
                         };
                         if let Err(err) = swarm
                             .behaviour_mut()
@@ -269,11 +346,11 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
             }
             GossipMessage::ChainTip {
                 hash: _hash,
-                supply,
+                cumulative_work,
             } => {
                 if let Some(source) = message.source {
                     self.peers_sync_state
-                        .insert(source, PeerSyncState { supply });
+                        .insert(source, PeerSyncState { cumulative_work });
                 }
             }
         }
@@ -461,6 +538,23 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
         I: Indexer,
     {
         match request {
+            RpcRequest::GetBlockByHash { hash: block_hash } => {
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let block_metadata = idxer.get_block_metadata(&block_hash).ok_or_else(|| {
+                    RpcError::BadRequest("Block not found for the given hash".into())
+                })?;
+                Ok(RpcResponse::BlockSummary(block_metadata.into()))
+            }
+            RpcRequest::GetBlockByTxHash { tx_hash } => {
+                let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
+                let block_hash = idxer.get_block_from_transaction(&tx_hash).ok_or_else(|| {
+                    RpcError::BadRequest("Block not found for the given transaction hash".into())
+                })?;
+                let block_metadata = idxer.get_block_metadata(&block_hash).ok_or_else(|| {
+                    RpcError::BadRequest("Block metadata not found for the given hash".into())
+                })?;
+                Ok(RpcResponse::BlockSummary(block_metadata.into()))
+            }
             RpcRequest::GetNetworkInfo => {
                 let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
                 let info = idxer
@@ -492,24 +586,17 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                 };
                 Ok(RpcResponse::Confirmations(confirmations))
             }
-            RpcRequest::GetUtxos { query } => {
+            RpcRequest::GetOutputs { query } => {
                 let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
                 let outputs = idxer.query_outputs(&query);
-                Ok(RpcResponse::Utxos(outputs))
+                Ok(RpcResponse::Outputs(outputs))
             }
-            RpcRequest::BroadcastBlock { mut block } => {
-                {
-                    let mp = self.mempool.read().unwrap();
-                    let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
-                    let selected = mp.get_transactions().scan(remaining, |remaining, tx| {
-                        // Select transactions for the block
-                        let tx_vsize = tx.vsize();
-                        *remaining = remaining.saturating_sub(tx_vsize);
-                        (*remaining > 0).then(|| tx.into_owned())
-                    });
-                    block.transactions.extend(selected);
-                }
-
+            RpcRequest::GetMempool => {
+                let mp = self.mempool.read().map_err(|_| RpcError::LockError)?;
+                let mempool = mp.get_transactions().map(|tx| tx.into_owned());
+                Ok(RpcResponse::Transactions(mempool.collect()))
+            }
+            RpcRequest::BroadcastBlock { block } => {
                 let mut indexer = self.indexer.write().map_err(|_| RpcError::LockError)?;
                 match indexer.add_block(&block) {
                     Ok(_) => {
@@ -537,10 +624,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                     Err(err) => {
                         // Clear mempool on other errors and log
                         self.mempool.write().unwrap().clear();
-                        Err(RpcError::Handler(format!(
-                            "Failed to add block to ledger: {:?}",
-                            err
-                        )))
+                        Err(RpcError::BadRequest(err.to_string()))
                     }
                 }
             }
@@ -562,7 +646,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                         info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC");
                         Ok(RpcResponse::TransactionHash(tx_hash))
                     }
-                    Err(e) => Err(RpcError::Handler(format!(
+                    Err(e) => Err(RpcError::BadRequest(format!(
                         "Failed to add transaction to mempool: {:?}",
                         e
                     ))),

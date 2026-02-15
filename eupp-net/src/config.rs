@@ -8,8 +8,8 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 
+use const_hex as hex;
 use eupp_core::PublicKey;
-use hex;
 use libp2p::identity::ed25519::{Keypair, SecretKey};
 
 /// Default number of blocks to fetch in a single synchronization chunk when not provided.
@@ -67,7 +67,7 @@ pub struct Config {
     /// Raw 32 bytes of the ed25519 secret key.
     ///
     /// The environment value should be a hex-encoded 32-byte secret (64 hex chars).
-    pub secret_key_bytes: [u8; 32],
+    pub secret_key: [u8; 32],
 
     /// Optional mining difficulty in bits. When set, mining is enabled
     /// with this many leading zero-bytes required in the solution hash.
@@ -99,7 +99,7 @@ impl Default for Config {
         Self {
             api_port: None,
             p2p_port: None,
-            secret_key_bytes: Default::default(),
+            secret_key: Default::default(),
             difficulty: None,
             block_chunk_size: DEFAULT_BLOCK_CHUNK_SIZE,
             index_db_path: None,
@@ -170,27 +170,17 @@ impl Config {
 
         let sk_hex_trimmed = sk_hex.trim_start_matches("0x");
 
-        let sk_vec = hex::decode(sk_hex_trimmed).map_err(|e| {
+        let secret_key = hex::decode_to_array(sk_hex_trimmed).map_err(|e| {
             ConfigError::new(
                 "EUPP_SECRET_KEY",
                 format!("invalid hex (expected 64 hex chars): {e}"),
             )
         })?;
 
-        if sk_vec.len() != 32 {
-            return Err(ConfigError::new(
-                "EUPP_SECRET_KEY",
-                format!("must decode to 32 bytes (got {})", sk_vec.len()),
-            ));
-        }
-
-        let mut secret_key_bytes = [0u8; 32];
-        secret_key_bytes.copy_from_slice(&sk_vec);
-
         Ok(Config {
             api_port,
             p2p_port,
-            secret_key_bytes,
+            secret_key,
             difficulty: mining_difficulty,
             block_chunk_size,
             index_db_path,
@@ -201,12 +191,12 @@ impl Config {
 
     /// Retrieve the secret key.
     pub fn secret_key(&self) -> [u8; 32] {
-        self.secret_key_bytes
+        self.secret_key
     }
 
     /// Retrieve the public key.
     pub fn public_key(&self) -> PublicKey {
-        let sk = SecretKey::try_from_bytes(self.secret_key_bytes.clone().as_mut()).unwrap();
+        let sk = SecretKey::try_from_bytes(self.secret_key.clone().as_mut()).unwrap();
         let kp = Keypair::from(sk);
         kp.public().to_bytes()
     }

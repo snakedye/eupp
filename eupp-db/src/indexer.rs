@@ -416,21 +416,30 @@ where
         let address_table = read_tx.open_multimap_table(ADDRESS_TABLE).unwrap();
         let utxo_table = read_tx.open_table(UTXO_TABLE).unwrap();
 
-        query
-            .addresses()
-            .iter()
-            .filter_map(|address| address_table.get(address).ok())
-            .flat_map(|values| values)
-            .filter_map(|value| value.ok())
-            .map(|output_id| output_id.value())
-            .filter_map(|output_id| {
-                utxo_table
-                    .get(output_id)
-                    .ok()
-                    .flatten()
-                    .map(move |value| (output_id, value.value()))
-            })
-            .collect()
+        match query {
+            ledger::Query::Addresses(addresses) => addresses
+                .iter()
+                .filter_map(|address| address_table.get(address).ok())
+                .flat_map(|values| values)
+                .filter_map(|value| value.ok())
+                .map(|output_id| output_id.value())
+                .filter_map(|output_id| {
+                    utxo_table
+                        .get(output_id)
+                        .ok()
+                        .flatten()
+                        .map(move |value| (output_id, value.value()))
+                })
+                .collect(),
+            ledger::Query::TransactionID(tx_hash) => utxo_table
+                .range(OutputId::new(*tx_hash, 0)..OutputId::new(*tx_hash, 255))
+                .map(|iter| {
+                    iter.filter_map(|output| output.ok())
+                        .map(|(output_id, output)| (output_id.value(), output.value()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
     }
     fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash> {
         let read_tx = self.db.begin_read().ok()?;
@@ -541,7 +550,7 @@ mod tests {
         indexer.add_block(&block).expect("add block");
 
         // Query with an empty Query should return indexed addresses (the indexer stores added addresses)
-        let q = Query::new().with_address(*address);
+        let q = Query::Addresses(vec![*address]);
         let res = indexer.query_outputs(&q);
         // We expect at least one UTXO for our address
         let (id, out) = res.first().unwrap();

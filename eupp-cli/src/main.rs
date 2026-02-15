@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use const_hex as hex;
 use eupp_core::{Hash, TransactionHash, commitment, keypair};
 use eupp_core::{Input, Output, OutputId, Transaction, ledger::Query, sighash};
 use std::time::Duration;
@@ -24,7 +25,7 @@ enum Command {
 
         /// The public key hash (address/commitment) of the recipient (hex-encoded, 32 bytes).
         #[arg(long)]
-        address: String,
+        address: Option<String>,
 
         /// The amount to send in the transaction.
         #[arg(long)]
@@ -53,34 +54,28 @@ fn base_url(peer: &str) -> String {
     peer.trim_end_matches('/').to_string()
 }
 
-fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
+fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amount: u64) {
     let base = base_url(peer);
     let client = build_client();
 
     // Parse the secret key
-    let secret_key_bytes = hex::decode(secret_key).expect("Invalid hex for secret key");
-    let signing_key = secret_key_bytes
-        .try_into()
-        .as_ref()
-        .map(keypair)
-        .expect("Failed to parse secret key (expected 32 bytes)");
+    let secret_key = hex::decode_to_array(secret_key).expect("Invalid hex for secret key");
+    let signing_key = keypair(&secret_key);
     let public_key = signing_key.verifying_key().to_bytes();
     let data = [0_u8; 32];
     let self_address = commitment(&public_key, Some(data.as_slice()));
 
     // Parse the recipient address (public key hash / commitment)
-    let recipient_bytes = hex::decode(address_hex).expect("Invalid hex for recipient address");
-    let recipient_address: Hash = recipient_bytes
-        .as_slice()
-        .try_into()
-        .expect("Recipient address must be exactly 32 bytes");
+    let recipient_address: Hash = address_hex
+        .map(|hex| hex::decode_to_array(hex).expect("Invalid hex for recipient address"))
+        .unwrap_or(self_address);
 
     // Build query for our own UTXOs
-    let query = Query::new().with_address(self_address);
+    let query = Query::Addresses(vec![self_address]);
 
     // Fetch UTXOs
     let resp = client
-        .post(format!("{base}/transactions/outputs"))
+        .post(format!("{base}/outputs/search"))
         .json(&query)
         .send()
         .expect("Failed to send UTXO query");
@@ -89,10 +84,11 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
         panic!("Failed to fetch UTXOs: {}", resp.status());
     }
 
-    let utxos: Vec<(OutputId, Output)> = resp.json().expect("Failed to parse UTXO response");
-    let balance: u64 = utxos.iter().map(|(_, output)| output.amount()).sum();
+    let outputs: Vec<(OutputId, Output)> = resp.json().expect("Failed to parse outputs response");
+    let utxos = outputs.iter().take(255);
+    let balance: u64 = utxos.clone().map(|(_, output)| output.amount()).sum();
     println!("Address: {}", hex::encode(self_address));
-    println!("Balance: {} units", balance);
+    println!("Spendable balance: {} units", balance);
 
     if amount > balance {
         panic!(
@@ -109,10 +105,10 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: &str, amount: u64) {
     let new_outputs = vec![to_remote, to_self];
 
     // Compute sighash and sign inputs
-    let sighash_val = sighash(utxos.iter().map(|(oid, _)| oid), &new_outputs);
+    let sighash_val = sighash(utxos.clone().map(|(oid, _)| oid), &new_outputs);
 
     let inputs: Vec<Input> = utxos
-        .iter()
+        .clone()
         .map(|(output_id, _)| {
             Input::new_unsigned(*output_id).sign(signing_key.as_bytes(), sighash_val)
         })
@@ -203,7 +199,7 @@ fn main() {
             secret_key,
             address,
             amount,
-        } => cmd_send_to(&cli.peer, &secret_key, &address, amount),
+        } => cmd_send_to(&cli.peer, &secret_key, address.as_ref(), amount),
         Command::Broadcast { tx } => cmd_broadcast(&cli.peer, &tx),
         Command::Network => cmd_network(&cli.peer),
     }
