@@ -71,7 +71,7 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amoun
         .unwrap_or(self_address);
 
     // Build query for our own UTXOs
-    let query = Query::new().with_address(self_address);
+    let query = Query::Addresses(vec![self_address]);
 
     // Fetch UTXOs
     let resp = client
@@ -84,10 +84,11 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amoun
         panic!("Failed to fetch UTXOs: {}", resp.status());
     }
 
-    let utxos: Vec<(OutputId, Output)> = resp.json().expect("Failed to parse UTXO response");
-    let balance: u64 = utxos.iter().map(|(_, output)| output.amount()).sum();
+    let outputs: Vec<(OutputId, Output)> = resp.json().expect("Failed to parse outputs response");
+    let utxos = outputs.iter().take(255);
+    let balance: u64 = utxos.clone().map(|(_, output)| output.amount()).sum();
     println!("Address: {}", hex::encode(self_address));
-    println!("Balance: {} units", balance);
+    println!("Spendable balance: {} units", balance);
 
     if amount > balance {
         panic!(
@@ -104,14 +105,13 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amoun
     let new_outputs = vec![to_remote, to_self];
 
     // Compute sighash and sign inputs
-    let sighash_val = sighash(utxos.iter().map(|(oid, _)| oid), &new_outputs);
+    let sighash_val = sighash(utxos.clone().map(|(oid, _)| oid), &new_outputs);
 
     let inputs: Vec<Input> = utxos
-        .iter()
+        .clone()
         .map(|(output_id, _)| {
             Input::new_unsigned(*output_id).sign(signing_key.as_bytes(), sighash_val)
         })
-        .take(100)
         .collect();
     let tx = Transaction::new(inputs, new_outputs);
 

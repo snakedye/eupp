@@ -94,6 +94,16 @@ impl ExecError {
     }
 }
 
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Failed at opcode '{}' (code {}), stack trace: {:?}",
+            self.op, self.code, self.trace
+        )
+    }
+}
+
 /// VM runtime holding a reference to a indexer.
 pub struct Vm<'a, L> {
     input_index: usize,

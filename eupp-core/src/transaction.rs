@@ -135,6 +135,55 @@ impl From<ExecError> for TransactionError {
         TransactionError::Execution(err)
     }
 }
+
+impl fmt::Display for TransactionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TransactionError::InvalidOutput(output_id) => {
+                write!(f, "Invalid output: {:?}", output_id)
+            }
+            TransactionError::Execution(err) => {
+                // Assuming ExecError implements Display
+                write!(f, "Script execution error: {}", err)
+            }
+            TransactionError::InvalidBalance {
+                total_input,
+                total_output,
+            } => {
+                write!(
+                    f,
+                    "Invalid balance: total input ({}) is less than total output ({})",
+                    total_input, total_output
+                )
+            }
+            TransactionError::InvalidWitnessSize => {
+                write!(
+                    f,
+                    "Witness data size exceeds maximum allowed ({} bytes)",
+                    MAX_WITNESS_SIZE
+                )
+            }
+            TransactionError::MissingInputs => {
+                write!(f, "Transaction contains no inputs")
+            }
+            TransactionError::TooManyInputs => {
+                write!(
+                    f,
+                    "Transaction contains too many inputs (max {})",
+                    MAX_ALLOWED
+                )
+            }
+            TransactionError::TooManyOutputs => {
+                write!(
+                    f,
+                    "Transaction contains too many outputs (max {})",
+                    MAX_ALLOWED
+                )
+            }
+        }
+    }
+}
+
 impl VirtualSize for Input {
     fn vsize(&self) -> usize {
         // the pk and sig can be pruned after validation

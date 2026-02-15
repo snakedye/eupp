@@ -49,7 +49,7 @@ pub struct RpcClient {
 pub struct SyncHandle(Weak<RwLock<Option<PeerId>>>);
 
 impl SyncHandle {
-    pub fn is_synced(&self) -> bool {
+    pub fn is_syncing(&self) -> bool {
         self.0
             .upgrade()
             .map_or(false, |lock| lock.read().unwrap().is_some())
@@ -105,11 +105,6 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
             peers_sync_state: HashMap::new(),
             sync_target: Arc::new(RwLock::new(None)),
         }
-    }
-
-    /// Returns a the Indexer.
-    pub fn indexer(&self) -> Arc<RwLock<I>> {
-        self.indexer.clone()
     }
 
     /// Returns true if the node is currently syncing.
@@ -510,24 +505,17 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                 };
                 Ok(RpcResponse::Confirmations(confirmations))
             }
-            RpcRequest::GetUtxos { query } => {
+            RpcRequest::GetOutputs { query } => {
                 let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
                 let outputs = idxer.query_outputs(&query);
-                Ok(RpcResponse::Utxos(outputs))
+                Ok(RpcResponse::Outputs(outputs))
             }
-            RpcRequest::BroadcastBlock { mut block } => {
-                {
-                    let mp = self.mempool.read().unwrap();
-                    let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
-                    let selected = mp.get_transactions().scan(remaining, |remaining, tx| {
-                        // Select transactions for the block
-                        let tx_vsize = tx.vsize();
-                        *remaining = remaining.saturating_sub(tx_vsize);
-                        (*remaining > 0).then(|| tx.into_owned())
-                    });
-                    block.transactions.extend(selected);
-                }
-
+            RpcRequest::GetMempool => {
+                let mp = self.mempool.read().map_err(|_| RpcError::LockError)?;
+                let mempool = mp.get_transactions().map(|tx| tx.into_owned());
+                Ok(RpcResponse::Transactions(mempool.collect()))
+            }
+            RpcRequest::BroadcastBlock { block } => {
                 let mut indexer = self.indexer.write().map_err(|_| RpcError::LockError)?;
                 match indexer.add_block(&block) {
                     Ok(_) => {

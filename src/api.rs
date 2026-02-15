@@ -94,8 +94,8 @@ async fn query_outputs(
     State(client): State<RpcClient>,
     Json(query): Json<Query>,
 ) -> Result<Json<Vec<(OutputId, Output)>>, ApiError> {
-    match client.request(RpcRequest::GetUtxos { query }).await? {
-        RpcResponse::Utxos(list) => Ok(Json(list)),
+    match client.request(RpcRequest::GetOutputs { query }).await? {
+        RpcResponse::Outputs(list) => Ok(Json(list)),
         resp => Err(RpcError::UnexpectedResponse(resp).into()),
     }
 }

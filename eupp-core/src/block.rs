@@ -160,7 +160,7 @@ impl std::fmt::Display for BlockError {
                 "Supply error: actual {} is outside allowed range (min expected: {})",
                 actual, min_expected
             ),
-            BlockError::TransactionError(err) => write!(f, "Transaction error: {:?}", err),
+            BlockError::TransactionError(err) => write!(f, "Transaction error: {}", err),
             BlockError::Other(err) => write!(f, "Other error: {}", err),
         }
     }

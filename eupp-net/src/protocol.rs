@@ -63,6 +63,21 @@ pub struct BlockSummary {
     pub merkle_root: Hash,
 }
 
+impl<T: AsRef<BlockMetadata>> From<T> for BlockSummary {
+    fn from(value: T) -> Self {
+        let metadata = value.as_ref();
+        Self {
+            version: metadata.version,
+            hash: metadata.hash,
+            prev_block_hash: metadata.prev_block_hash,
+            lead_tx_hash: metadata.lead_output.tx_hash,
+            height: metadata.height,
+            available_supply: metadata.available_supply,
+            merkle_root: metadata.merkle_root,
+        }
+    }
+}
+
 /// Messages broadcast over gossipsub for all peers to see.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GossipMessage {
@@ -117,7 +132,7 @@ pub enum RpcRequest {
     GetConfirmations { tx_hash: TransactionHash },
 
     /// Query UTXOs matching `Query`.
-    GetUtxos { query: Query },
+    GetOutputs { query: Query },
 
     /// Broadcast a raw transaction to the network.
     /// Expect a `TransactionHash` in the response on success.
@@ -131,6 +146,9 @@ pub enum RpcRequest {
 
     /// Fetch a block header by a transaction hash.
     GetBlockByTxHash { tx_hash: TransactionHash },
+
+    /// Fetch the transactions in the mempool.
+    GetMempool,
 }
 
 /// RPC responses for `RpcRequest`.
@@ -146,7 +164,7 @@ pub enum RpcResponse {
     Confirmations(u64),
 
     /// All matched UTXOs in one response: pairs of (OutputId, Output).
-    Utxos(Vec<(OutputId, Output)>),
+    Outputs(Vec<(OutputId, Output)>),
 
     /// The hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
@@ -183,18 +201,3 @@ impl std::fmt::Display for RpcError {
 }
 
 impl std::error::Error for RpcError {}
-
-impl<T: AsRef<BlockMetadata>> From<T> for BlockSummary {
-    fn from(value: T) -> Self {
-        let metadata = value.as_ref();
-        Self {
-            version: metadata.version,
-            hash: metadata.hash,
-            prev_block_hash: metadata.prev_block_hash,
-            lead_tx_hash: metadata.lead_output.tx_hash,
-            height: metadata.height,
-            available_supply: metadata.available_supply,
-            merkle_root: metadata.merkle_root,
-        }
-    }
-}

@@ -2,23 +2,18 @@ mod api;
 mod indexer;
 
 use eupp_core::{
-    Block, Output, SecretKey, Transaction, Version, commitment, ledger::Indexer, miner,
+    Block, MAX_BLOCK_SIZE, Output, SecretKey, Transaction, Version, VirtualSize, commitment,
+    ledger::{Indexer, Query},
+    miner,
 };
 use eupp_db::{FileStore, RedbIndexer};
 use eupp_net::{
-    EuppNode, RpcClient, SyncHandle,
-    config::Config,
-    mempool::SimpleMempool,
-    protocol::{RpcError, RpcResponse},
+    EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool, protocol::RpcResponse,
 };
 use indexer::NodeStore;
 use rand::{TryRngCore, rngs::OsRng};
-use std::{
-    net::SocketAddr,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
-use tracing::{Level, error, info};
+use std::{net::SocketAddr, time::Duration};
+use tracing::{Level, debug, error, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -78,10 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the EuppNode (do not block the current task yet)
     let node = EuppNode::new(config.clone(), ledger, mempool);
-
-    // Create handles for the node
-    let sync = node.sync_handle();
-    let indexer = node.indexer();
+    let sync_handle = node.sync_handle();
 
     // Run the node in the current task. If it returns an error, log it.
     if let Err(e) = node
@@ -106,9 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Launch mining loop if difficulty is set.
             if let Some(difficulty) = config.difficulty {
                 let secret_key = config.secret_key();
-                tokio::spawn(mining_loop(
-                    secret_key, rpc_client, indexer, sync, difficulty,
-                ));
+                tokio::spawn(mining_loop(sync_handle, secret_key, rpc_client, difficulty));
             }
         })
         .await
@@ -133,11 +123,10 @@ fn set_n_bits(arr: &mut [u8; 32], n: usize) {
 }
 
 /// Mine a block with the given difficulty.
-async fn mining_loop<L: Indexer>(
+async fn mining_loop(
+    sync: SyncHandle,
     secret_key: SecretKey,
     rpc_client: RpcClient,
-    ledger: Arc<RwLock<L>>,
-    sync: SyncHandle,
     difficulty: usize,
 ) {
     let mut mask = [0_u8; 32];
@@ -147,48 +136,80 @@ async fn mining_loop<L: Indexer>(
     const BATCH_SIZE: usize = 10_000;
 
     loop {
-        // Check sync status before sleeping to avoid unnecessary delay
-        if sync.is_synced() {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        if sync.is_syncing() {
+            debug!("Node is syncing; skipping mining iteration");
             continue;
         }
-
-        let metadata = {
-            let lg = ledger.read().unwrap();
-            lg.get_last_block_metadata().and_then(|prev_block| {
-                lg.get_output(&prev_block.lead_output)
-                    .map(|lead_utxo| (prev_block.hash, prev_block.lead_output, lead_utxo))
-            })
-        };
-
-        let Some((prev_block_hash, lead_utxo_id, lead_utxo)) = metadata else {
-            continue;
-        };
-
-        let start = OsRng.try_next_u64().unwrap() as usize;
-
-        let result = tokio::task::spawn_blocking(move || {
-            miner::build_mining_tx(
-                &secret_key,
-                &prev_block_hash,
-                &lead_utxo_id.tx_hash,
-                &lead_utxo,
-                Some(&mask),
-                start..start + BATCH_SIZE,
-            )
-        })
-        .await
-        .ok()
-        .flatten();
-
-        if let Some(mining_tx) = result {
-            let mut block = Block::new(0, prev_block_hash);
-            block.transactions.push(mining_tx);
-            if rpc_client
-                .request(eupp_net::protocol::RpcRequest::BroadcastBlock { block })
+        if let RpcResponse::Transactions(txs) = rpc_client
+            .request(eupp_net::protocol::RpcRequest::GetMempool)
+            .await
+            .unwrap()
+        {
+            if txs.is_empty() {
+                debug!("Mempool is empty; skipping mining iteration");
+                continue;
+            }
+            if let RpcResponse::NetworkInfo(network_info) = rpc_client
+                .request(eupp_net::protocol::RpcRequest::GetNetworkInfo)
                 .await
-                .is_err()
+                .unwrap()
             {
-                break;
+                if let RpcResponse::BlockSummary(block_summary) = rpc_client
+                    .request(eupp_net::protocol::RpcRequest::GetBlockByHash {
+                        hash: network_info.tip_hash,
+                    })
+                    .await
+                    .unwrap()
+                {
+                    if let RpcResponse::Outputs(outputs) = rpc_client
+                        .request(eupp_net::protocol::RpcRequest::GetOutputs {
+                            query: Query::TransactionID(block_summary.lead_tx_hash),
+                        })
+                        .await
+                        .unwrap()
+                    {
+                        // Process outputs here
+                        let start = OsRng.try_next_u64().unwrap() as usize;
+
+                        let result = tokio::task::spawn_blocking(move || {
+                            miner::build_mining_tx(
+                                &secret_key,
+                                &block_summary.hash,
+                                &block_summary.lead_tx_hash,
+                                &outputs[0].1,
+                                Some(&mask),
+                                start..start + BATCH_SIZE,
+                            )
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+
+                        if let Some(mining_tx) = result {
+                            let mut block = Block::new(0, block_summary.hash);
+                            block.transactions.push(mining_tx);
+
+                            // Calculate the remaining virtual size for the block
+                            let remaining = MAX_BLOCK_SIZE.saturating_sub(block.vsize());
+                            let selected = txs.into_iter().scan(remaining, |remaining, tx| {
+                                // Select transactions for the block
+                                let tx_vsize = tx.vsize();
+                                *remaining = remaining.saturating_sub(tx_vsize);
+                                (*remaining > 0).then_some(tx)
+                            });
+                            // Add the selected transactions to the block
+                            block.transactions.extend(selected);
+
+                            if let Err(err) = rpc_client
+                                .request(eupp_net::protocol::RpcRequest::BroadcastBlock { block })
+                                .await
+                            {
+                                error!(?err, "Failed to send block");
+                            }
+                        }
+                    }
+                }
             }
         }
 
