@@ -11,6 +11,7 @@ use crate::protocol::{
     SyncResponse,
 };
 use const_hex as hex;
+use ethnum::U256;
 use eupp_core::{
     ledger::{Indexer, IndexerExt, Ledger, LedgerExt, Query},
     *,
@@ -32,8 +33,8 @@ use tokio::sync::mpsc;
 /// Represents the synchronization state of a peer, including its advertised supply.
 #[derive(Clone, Debug)]
 struct PeerSyncState {
-    /// The total supply advertised by the peer.
-    supply: u64,
+    /// The cumulative work advertised by the peer.
+    cumulative_work: U256,
 }
 
 /// Represents a full node in the Eupp network.
@@ -229,15 +230,15 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
         I: Indexer,
     {
         let idxer = self.indexer.read().ok()?;
-        let local_supply = idxer
+        let local_work = idxer
             .get_last_block_metadata()
-            .map(|m| m.available_supply)
-            .unwrap_or(0);
+            .map(|m| m.cumulative_work)
+            .unwrap_or_default();
 
         self.peers_sync_state
             .iter()
-            .filter(|(_, state)| state.supply > local_supply)
-            .max_by_key(|(_, state)| state.supply)
+            .filter(|(_, state)| state.cumulative_work > local_work)
+            .max_by_key(|(_, state)| state.cumulative_work)
             .map(|(peer_id, state)| (*peer_id, state.clone()))
     }
 
@@ -331,7 +332,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                     if let Some(meta) = lg.get_last_block_metadata() {
                         let msg = GossipMessage::ChainTip {
                             hash: meta.hash,
-                            supply: meta.available_supply,
+                            cumulative_work: meta.cumulative_work,
                         };
                         if let Err(err) = swarm
                             .behaviour_mut()
@@ -345,11 +346,11 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
             }
             GossipMessage::ChainTip {
                 hash: _hash,
-                supply,
+                cumulative_work,
             } => {
                 if let Some(source) = message.source {
                     self.peers_sync_state
-                        .insert(source, PeerSyncState { supply });
+                        .insert(source, PeerSyncState { cumulative_work });
                 }
             }
         }

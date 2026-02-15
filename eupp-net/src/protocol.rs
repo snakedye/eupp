@@ -1,3 +1,4 @@
+use ethnum::U256;
 use eupp_core::{
     ledger::{BlockMetadata, Query},
     *,
@@ -96,8 +97,8 @@ pub enum GossipMessage {
     /// message over gossipsub (not via request-response).
     GetChainTip,
 
-    /// Advertise the peer's current chain tip: latest block hash and total supply.
-    ChainTip { hash: Hash, supply: u64 },
+    /// Advertise the peer's current chain tip: latest block hash and difficulty.
+    ChainTip { hash: Hash, cumulative_work: U256 },
 }
 
 /// Requests sent directly to a peer for synchronization purposes.
