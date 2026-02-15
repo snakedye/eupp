@@ -37,6 +37,16 @@ impl<'a, I: Indexer + ?Sized> Iterator for BlockMetadataIter<'a, I> {
     }
 }
 
+impl<'a, I: Indexer + ?Sized> ExactSizeIterator for BlockMetadataIter<'a, I> {
+    fn len(&self) -> usize {
+        self.indexer
+            .metadata()
+            .next()
+            .map(|meta| meta.height as usize)
+            .unwrap_or(0)
+    }
+}
+
 impl<'a, L: Ledger + ?Sized> Iterator for BlockIter<'a, L> {
     type Item = Cow<'a, Block>;
 
@@ -45,12 +55,13 @@ impl<'a, L: Ledger + ?Sized> Iterator for BlockIter<'a, L> {
             .get_block(&self.current_hash)
             .inspect(|block| self.current_hash = block.prev_block_hash)
     }
+}
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let height = self
-            .ledger
+impl<'a, L: Ledger + ?Sized + Indexer> ExactSizeIterator for BlockIter<'a, L> {
+    fn len(&self) -> usize {
+        self.ledger
             .get_last_block_metadata()
-            .map(|meta| meta.height as usize);
-        (height.unwrap_or_default(), height)
+            .map(|meta| meta.height as usize)
+            .unwrap_or(0)
     }
 }

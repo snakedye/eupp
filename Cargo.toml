@@ -11,9 +11,11 @@ eupp-core = { path = "./eupp-core" }
 eupp-net = { path = "./eupp-net" }
 eupp-db = { path = "./eupp-db" }
 tokio = { version = "1.0", features = ["rt-multi-thread"] }
-hex = "0.4.3"
+rand = "0.9.2"
+const-hex = "1.17.0"
 
 # HTTP API and serialization dependencies used by the top-level binary
-axum = { version = "0.6", features = ["json"] }
+axum = { version = "0.8", features = ["json"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0" }

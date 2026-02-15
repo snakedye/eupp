@@ -1,6 +1,8 @@
-use eupp_core::block::Block;
-use eupp_core::transaction::{Output, OutputId, Transaction, TransactionHash};
-use eupp_core::{Hash, block::BlockHeader, deserialize_arr, ledger::Query, serialize_to_hex};
+use ethnum::U256;
+use eupp_core::{
+    ledger::{BlockMetadata, Query},
+    *,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -25,6 +27,62 @@ pub struct NetworkInfo {
     pub cummulative_difficulty: [u8; 32],
 }
 
+/// The block summary is a lightweight representation of a block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockSummary {
+    /// The block's version
+    pub version: u8,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The unique identifier of this block
+    pub hash: Hash,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// Pointer to the parent for traversing the tree
+    pub prev_block_hash: Hash,
+
+    /// The vertical position in the chain (Genesis = 0)
+    pub height: u32,
+
+    /// The MAS Metric: Sum of all rewards from Genesis to this block.
+    pub available_supply: u64,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The hash of the mining transaction.
+    pub lead_tx_hash: Hash,
+
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The merkle root of the transaction tree.
+    pub merkle_root: Hash,
+}
+
+impl<T: AsRef<BlockMetadata>> From<T> for BlockSummary {
+    fn from(value: T) -> Self {
+        let metadata = value.as_ref();
+        Self {
+            version: metadata.version,
+            hash: metadata.hash,
+            prev_block_hash: metadata.prev_block_hash,
+            lead_tx_hash: metadata.lead_output.tx_hash,
+            height: metadata.height,
+            available_supply: metadata.available_supply,
+            merkle_root: metadata.merkle_root,
+        }
+    }
+}
+
 /// Messages broadcast over gossipsub for all peers to see.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum GossipMessage {
@@ -39,8 +97,8 @@ pub enum GossipMessage {
     /// message over gossipsub (not via request-response).
     GetChainTip,
 
-    /// Advertise the peer's current chain tip: latest block hash and total supply.
-    ChainTip { hash: Hash, supply: u64 },
+    /// Advertise the peer's current chain tip: latest block hash and difficulty.
+    ChainTip { hash: Hash, cumulative_work: U256 },
 }
 
 /// Requests sent directly to a peer for synchronization purposes.
@@ -79,38 +137,61 @@ pub enum RpcRequest {
     GetConfirmations { tx_hash: TransactionHash },
 
     /// Query UTXOs matching `Query`.
-    GetUtxos { query: Query },
+    GetOutputs { query: Query },
 
     /// Broadcast a raw transaction to the network.
     /// Expect a `TransactionHash` in the response on success.
-    SendRawTransaction { tx: Transaction },
+    BroadcastTransaction { tx: Transaction },
+
+    /// Broadcast a mined block to the network.
+    BroadcastBlock { block: Block },
+
+    /// Fetch a block header by its hash.
+    GetBlockByHash { hash: Hash },
+
+    /// Fetch a block header by a transaction hash.
+    GetBlockByTxHash { tx_hash: TransactionHash },
+
+    /// Fetch the transactions in the mempool.
+    GetMempool,
 }
 
 /// RPC responses for `RpcRequest`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RpcResponse {
-    /// Response to `GetNetworkInfo`.
+    /// Success.
+    Ok,
+
+    /// Detailed network information.
     NetworkInfo(NetworkInfo),
 
-    /// Response to `GetConfirmations`.
+    /// The number of confirmations for a given transaction hash.
     Confirmations(u64),
 
     /// All matched UTXOs in one response: pairs of (OutputId, Output).
-    Utxos(Vec<(OutputId, Output)>),
+    Outputs(Vec<(OutputId, Output)>),
 
-    /// Response to `SendRawTransaction` containing the hash of the broadcasted transaction.
+    /// The hash of the broadcasted transaction.
     TransactionHash(TransactionHash),
+
+    /// All transactions currently in the mempool.
+    Transactions(Vec<Transaction>),
+
+    /// The summary of a block.
+    BlockSummary(BlockSummary),
 }
 
 /// Errors returned by [`RpcClient::request`].
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum RpcError {
     /// The internal channel is closed (node shut down or receiver dropped).
     ChannelClosed,
     /// A shared lock (e.g. ledger or mempool) could not be acquired.
     LockError,
-    /// The RPC handler could not fulfil the request.
-    Handler(String),
+    /// Unexpected response from the RPC server.
+    UnexpectedResponse(RpcResponse),
+    /// The request was malformed.
+    BadRequest(String),
 }
 
 impl std::fmt::Display for RpcError {
@@ -118,7 +199,8 @@ impl std::fmt::Display for RpcError {
         match self {
             RpcError::ChannelClosed => write!(f, "RPC channel closed"),
             RpcError::LockError => write!(f, "failed to acquire internal lock"),
-            RpcError::Handler(msg) => write!(f, "{msg}"),
+            RpcError::UnexpectedResponse(resp) => write!(f, "unexpected response: {:?}", resp),
+            RpcError::BadRequest(err) => write!(f, "bad request: {}", err),
         }
     }
 }

@@ -8,8 +8,8 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 
+use const_hex as hex;
 use eupp_core::PublicKey;
-use hex;
 use libp2p::identity::ed25519::{Keypair, SecretKey};
 
 /// Default number of blocks to fetch in a single synchronization chunk when not provided.
@@ -67,10 +67,13 @@ pub struct Config {
     /// Raw 32 bytes of the ed25519 secret key.
     ///
     /// The environment value should be a hex-encoded 32-byte secret (64 hex chars).
-    pub secret_key_bytes: [u8; 32],
+    pub secret_key: [u8; 32],
 
-    /// Whether mining should be enabled.
-    pub mining: bool,
+    /// Optional mining difficulty in bits. When set, mining is enabled
+    /// with this many leading zero-bytes required in the solution hash.
+    ///
+    /// Environment variable: `EUPP_MINING_DIFFICULTY`
+    pub difficulty: Option<usize>,
 
     /// The number of blocks to fetch in a single synchronization chunk.
     pub block_chunk_size: usize,
@@ -96,8 +99,8 @@ impl Default for Config {
         Self {
             api_port: None,
             p2p_port: None,
-            secret_key_bytes: Default::default(),
-            mining: false,
+            secret_key: Default::default(),
+            difficulty: None,
             block_chunk_size: DEFAULT_BLOCK_CHUNK_SIZE,
             index_db_path: None,
             block_file_path: None,
@@ -113,7 +116,7 @@ impl Config {
     /// - `EUPP_API_PORT` - optional HTTP API port (u16)
     /// - `EUPP_P2P_PORT` - optional libp2p port (u16), OS-assigned if omitted
     /// - `EUPP_SECRET_KEY` - required hex-encoded 32-byte ed25519 secret key
-    /// - `EUPP_MINING` - optional boolean (true/false). Accepts `1`, `true`, `yes`, `on`.
+    /// - `EUPP_MINING_DIFFICULTY` - optional mining difficulty in bits (0–256); enables mining when set
     /// - `EUPP_BLOCK_CHUNK_SIZE` - optional usize, defaults to 16
     /// - `EUPP_INDEX_DB_PATH` - optional path to the indexing database used by `eupp-db`
     /// - `EUPP_BLOCK_FILE` - optional path to the block file where blocks are stored
@@ -136,14 +139,13 @@ impl Config {
             })
             .transpose()?;
 
-        let mining = env_var("EUPP_MINING")
+        let mining_difficulty = env_var("EUPP_MINING_DIFFICULTY")
             .map(|s| {
-                s.to_lowercase()
-                    .parse::<bool>()
-                    .map_err(|_| ConfigError::new("EUPP_MINING", format!("invalid boolean: {s}")))
+                s.parse::<usize>().map_err(|e| {
+                    ConfigError::new("EUPP_MINING_DIFFICULTY", format!("invalid usize: {e}"))
+                })
             })
-            .transpose()?
-            .unwrap_or(false);
+            .transpose()?;
 
         let block_chunk_size = env_var("EUPP_BLOCK_CHUNK_SIZE")
             .map(|s| {
@@ -168,28 +170,18 @@ impl Config {
 
         let sk_hex_trimmed = sk_hex.trim_start_matches("0x");
 
-        let sk_vec = hex::decode(sk_hex_trimmed).map_err(|e| {
+        let secret_key = hex::decode_to_array(sk_hex_trimmed).map_err(|e| {
             ConfigError::new(
                 "EUPP_SECRET_KEY",
                 format!("invalid hex (expected 64 hex chars): {e}"),
             )
         })?;
 
-        if sk_vec.len() != 32 {
-            return Err(ConfigError::new(
-                "EUPP_SECRET_KEY",
-                format!("must decode to 32 bytes (got {})", sk_vec.len()),
-            ));
-        }
-
-        let mut secret_key_bytes = [0u8; 32];
-        secret_key_bytes.copy_from_slice(&sk_vec);
-
         Ok(Config {
             api_port,
             p2p_port,
-            secret_key_bytes,
-            mining,
+            secret_key,
+            difficulty: mining_difficulty,
             block_chunk_size,
             index_db_path,
             block_file_path,
@@ -199,12 +191,12 @@ impl Config {
 
     /// Retrieve the secret key.
     pub fn secret_key(&self) -> [u8; 32] {
-        self.secret_key_bytes
+        self.secret_key
     }
 
     /// Retrieve the public key.
     pub fn public_key(&self) -> PublicKey {
-        let sk = SecretKey::try_from_bytes(self.secret_key_bytes.clone().as_mut()).unwrap();
+        let sk = SecretKey::try_from_bytes(self.secret_key.clone().as_mut()).unwrap();
         let kp = Keypair::from(sk);
         kp.public().to_bytes()
     }

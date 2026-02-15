@@ -2,11 +2,20 @@ use blake2::Digest;
 use ed25519_dalek::SigningKey;
 use serde::Deserialize;
 
-pub mod block;
+mod block;
 pub mod ledger;
 pub mod miner;
-pub mod transaction;
+mod transaction;
 pub mod vm;
+
+pub use block::*;
+use const_hex as hex;
+pub use transaction::*;
+
+/// Like [`AsRef`], but returns `Option<&T>` instead of `&T`.
+pub trait TryAsRef<T: ?Sized> {
+    fn try_as_ref(&self) -> Option<&T>;
+}
 
 /// 32-byte Ed25519 public key
 pub type PublicKey = [u8; 32];
@@ -36,13 +45,11 @@ pub fn commitment<'a>(pk: &PublicKey, data: impl IntoIterator<Item = &'a [u8]>) 
     hasher.finalize().into()
 }
 
-/// Generate a new Ed25519 keypair.
-///
-/// Returns a tuple containing the public key and the secret key.
-pub fn generate_keypair() -> SigningKey {
-    let sk: [u8; 32] = rand::random();
-    return ed25519_dalek::SigningKey::from_bytes(&sk);
+/// Generate a keypair from a secret key.
+pub fn keypair(sk: &SecretKey) -> SigningKey {
+    SigningKey::from_bytes(sk)
 }
+
 /// Check whether an attempted public key satisfies the provided mask.
 ///
 /// Convention:
@@ -100,11 +107,6 @@ pub fn calculate_reward(mask: &[u8; 32]) -> u64 {
     final_reward.max(MIN_REWARD)
 }
 
-/// Generate a keypair from a secret key.
-pub fn keypair(sk: &SecretKey) -> SigningKey {
-    SigningKey::from_bytes(sk)
-}
-
 /// Serialize a byte slice to a hexadecimal string.
 pub fn serialize_to_hex<S>(hash: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -119,10 +121,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    let vec = hex::decode(&s).map_err(serde::de::Error::custom)?;
-    vec.as_slice()
-        .try_into()
-        .map_err(|_| serde::de::Error::custom(format!("Expected array of length {}", N)))
+    hex::decode_to_array(&s).map_err(serde::de::Error::custom)
 }
 
 /// Deserialize a hexadecimal string into a vector.
@@ -132,6 +131,15 @@ where
 {
     let s = String::deserialize(deserializer)?;
     hex::decode(&s).map_err(serde::de::Error::custom)
+}
+
+impl<U, T> TryAsRef<U> for T
+where
+    T: AsRef<U>,
+{
+    fn try_as_ref(&self) -> Option<&U> {
+        Some(self.as_ref())
+    }
 }
 
 #[cfg(test)]
@@ -231,5 +239,158 @@ mod tests {
         let reward = calculate_reward(&mask);
         // difficulty = 64 -> reward = 750,001
         assert_eq!(reward, 750_001);
+    }
+
+    // ── matches_mask tests ──────────────────────────────────────────────
+
+    #[test]
+    fn matches_mask_all_zeros_mask_accepts_anything() {
+        let mask = [0u8; 32];
+        assert!(matches_mask(&mask, &[0xFF; 32]));
+        assert!(matches_mask(&mask, &[0x00; 32]));
+        assert!(matches_mask(&mask, &[0xAB; 32]));
+    }
+
+    #[test]
+    fn matches_mask_all_ones_mask_requires_all_zeros() {
+        let mask = [0xFF; 32];
+        assert!(matches_mask(&mask, &[0x00; 32]));
+        assert!(!matches_mask(&mask, &[0x01; 32]));
+        assert!(!matches_mask(&mask, &[0xFF; 32]));
+    }
+
+    #[test]
+    fn matches_mask_single_bit() {
+        let mut mask = [0u8; 32];
+        mask[0] = 0b0000_0100; // bit 2 of byte 0 must be zero
+        let mut good = [0u8; 32];
+        good[0] = 0b1111_1011; // every bit set except bit 2
+        assert!(matches_mask(&mask, &good));
+
+        let mut bad = [0u8; 32];
+        bad[0] = 0b0000_0100; // bit 2 set
+        assert!(!matches_mask(&mask, &bad));
+    }
+
+    #[test]
+    fn matches_mask_partial_byte() {
+        let mut mask = [0u8; 32];
+        mask[0] = 0xF0; // upper nibble must be zero
+        let mut attempt = [0u8; 32];
+        attempt[0] = 0x0F; // lower nibble set, upper clear
+        assert!(matches_mask(&mask, &attempt));
+
+        attempt[0] = 0x10; // one bit in upper nibble set
+        assert!(!matches_mask(&mask, &attempt));
+    }
+
+    #[test]
+    fn matches_mask_only_checked_bytes_matter() {
+        let mut mask = [0u8; 32];
+        mask[31] = 0xFF; // only last byte constrained
+        let mut attempt = [0xFF; 32];
+        attempt[31] = 0x00; // last byte all zeros
+        assert!(matches_mask(&mask, &attempt));
+
+        attempt[31] = 0x01;
+        assert!(!matches_mask(&mask, &attempt));
+    }
+
+    // ── mask_difficulty tests ───────────────────────────────────────────
+
+    #[test]
+    fn mask_difficulty_zero_mask() {
+        assert_eq!(mask_difficulty(&[0u8; 32]), 0);
+    }
+
+    #[test]
+    fn mask_difficulty_full_mask() {
+        assert_eq!(mask_difficulty(&[0xFF; 32]), 256);
+    }
+
+    #[test]
+    fn mask_difficulty_single_bit() {
+        let mut mask = [0u8; 32];
+        mask[0] = 1;
+        assert_eq!(mask_difficulty(&mask), 1);
+    }
+
+    #[test]
+    fn mask_difficulty_matches_helper() {
+        for ones in [1, 7, 8, 15, 16, 33, 60, 128, 200, 256] {
+            let mask = mask_with_ones(ones);
+            assert_eq!(
+                mask_difficulty(&mask) as usize,
+                ones,
+                "mask_with_ones({ones}) should have difficulty {ones}"
+            );
+        }
+    }
+
+    #[test]
+    fn mask_difficulty_sparse_bits() {
+        let mut mask = [0u8; 32];
+        mask[0] = 0b1010_1010; // 4 bits
+        mask[16] = 0b0001_0001; // 2 bits
+        assert_eq!(mask_difficulty(&mask), 6);
+    }
+
+    // ── commitment tests ────────────────────────────────────────────────
+
+    #[test]
+    fn commitment_deterministic() {
+        let pk = [42u8; 32];
+        let data: &[u8] = &[1, 2, 3];
+        let c1 = commitment(&pk, Some(data));
+        let c2 = commitment(&pk, Some(data));
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn commitment_changes_with_pk() {
+        let data: &[u8] = &[0u8; 4];
+        let c1 = commitment(&[0u8; 32], Some(data));
+        let c2 = commitment(&[1u8; 32], Some(data));
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn commitment_changes_with_data() {
+        let pk = [7u8; 32];
+        let c1 = commitment(&pk, Some([0u8].as_slice()));
+        let c2 = commitment(&pk, Some([1u8].as_slice()));
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn commitment_no_data_differs_from_empty_slice() {
+        let pk = [9u8; 32];
+        let c_none: Hash = commitment(&pk, None);
+        let c_empty: Hash = commitment(&pk, Some([].as_slice()));
+        // Both should be the same since iterating over None yields nothing,
+        // just like iterating over an empty slice.
+        assert_eq!(c_none, c_empty);
+    }
+
+    #[test]
+    fn commitment_multiple_data_chunks() {
+        let pk = [5u8; 32];
+        let chunks: Vec<&[u8]> = vec![&[1, 2], &[3, 4]];
+        let c1 = commitment(&pk, chunks.clone());
+        let c2 = commitment(&pk, chunks);
+        assert_eq!(c1, c2);
+        // Single concatenated chunk should differ because blake2 processes
+        // update calls sequentially; however here the hash state is the same
+        // as feeding [1,2] then [3,4], which equals feeding [1,2,3,4] for
+        // a streaming hash. Verify that equivalence:
+        let c_concat = commitment(&pk, vec![[1u8, 2, 3, 4].as_slice()]);
+        assert_eq!(c1, c_concat);
+    }
+
+    #[test]
+    fn commitment_output_is_32_bytes() {
+        let pk = [0u8; 32];
+        let c = commitment(&pk, None);
+        assert_eq!(c.len(), 32);
     }
 }
