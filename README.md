@@ -49,6 +49,36 @@ export EUPP_SECRET_KEY=<your-64-hex>
 cargo run -p eupp --release
 ```
 
+## Docker
+
+Build the image:
+```
+docker build -t eupp .
+```
+
+Run a node:
+```
+docker run -d --name eupp-node \
+  -e EUPP_SECRET_KEY=$(openssl rand -hex 32) \
+  -e EUPP_MINING=true \
+  -p 3333:3333 \
+  eupp
+```
+
+Override any configuration via environment variables or an env file:
+```
+docker run -d --name eupp-node --env-file .env -p 3333:3333 eupp
+```
+
+Persist chain data across restarts with a volume:
+```
+docker run -d --name eupp-node \
+  -e EUPP_SECRET_KEY=<your-64-hex> \
+  -p 3333:3333 \
+  -v eupp-data:/home/eupp \
+  eupp
+```
+
 ## Notes
 - The node reads configuration from `.env` or environment variables. See [.env.template](./.env.template).
 - Use `eupp-cli` to inspect peers, construct and broadcast transactions:
