@@ -38,26 +38,17 @@ struct Confirmations {
 }
 
 /// Build and return an Axum `Router` wired to the provided `RpcClient`.
-///
-/// Endpoints:
-/// - GET  /                 -> root_handler
-/// - GET  /network          -> get_network_info
-/// - GET  /transactions/:tx_hash/confirmations -> get_confirmations (returns { confirmations: n })
-/// - GET  /transactions/:tx_hash/block         -> get_block_from_tx_id
-/// - POST /outputs/search  -> search_outputs  (complex query in JSON body)
-/// - GET  /blocks/:hash    -> get_block
-/// - POST /transactions    -> send_raw_tx (broadcast; returns 201 + Location)
 pub fn router(state: RpcClient) -> Router {
     Router::new()
         .route("/", get(root_handler))
         .route("/network", get(get_network_info))
         .route(
-            "/transactions/:tx_hash/confirmations",
+            "/transactions/{tx_hash}/confirmations",
             get(get_confirmations),
         )
-        .route("/transactions/:tx_hash/block", get(get_block_from_tx_id))
+        .route("/transactions/{tx_hash}/block", get(get_block_from_tx_id))
         .route("/outputs/search", post(search_outputs))
-        .route("/blocks/:hash", get(get_block))
+        .route("/blocks/{hash}", get(get_block))
         .route("/transactions", post(send_raw_tx))
         .with_state(state)
 }

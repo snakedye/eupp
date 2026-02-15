@@ -88,11 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!(address = %addr, "Starting HTTP API");
 
             // Spawn the HTTP server as a background task, and run the node in the main task.
-            let server = axum::Server::bind(&addr).serve(app.into_make_service());
-            let _server_handle = tokio::spawn(async move {
-                if let Err(e) = server.await {
-                    error!(?e, "HTTP server error");
-                }
+            tokio::spawn(async move {
+                let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+                axum::serve(listener, app.into_make_service())
+                    .await
+                    .unwrap()
             });
 
             // Launch mining loop if difficulty is set.
