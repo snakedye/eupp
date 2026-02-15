@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use eupp_core::{Output, OutputId, Transaction, ledger::Query};
-use eupp_net::protocol::{self as protocol, RpcError, RpcRequest, RpcResponse};
+use eupp_net::protocol::{self as protocol, RpcError};
 use eupp_net::{RpcClient, protocol::BlockSummary};
 use serde::Serialize;
 
@@ -60,10 +60,7 @@ async fn root_handler() -> &'static str {
 async fn get_network_info(
     State(client): State<RpcClient>,
 ) -> Result<Json<protocol::NetworkInfo>, ApiError> {
-    match client.request(RpcRequest::GetNetworkInfo).await? {
-        RpcResponse::NetworkInfo(info) => Ok(Json(info)),
-        resp => Err(RpcError::UnexpectedResponse(resp).into()),
-    }
+    Ok(Json(client.get_network_info().await?))
 }
 
 /// Helper to parse hex strings from path parameters.
@@ -78,13 +75,8 @@ async fn get_confirmations(
     axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
 ) -> Result<Json<Confirmations>, ApiError> {
     let hash = parse_hex_hash(&tx_hash_hex)?;
-    match client
-        .request(RpcRequest::GetConfirmations { tx_hash: hash })
-        .await?
-    {
-        RpcResponse::Confirmations(n) => Ok(Json(Confirmations { confirmations: n })),
-        resp => Err(RpcError::UnexpectedResponse(resp).into()),
-    }
+    let n = client.get_confirmations(hash).await?;
+    Ok(Json(Confirmations { confirmations: n }))
 }
 
 async fn get_block_from_tx_id(
@@ -92,23 +84,14 @@ async fn get_block_from_tx_id(
     axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
 ) -> Result<Json<BlockSummary>, ApiError> {
     let tx_hash = parse_hex_hash(&tx_hash_hex)?;
-    match client
-        .request(RpcRequest::GetBlockByTxHash { tx_hash })
-        .await?
-    {
-        RpcResponse::BlockSummary(summary) => Ok(Json(summary)),
-        resp => Err(RpcError::UnexpectedResponse(resp).into()),
-    }
+    Ok(Json(client.get_block_by_tx_hash(tx_hash).await?))
 }
 
 async fn search_outputs(
     State(client): State<RpcClient>,
     Json(query): Json<Query>,
 ) -> Result<Json<Vec<(OutputId, Output)>>, ApiError> {
-    match client.request(RpcRequest::GetOutputs { query }).await? {
-        RpcResponse::Outputs(list) => Ok(Json(list)),
-        resp => Err(RpcError::UnexpectedResponse(resp).into()),
-    }
+    Ok(Json(client.get_outputs(query).await?))
 }
 
 async fn get_block(
@@ -116,10 +99,7 @@ async fn get_block(
     axum::extract::Path(block_hash_hex): axum::extract::Path<String>,
 ) -> Result<Json<BlockSummary>, ApiError> {
     let hash = parse_hex_hash(&block_hash_hex)?;
-    match client.request(RpcRequest::GetBlockByHash { hash }).await? {
-        RpcResponse::BlockSummary(summary) => Ok(Json(summary)),
-        resp => Err(RpcError::UnexpectedResponse(resp).into()),
-    }
+    Ok(Json(client.get_block_by_hash(hash).await?))
 }
 
 /// Broadcast a transaction (create a new transaction resource).
@@ -128,17 +108,10 @@ async fn send_raw_tx(
     State(client): State<RpcClient>,
     Json(tx): Json<Transaction>,
 ) -> Result<Response, ApiError> {
-    match client
-        .request(RpcRequest::BroadcastTransaction { tx })
-        .await?
-    {
-        RpcResponse::TransactionHash(h) => {
-            let hex = const_hex::encode(h);
-            let location = format!("/transactions/0x{hex}");
-            let body = Json(h);
-            let resp = (StatusCode::CREATED, [(LOCATION, location.as_str())], body).into_response();
-            Ok(resp)
-        }
-        resp => Err(RpcError::UnexpectedResponse(resp).into()),
-    }
+    let h = client.broadcast_transaction(tx).await?;
+    let hex = const_hex::encode(h);
+    let location = format!("/transactions/0x{hex}");
+    let body = Json(h);
+    let resp = (StatusCode::CREATED, [(LOCATION, location.as_str())], body).into_response();
+    Ok(resp)
 }

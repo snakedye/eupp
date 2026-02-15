@@ -7,11 +7,12 @@ use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
 use crate::config::Config;
 use crate::mempool::Mempool;
 use crate::protocol::{
-    GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest, SyncResponse,
+    BlockSummary, GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest,
+    SyncResponse,
 };
 use const_hex as hex;
 use eupp_core::{
-    ledger::{Indexer, IndexerExt, Ledger, LedgerExt},
+    ledger::{Indexer, IndexerExt, Ledger, LedgerExt, Query},
     *,
 };
 
@@ -63,13 +64,92 @@ impl RpcClient {
     }
 
     /// Send a request and await the response.
-    pub async fn request(&self, req: RpcRequest) -> Result<RpcResponse, RpcError> {
+    async fn request(&self, req: RpcRequest) -> Result<RpcResponse, RpcError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.inner
             .send((req, tx))
             .await
             .map_err(|_| RpcError::ChannelClosed)?;
         rx.await.map_err(|_| RpcError::ChannelClosed)?
+    }
+
+    /// Return basic network info (tip hash, height, available supply).
+    pub async fn get_network_info(&self) -> Result<NetworkInfo, RpcError> {
+        match self.request(RpcRequest::GetNetworkInfo).await? {
+            RpcResponse::NetworkInfo(info) => Ok(info),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Return confirmations for a given transaction hash.
+    pub async fn get_confirmations(&self, tx_hash: TransactionHash) -> Result<u64, RpcError> {
+        match self
+            .request(RpcRequest::GetConfirmations { tx_hash })
+            .await?
+        {
+            RpcResponse::Confirmations(conf) => Ok(conf),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Query UTXOs matching `Query`.
+    pub async fn get_outputs(&self, query: Query) -> Result<Vec<(OutputId, Output)>, RpcError> {
+        match self.request(RpcRequest::GetOutputs { query }).await? {
+            RpcResponse::Outputs(outputs) => Ok(outputs),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Broadcast a raw transaction to the network.
+    pub async fn broadcast_transaction(
+        &self,
+        tx: Transaction,
+    ) -> Result<TransactionHash, RpcError> {
+        match self
+            .request(RpcRequest::BroadcastTransaction { tx })
+            .await?
+        {
+            RpcResponse::TransactionHash(hash) => Ok(hash),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Broadcast a mined block to the network.
+    pub async fn broadcast_block(&self, block: Block) -> Result<(), RpcError> {
+        match self.request(RpcRequest::BroadcastBlock { block }).await? {
+            RpcResponse::Ok => Ok(()),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Fetch a block header by its hash.
+    pub async fn get_block_by_hash(&self, hash: Hash) -> Result<BlockSummary, RpcError> {
+        match self.request(RpcRequest::GetBlockByHash { hash }).await? {
+            RpcResponse::BlockSummary(summary) => Ok(summary),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Fetch a block header by a transaction hash.
+    pub async fn get_block_by_tx_hash(
+        &self,
+        tx_hash: TransactionHash,
+    ) -> Result<BlockSummary, RpcError> {
+        match self
+            .request(RpcRequest::GetBlockByTxHash { tx_hash })
+            .await?
+        {
+            RpcResponse::BlockSummary(summary) => Ok(summary),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Fetch the transactions in the mempool.
+    pub async fn get_mempool(&self) -> Result<Vec<Transaction>, RpcError> {
+        match self.request(RpcRequest::GetMempool).await? {
+            RpcResponse::Transactions(txs) => Ok(txs),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
     }
 }
 

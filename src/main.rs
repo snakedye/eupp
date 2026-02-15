@@ -7,9 +7,7 @@ use eupp_core::{
     miner,
 };
 use eupp_db::{FileStore, RedbIndexer};
-use eupp_net::{
-    EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool, protocol::RpcResponse,
-};
+use eupp_net::{EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool};
 use indexer::NodeStore;
 use rand::{TryRngCore, rngs::OsRng};
 use std::{net::SocketAddr, time::Duration};
@@ -141,33 +139,17 @@ async fn mining_loop(
             debug!("Node is syncing; skipping mining iteration");
             continue;
         }
-        if let RpcResponse::Transactions(txs) = rpc_client
-            .request(eupp_net::protocol::RpcRequest::GetMempool)
-            .await
-            .unwrap()
-        {
+        if let Ok(txs) = rpc_client.get_mempool().await {
             if txs.is_empty() {
                 debug!("Mempool is empty; skipping mining iteration");
                 continue;
             }
-            if let RpcResponse::NetworkInfo(network_info) = rpc_client
-                .request(eupp_net::protocol::RpcRequest::GetNetworkInfo)
-                .await
-                .unwrap()
-            {
-                if let RpcResponse::BlockSummary(block_summary) = rpc_client
-                    .request(eupp_net::protocol::RpcRequest::GetBlockByHash {
-                        hash: network_info.tip_hash,
-                    })
-                    .await
-                    .unwrap()
+            if let Ok(network_info) = rpc_client.get_network_info().await {
+                if let Ok(block_summary) = rpc_client.get_block_by_hash(network_info.tip_hash).await
                 {
-                    if let RpcResponse::Outputs(outputs) = rpc_client
-                        .request(eupp_net::protocol::RpcRequest::GetOutputs {
-                            query: Query::TransactionID(block_summary.lead_tx_hash),
-                        })
+                    if let Ok(outputs) = rpc_client
+                        .get_outputs(Query::TransactionID(block_summary.lead_tx_hash))
                         .await
-                        .unwrap()
                     {
                         // Process outputs here
                         let start = OsRng.try_next_u64().unwrap() as usize;
@@ -201,10 +183,7 @@ async fn mining_loop(
                             // Add the selected transactions to the block
                             block.transactions.extend(selected);
 
-                            if let Err(err) = rpc_client
-                                .request(eupp_net::protocol::RpcRequest::BroadcastBlock { block })
-                                .await
-                            {
+                            if let Err(err) = rpc_client.broadcast_block(block).await {
                                 error!(?err, "Failed to send block");
                             }
                         }
