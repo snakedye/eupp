@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let server = axum::Server::bind(&addr).serve(app.into_make_service());
             let _server_handle = tokio::spawn(async move {
                 if let Err(e) = server.await {
-                    error!("HTTP server error: {:?}", e);
+                    error!(?e, "HTTP server error");
                 }
             });
 
@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await
     {
-        error!("Node error: {:?}", e);
+        error!(?e, "Node error");
     }
 
     Ok(())

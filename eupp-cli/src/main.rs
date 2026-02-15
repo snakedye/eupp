@@ -75,7 +75,7 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amoun
 
     // Fetch UTXOs
     let resp = client
-        .post(format!("{base}/transactions/outputs"))
+        .post(format!("{base}/outputs/search"))
         .json(&query)
         .send()
         .expect("Failed to send UTXO query");

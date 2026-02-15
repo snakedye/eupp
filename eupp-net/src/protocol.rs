@@ -52,6 +52,10 @@ pub struct BlockSummary {
     /// The MAS Metric: Sum of all rewards from Genesis to this block.
     pub available_supply: u64,
 
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
     /// The hash of the mining transaction.
     pub lead_tx_hash: Hash,
 
