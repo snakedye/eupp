@@ -80,14 +80,12 @@ docker run -d --name eupp-node \
 ```
 
 ## Notes
-- The node reads configuration from `.env` or environment variables. See [.env.template](./.env.template).
+- The node reads configuration from [.env](./.env.template) or environment variables.
 - Use `eupp-cli` to inspect peers, construct and broadcast transactions:
 ```sh
 cargo run -p eupp-cli -- --help
 ```
 
-## Contributing
-1. Read the [WHITEPAPER.md](./WHITEPAPER.md)
-2. Open issues or PRs for bugs and features
-
-That's it — enough to build and run a local node.
+## Resources
+- [Bitcoin Whitepaper](https://bitcoin.org/bitcoin.pdf)
+- [EUPP Whitepaper](./WHITEPAPER.md)
