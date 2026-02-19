@@ -1,0 +1,80 @@
+name: "✨ Feature Request"
+description: "Propose a new feature or enhancement. Describe the problem, who benefits, and a clear proposal for how it should work."
+title: "[FEATURE] <short description>"
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest an improvement! Well-scoped requests with clear use-cases and proposed behavior are easiest to evaluate.
+        Please include examples, sample code, or surface-level design notes when possible.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: "Summary"
+      description: "A short summary of the feature or enhancement you're proposing."
+      placeholder: "What would you like to see added or changed?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: user_value
+    attributes:
+      label: "Who benefits / Use cases"
+      description: "Describe who benefits from this feature and concrete example scenarios."
+      placeholder: "Who will use this and in which scenarios?"
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "Proposed solution"
+      description: "Describe the proposed design, API, UI, or behavior. Include examples, pseudo-code, or configuration samples if helpful."
+      placeholder: "How should this work? Provide examples or mockups if possible."
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternatives considered"
+      description: "Describe alternative approaches you evaluated and why you believe this proposal is preferable."
+      placeholder: "Other designs or workarounds you considered"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: "Priority"
+      description: "How important is this change for your workflow or project?"
+      options:
+        - "P0 - Critical"
+        - "P1 - High"
+        - "P2 - Medium"
+        - "P3 - Low"
+      default: 2
+    validations:
+      required: false
+
+  - type: textarea
+    id: implementation_notes
+    attributes:
+      label: "Design / Implementation details"
+      description: "Any notes about implementation, migration steps, backward-compatibility, performance, or security considerations."
+      render: markdown
+      placeholder: "Implementation notes, migrations, compatibility concerns"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: code_of_conduct
+    attributes:
+      label: "Code of Conduct"
+      description: "By submitting this issue, you agree to follow our Code of Conduct."
+      options:
+        - label: "I agree to follow this project's Code of Conduct"
+          required: true
