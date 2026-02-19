@@ -1,0 +1,103 @@
+name: "🐞 Bug Report"
+description: "Report a bug so we can investigate and fix it. Please include steps to reproduce, environment details, and any relevant logs or screenshots."
+title: "[BUG] <short description>"
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the fields below with as much detail as you can.
+        Tip: you can attach screenshots or log files by dragging them into the issue editor.
+
+  - type: checkboxes
+    id: existing-issue
+    attributes:
+      label: "Is there an existing issue for this?"
+      description: "Please search the existing issues before filing a new one."
+      options:
+        - label: "I have searched the existing issues"
+          required: true
+
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: "Current behavior"
+      description: "A concise description of what you're experiencing, including error messages or unexpected output."
+      placeholder: |
+        Describe what happened, including any error messages or unexpected output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: "Expected behavior"
+      description: "A concise description of what you expected to happen instead."
+      placeholder: "What should have happened?"
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: "Steps to reproduce"
+      description: |
+        Provide a minimal set of steps to reproduce the bug. The clearer and shorter the steps, the easier it is for us to reproduce.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Environment"
+      description: |
+        Include OS, desktop, compiler, and relevant version numbers.
+      placeholder: |
+        - OS: e.g. Ubuntu 22.04 / macOS 13
+        - Desktop: e.g. GNOME 42 / KDE Plasma 5.27
+        - Kernel: e.g. Linux 6.2.0-26-generic / Darwin 22.6.0
+        - Rust: e.g. 1.65.0
+      render: markdown
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Relevant log output"
+      description: "Paste any relevant logs or error output. This will be formatted as code automatically."
+      placeholder: "Copy relevant lines from logs, stack traces, or console output here"
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: release-or-commit
+    attributes:
+      label: "Release tag / commit SHA / branch"
+      description: "Specify a release tag, full or short commit SHA, or branch name for the version you're running. Example: v1.2.3 or 3f2a1b4d or main."
+      placeholder: "e.g. v1.2.3 or 3f2a1b4d or main"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: "Code of Conduct"
+      description: "By submitting this issue, you agree to follow our Code of Conduct."
+      options:
+        - label: "I agree to follow this project's Code of Conduct"
+          required: true
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: "Additional information"
+      description: "Anything else that might help us diagnose the problem (workarounds you tried, related issues, links)."
+      placeholder: "Add links, references, or notes here"
+    validations:
+      required: false
