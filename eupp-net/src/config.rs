@@ -35,7 +35,7 @@ impl ConfigError {
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.var, self.message)
+        write!(f, "var ({}) {}", self.var, self.message)
     }
 }
 
@@ -50,7 +50,7 @@ fn env_var(name: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Node configuration.
+/// The configuration of an [`crate::EuppNode`].
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Optional TCP port for the HTTP API.

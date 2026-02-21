@@ -1,3 +1,14 @@
+//! Network protocol types used by the P2P layer.
+//!
+//! This module defines the wire-level message types exchanged between peers:
+//! - Gossip messages (gossipsub): broadcast transactions, new blocks and chain-tip
+//!   advertisements.
+//! - Sync requests/responses: request and deliver block chunks and block headers
+//!   during chain sync.
+//! - RPC requests/responses: direct peer-to-peer RPCs for queries such as fetching
+//!   network info, UTXOs, mempool contents, broadcasting transactions/blocks, and
+//!   fetching block summaries.
+
 use ethnum::U256;
 use eupp_core::{
     ledger::{BlockMetadata, Query},
@@ -5,8 +16,9 @@ use eupp_core::{
 };
 use serde::{Deserialize, Serialize};
 
+/// An overview of the current state for the node.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct NetworkInfo {
+pub struct NodeInfo {
     #[serde(
         serialize_with = "serialize_to_hex",
         deserialize_with = "deserialize_arr"
@@ -117,7 +129,7 @@ pub enum SyncRequest {
     },
 }
 
-/// Responses sent directly back to a peer for a `SyncRequest`.
+/// Responses sent directly back to a peer for a [`SyncRequest`].
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SyncResponse {
     /// A chunk of blocks in response to `GetBlocks`.
@@ -156,14 +168,14 @@ pub enum RpcRequest {
     GetMempool,
 }
 
-/// RPC responses for `RpcRequest`.
+/// RPC responses for [`RpcRequest`].
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum RpcResponse {
     /// Success.
     Ok,
 
     /// Detailed network information.
-    NetworkInfo(NetworkInfo),
+    NetworkInfo(NodeInfo),
 
     /// The number of confirmations for a given transaction hash.
     Confirmations(u64),
@@ -181,7 +193,7 @@ pub enum RpcResponse {
     BlockSummary(BlockSummary),
 }
 
-/// Errors returned by [`RpcClient::request`].
+/// Error returned by a request made with [`crate::RpcClient`].
 #[derive(Debug)]
 pub enum RpcError {
     /// The internal channel is closed (node shut down or receiver dropped).

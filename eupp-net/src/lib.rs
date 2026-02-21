@@ -1,21 +1,21 @@
 mod behavior;
-pub mod config;
-pub mod mempool;
+mod config;
+mod mempool;
 pub mod protocol;
 
 use crate::behavior::{EuppBehaviour, EuppBehaviourEvent};
-use crate::config::Config;
-use crate::mempool::Mempool;
 use crate::protocol::{
-    BlockSummary, GossipMessage, NetworkInfo, RpcError, RpcRequest, RpcResponse, SyncRequest,
+    BlockSummary, GossipMessage, NodeInfo, RpcError, RpcRequest, RpcResponse, SyncRequest,
     SyncResponse,
 };
+pub use config::Config;
 use const_hex as hex;
 use ethnum::U256;
 use eupp_core::{
     ledger::{Indexer, IndexerExt, Ledger, LedgerExt, Query},
     *,
 };
+pub use mempool::*;
 
 use libp2p::futures::StreamExt;
 use libp2p::{
@@ -41,13 +41,13 @@ struct PeerSyncState {
 type RpcResponder = tokio::sync::oneshot::Sender<Result<RpcResponse, RpcError>>;
 type RpcRequestMessage = (RpcRequest, RpcResponder);
 
-/// An RPC client to interact with the Eupp node.
+/// An RPC client to interact with the [`EuppNode`].
 #[derive(Clone)]
 pub struct RpcClient {
     inner: tokio::sync::mpsc::Sender<RpcRequestMessage>,
 }
 
-/// An handle to the synchronization state of the Eupp node.
+/// An handle to the synchronization state of the [`EuppNode`].
 pub struct SyncHandle(Weak<RwLock<Option<PeerId>>>);
 
 impl SyncHandle {
@@ -74,8 +74,8 @@ impl RpcClient {
         rx.await.map_err(|_| RpcError::ChannelClosed)?
     }
 
-    /// Return basic network info (tip hash, height, available supply).
-    pub async fn get_network_info(&self) -> Result<NetworkInfo, RpcError> {
+    /// Return basic node info (tip hash, height, available supply).
+    pub async fn get_node_info(&self) -> Result<NodeInfo, RpcError> {
         match self.request(RpcRequest::GetNetworkInfo).await? {
             RpcResponse::NetworkInfo(info) => Ok(info),
             resp => Err(RpcError::UnexpectedResponse(resp)),
@@ -559,7 +559,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> EuppNode<I, M
                 let idxer = self.indexer.read().map_err(|_| RpcError::LockError)?;
                 let info = idxer
                     .get_last_block_metadata()
-                    .map(|meta| NetworkInfo {
+                    .map(|meta| NodeInfo {
                         tip_hash: meta.hash,
                         tip_height: meta.height as u64,
                         available_supply: meta.available_supply,

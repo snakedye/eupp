@@ -41,7 +41,7 @@ struct Confirmations {
 pub fn router(state: RpcClient) -> Router {
     Router::new()
         .route("/", get(root_handler))
-        .route("/network", get(get_network_info))
+        .route("/info", get(get_node_info))
         .route(
             "/transactions/{tx_hash}/confirmations",
             get(get_confirmations),
@@ -57,10 +57,10 @@ async fn root_handler() -> &'static str {
     "Welcome to the Eupp API!"
 }
 
-async fn get_network_info(
+async fn get_node_info(
     State(client): State<RpcClient>,
-) -> Result<Json<protocol::NetworkInfo>, ApiError> {
-    Ok(Json(client.get_network_info().await?))
+) -> Result<Json<protocol::NodeInfo>, ApiError> {
+    Ok(Json(client.get_node_info().await?))
 }
 
 /// Helper to parse hex strings from path parameters.

@@ -1,30 +1,6 @@
 /*! This module provides the foundational structures and traits for managing and interacting
 with a blockchain ledger. It includes definitions for block metadata, iterators for traversing
 the blockchain, and traits for indexing and accessing blockchain data.
-
-# Key Components
-
-- `BlockMetadata`: Represents metadata for a block in the ledger, including its hash, height,
-  cumulative work, and other properties.
-- `BlockIter` and `BlockMetadataIter`: Iterators for traversing blocks and block metadata
-  from the tip of the chain to the genesis block.
-- `Indexer` and `Ledger` Traits: Define the interfaces for indexing and accessing blockchain
-  data, including UTXOs, block metadata, and full block data.
-
-# Traits
-
-- `Indexer`: Provides optimized views of the blockchain state, such as the UTXO set and block
-  metadata. It includes methods for adding blocks, querying UTXOs, and retrieving block metadata.
-- `Ledger`: Extends the `Indexer` trait to include access to full block data and iterators
-  over blocks.
-
-# Iterators
-
-- `BlockIter`: Iterates over full blocks in the blockchain, starting from the tip.
-- `BlockMetadataIter`: Iterates over block metadata, starting from the tip.
-
-This module is designed to be extensible and provides the building blocks for implementing
-custom blockchain indexing and ledger systems.
 */
 
 mod iter;
@@ -76,6 +52,7 @@ pub struct BlockMetadata {
     pub cursor: Option<Cursor>,
 }
 
+/// The position of the block in the ledger.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Cursor {
     /// The position of the block in the ledger.
@@ -143,8 +120,7 @@ pub trait Indexer {
 }
 
 pub trait IndexerExt: Indexer {
-    /// Returns an iterator over the block metadata starting from the most recently added block
-    /// and traversing back to the genesis block.
+    /// Returns an iterator over the [`BlockMetadata`] starting from the tip to the oldest block.
     fn metadata(&self) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
             current_hash: self.get_tip().unwrap_or_default(),
@@ -152,8 +128,7 @@ pub trait IndexerExt: Indexer {
         }
     }
 
-    /// Returns an iterator over the block metadata starting from a specific block hash
-    /// and traversing back to the genesis block.
+    /// Returns an iterator over the [`BlockMetadata`] starting from the given hash to the oldest block.
     fn metadata_from(&self, hash: &Hash) -> BlockMetadataIter<'_, Self> {
         BlockMetadataIter {
             current_hash: *hash,
@@ -171,8 +146,9 @@ pub trait Ledger {
     fn get_block(&'_ self, hash: &Hash) -> Option<Cow<'_, Block>>;
 }
 
+/// Provides utility functions for a [`Ledger`].
 pub trait LedgerExt: Ledger {
-    /// Returns an iterator over blocks starting from the tip to oldest.
+    /// Returns an iterator over [`Block`] starting from the tip to the oldest block.
     fn blocks(&'_ self) -> BlockIter<'_, Self>
     where
         Self: Indexer,
@@ -183,7 +159,7 @@ pub trait LedgerExt: Ledger {
         }
     }
 
-    /// Returns an iterator over blocks starting from a given hash.
+    /// Returns an iterator over [`Block`] starting from the given hash to the oldest block.
     fn blocks_from(&'_ self, hash: &Hash) -> BlockIter<'_, Self> {
         BlockIter {
             current_hash: *hash,

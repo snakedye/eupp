@@ -40,7 +40,7 @@ enum Command {
     },
 
     /// Fetch and display network information from the node.
-    Network,
+    Info,
 }
 
 fn build_client() -> reqwest::blocking::Client {
@@ -173,12 +173,12 @@ fn cmd_broadcast(peer: &str, tx_json: &str) {
     );
 }
 
-fn cmd_network(peer: &str) {
+fn cmd_info(peer: &str) {
     let base = base_url(peer);
     let client = build_client();
 
     let resp = client
-        .get(format!("{base}/network"))
+        .get(format!("{base}/info"))
         .send()
         .expect("Failed to fetch network info");
 
@@ -201,6 +201,6 @@ fn main() {
             amount,
         } => cmd_send_to(&cli.peer, &secret_key, address.as_ref(), amount),
         Command::Broadcast { tx } => cmd_broadcast(&cli.peer, &tx),
-        Command::Network => cmd_network(&cli.peer),
+        Command::Info => cmd_info(&cli.peer),
     }
 }

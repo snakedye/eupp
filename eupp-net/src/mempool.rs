@@ -3,10 +3,13 @@ use eupp_core::{Transaction, TransactionError, TransactionHash};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+/// Error type for mempool operations.
 #[derive(Debug)]
 pub enum MempoolError {
-    TransactionExists,
-    VerificationFailed(TransactionError),
+    /// Transaction already exists in the mempool.
+    Duplicate,
+    /// Transaction verification failed.
+    FailedVerification(TransactionError),
 }
 
 /// Trait for mempools, providing basic transaction management.
@@ -21,26 +24,20 @@ pub trait Mempool: Send + Sync {
     fn clear(&mut self);
 }
 
+#[derive(Default)]
+/// A simple in-memory mempool implementation.
 pub struct SimpleMempool {
     pending: HashMap<TransactionHash, Transaction>,
-}
-
-impl SimpleMempool {
-    pub fn new() -> Self {
-        Self {
-            pending: HashMap::new(),
-        }
-    }
 }
 
 impl Mempool for SimpleMempool {
     fn add<L: Indexer>(&mut self, tx: Transaction, indexer: &L) -> Result<(), MempoolError> {
         let hash = tx.hash();
         if self.pending.contains_key(&hash) {
-            return Err(MempoolError::TransactionExists);
+            return Err(MempoolError::Duplicate);
         }
         tx.verify(indexer)
-            .map_err(MempoolError::VerificationFailed)?;
+            .map_err(MempoolError::FailedVerification)?;
         self.pending.insert(hash, tx);
         Ok(())
     }
