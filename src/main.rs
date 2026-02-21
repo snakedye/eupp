@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default()
         .with_scanner(move |output| {
             let commitment = commitment(&public_key, Some(output.data().as_slice()));
-            commitment.eq(output.address()) && output.version() == Version::V1
+            commitment.eq(output.address()) && output.version() == Version::ONE
         });
 
     // Store the public key in the recovery table
@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         inputs: vec![], // coinbase has no inputs
         outputs: vec![Output::new_v0(u64::MAX, &mask, &[0; 32])],
     };
-    let mut genesis_block = Block::new(0, [0u8; 32]);
+    let mut genesis_block = Block::new(Version::ZERO, [0u8; 32]);
     genesis_block.transactions.push(coinbase_tx);
     let genesis_block_hash = genesis_block.header().hash();
 
@@ -168,7 +168,7 @@ async fn mining_loop(
                         .flatten();
 
                         if let Some(mining_tx) = result {
-                            let mut block = Block::new(0, block_summary.hash);
+                            let mut block = Block::new(Version::ZERO, block_summary.hash);
                             block.transactions.push(mining_tx);
 
                             // Calculate the remaining virtual size for the block

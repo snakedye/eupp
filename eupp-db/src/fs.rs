@@ -135,7 +135,7 @@ mod tests {
     use std::env;
     use std::fs;
 
-    use eupp_core::{Block, Output};
+    use eupp_core::{Block, Output, Version};
 
     fn temp_path(name: &str) -> PathBuf {
         let mut p = env::temp_dir();
@@ -151,7 +151,7 @@ mod tests {
         let store = FileStore::new(&path).expect("create store");
 
         // Build a simple block
-        let mut block = Block::new(0, [0u8; 32]);
+        let mut block = Block::new(Version::ZERO, [0u8; 32]);
         let tx = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(123, &[1u8; 32], &[2u8; 32])],
@@ -178,7 +178,7 @@ mod tests {
         let store = FileStore::new(&path).expect("create store");
 
         // Build the first block
-        let mut block1 = Block::new(0, [0u8; 32]);
+        let mut block1 = Block::new(Version::ZERO, [0u8; 32]);
         let tx1 = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(789, &[5u8; 32], &[6u8; 32])],
@@ -189,7 +189,7 @@ mod tests {
         let (cursor1, len1) = store.append(&block1).expect("append first block");
 
         // Build the second block
-        let mut block2 = Block::new(1, [1u8; 32]);
+        let mut block2 = Block::new(Version::ZERO, [1u8; 32]);
         let tx2 = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(101112, &[7u8; 32], &[8u8; 32])],
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn uncommitted_block_not_persisted() {
         let path = temp_path("uncommitted");
-        let mut block = Block::new(0, [0u8; 32]);
+        let mut block = Block::new(Version::ZERO, [0u8; 32]);
         let tx = eupp_core::Transaction {
             inputs: vec![],
             outputs: vec![Output::new_v1(456, &[3u8; 32], &[4u8; 32])],

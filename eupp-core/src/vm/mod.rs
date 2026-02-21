@@ -635,10 +635,10 @@ impl<'a, L: Indexer> Vm<'a, L> {
 mod tests {
     use super::*;
     use crate::{
-        Hash,
+        Hash, Version,
         block::{Block, BlockError},
         ledger::BlockMetadata,
-        transaction::{Input, Output, OutputId, TransactionHash, Version},
+        transaction::{Input, Output, OutputId, TransactionHash},
     };
     use ed25519_dalek::{Signer, SigningKey};
     use ethnum::U256;
@@ -767,7 +767,7 @@ mod tests {
         let output_id = OutputId::new(TransactionHash::default(), 0);
         let input = Input::new_unsigned(output_id);
         let utxo = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 100,
             commitment: [0; 32],
             data: [0; 32],
@@ -788,7 +788,7 @@ mod tests {
         let mut data = [0; 32];
         data[0] = 1;
         let utxo = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 100,
             commitment: [0; 32],
             data,
@@ -810,7 +810,7 @@ mod tests {
         let mut commitment = [0; 32];
         commitment[0] = 1;
         let output = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 100,
             commitment,
             data: [0; 32],
@@ -834,7 +834,7 @@ mod tests {
         let tx_hash = [1; 32];
         let output_id = OutputId::new(tx_hash, 0);
         let output = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 200,
             commitment: [0; 32],
             data: [0; 32],
@@ -856,7 +856,7 @@ mod tests {
         let mut data = [0; 32];
         data[5] = 5;
         let output = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 200,
             commitment: [0; 32],
             data,
@@ -879,7 +879,7 @@ mod tests {
         let mut commitment = [0; 32];
         commitment[5] = 5;
         let output = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 200,
             commitment,
             data: [0; 32],
@@ -899,7 +899,7 @@ mod tests {
     fn test_op_supply_height() {
         let mut indexer = MockLedger::default();
         indexer.block_meta = Some(BlockMetadata {
-            version: 0,
+            version: Version::ZERO,
             hash: [0; 32],
             prev_block_hash: [0; 32],
             height: 50,
@@ -934,7 +934,7 @@ mod tests {
     fn test_op_self_supply() {
         let mut indexer = MockLedger::default();
         indexer.block_meta = Some(BlockMetadata {
-            version: 0,
+            version: Version::ZERO,
             hash: [0; 32],
             prev_block_hash: [0; 32],
             height: 50,
@@ -948,7 +948,7 @@ mod tests {
         let output_id = OutputId::new(TransactionHash::default(), 0);
         let input = Input::new_unsigned(output_id);
         let utxo = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 100,
             commitment: [0; 32],
             data: [0; 32],
@@ -1058,7 +1058,7 @@ mod tests {
         let data = [5u8; 32];
         let commitment = blake2::Blake2s256::digest(data).try_into().unwrap();
         let output = Output {
-            version: Version::V1,
+            version: Version::ONE,
             amount: 100,
             commitment,
             data,

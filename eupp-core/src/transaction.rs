@@ -9,6 +9,8 @@ The module is designed to be used with a blockchain ledger/indexer and
 supports extensible script and witness validation for advanced transaction types.
 */
 
+use crate::Version;
+
 use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
 use super::{
     Hash, PublicKey, commitment, deserialize_arr, deserialize_vec, ledger::Indexer,
@@ -30,23 +32,6 @@ const MAX_WITNESS_SIZE: usize = 1024;
 /// Maximum allowed number of inputs or outputs in a transaction.
 const MAX_ALLOWED: usize = 256;
 
-/// Protocol version used for outputs in the codebase.
-///
-/// Adding a short doc comment makes the intent explicit and makes the type
-/// easier to discover when browsing the code or generated documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum Version {
-    /// Exclusively for mining.
-    V0 = 0,
-    /// Initial protocol revision.
-    V1 = 1,
-    /// Second protocol revision.
-    V2 = 2,
-    /// Third protocol revision. Segwit support.
-    V3 = 3,
-}
-
 /// Error type for transaction validation.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum TransactionError {
@@ -61,6 +46,8 @@ pub enum TransactionError {
     },
     /// Total outputs exceed total inputs.
     InvalidBalance { total_input: u64, total_output: u64 },
+    /// The output's version is invalid.
+    InvalidVersion(u8),
     /// Witness script is too large.
     InvalidWitnessSize,
     /// The transaction has no inputs.
@@ -117,6 +104,9 @@ impl fmt::Display for TransactionError {
                     "Transaction contains too many outputs (max {})",
                     MAX_ALLOWED
                 )
+            }
+            TransactionError::InvalidVersion(version) => {
+                write!(f, "Output version {} is invalid", version)
             }
         }
     }
@@ -274,7 +264,7 @@ impl VirtualSize for Output {
 impl fmt::Debug for Output {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Output")
-            .field("version", &self.version)
+            .field("version", &self.version.inner())
             .field("amount", &self.amount)
             .field("data", &hex::encode(&self.data))
             .field("commitment", &hex::encode(&self.commitment))
@@ -283,7 +273,7 @@ impl fmt::Debug for Output {
 }
 
 impl Output {
-    /// Creates a new V0 output.
+    /// Creates a new ZERO output.
     ///
     /// # Arguments
     ///
@@ -292,14 +282,14 @@ impl Output {
     /// * `nonce` - The solution for the previous challenge.
     pub fn new_v0(amount: u64, mask: &Hash, nonce: &Hash) -> Self {
         Self {
-            version: Version::V0,
+            version: Version::ZERO,
             amount,
             data: *mask,        // The mask for the next challenge
             commitment: *nonce, // The solution for the previous challenge
         }
     }
 
-    /// Creates a new V1 output (P2PKH style).
+    /// Creates a new ONE output (P2PKH style).
     ///
     /// # Arguments
     ///
@@ -309,14 +299,14 @@ impl Output {
     pub fn new_v1(amount: u64, public_key: &PublicKey, data: &Hash) -> Self {
         let commitment = commitment(public_key, Some(data.as_slice()));
         Self {
-            version: Version::V1,
+            version: Version::ONE,
             amount,
             data: *data,
             commitment,
         }
     }
 
-    /// Creates a new V1 output locked to a pre-computed address (commitment hash).
+    /// Creates a new ONE output locked to a pre-computed address (commitment hash).
     ///
     /// Use this when you only have the recipient's public key hash (address)
     /// rather than their full public key.
@@ -328,7 +318,7 @@ impl Output {
     /// * `data` - Associated data for the output.
     pub fn to_address(amount: u64, address: &Hash, data: &Hash) -> Self {
         Self {
-            version: Version::V1,
+            version: Version::ONE,
             amount,
             data: *data,
             commitment: *address,
@@ -345,14 +335,14 @@ impl Output {
     pub fn new_v2(amount: u64, public_key: &PublicKey, script: &Hash) -> Self {
         let commitment = commitment(public_key, Some(script.as_slice()));
         Self {
-            version: Version::V2,
+            version: Version::TWO,
             amount,
             data: *script,
             commitment,
         }
     }
 
-    /// Creates a new V3 output (SegWit style).
+    /// Creates a new THREE output (SegWit style).
     ///
     /// # Arguments
     ///
@@ -368,25 +358,25 @@ impl Output {
     ) -> Self {
         let commitment = commitment(public_key, [data.as_slice(), witness_script]);
         Self {
-            version: Version::V3,
+            version: Version::THREE,
             amount,
             data: *data,
             commitment,
         }
     }
 
-    /// Returns the mask for V0 outputs, or `None` for other versions.
+    /// Returns the mask for ZERO outputs, or `None` for other versions.
     pub fn mask(&self) -> Option<&Hash> {
         match self.version {
-            Version::V0 => Some(&self.data),
+            Version::ZERO => Some(&self.data),
             _ => None,
         }
     }
 
-    /// Returns the nonce for V0 outputs, or `None` for other versions.
+    /// Returns the nonce for ZERO outputs, or `None` for other versions.
     pub fn nonce(&self) -> Option<&Hash> {
         match self.version {
-            Version::V0 => Some(&self.commitment),
+            Version::ZERO => Some(&self.commitment),
             _ => None,
         }
     }
@@ -457,7 +447,7 @@ impl Transaction {
         }
         hasher.update(&self.outputs.len().to_be_bytes());
         for output in &self.outputs {
-            hasher.update(&[output.version as u8]);
+            hasher.update(&[output.version.inner()]);
             hasher.update(&output.amount.to_be_bytes());
             hasher.update(&output.data);
             hasher.update(&output.commitment);
@@ -494,25 +484,26 @@ impl Transaction {
             total_input_amount = total_input_amount.saturating_add(utxo.amount);
 
             match utxo.version {
-                Version::V0 => {
+                Version::ZERO => {
                     // For mining transactions, only the signature is checked
                     vm.run(&check_sig_script())
                 }
-                Version::V1 => {
-                    // V1 transactions use a simple P2PK script
+                Version::ONE => {
+                    // ONE transactions use a simple P2PK script
                     vm.run(&p2pkh())
                 }
-                Version::V2 => {
+                Version::TWO => {
                     // V2 transactions can use a more complex script
                     vm.run(&utxo.data)
                 }
-                Version::V3 => {
-                    // V3 transactions support segwit
+                Version::THREE => {
+                    // THREE transactions support segwit
                     if input.witness.len() > MAX_WITNESS_SIZE {
                         return Err(TransactionError::InvalidWitnessSize);
                     }
                     vm.run(&p2wsh()).and_then(|_| vm.run(&input.witness))
                 }
+                _ => unreachable!(),
             }
             .map_err(|err| TransactionError::Execution {
                 output_id: input.output_id,
@@ -565,7 +556,7 @@ pub fn sighash<'a>(
         commitment,
     } in outputs
     {
-        hasher.update(&[*version as u8]);
+        hasher.update(&[version.inner()]);
         hasher.update(&amount.to_be_bytes());
         hasher.update(&data);
         hasher.update(&commitment);
@@ -605,7 +596,7 @@ mod tests {
         /// Set block metadata with a specific lead output (for coinbase tests).
         fn with_lead_output(mut self, lead_output: OutputId) -> Self {
             let meta = self.block_meta.get_or_insert_with(|| BlockMetadata {
-                version: 0,
+                version: Version::ZERO,
                 hash: [0; 32],
                 prev_block_hash: [0; 32],
                 height: 0,
@@ -622,7 +613,7 @@ mod tests {
         /// Set a dummy block metadata so that balance checking is enabled.
         fn with_balance_check(mut self) -> Self {
             self.block_meta = Some(BlockMetadata {
-                version: 0,
+                version: Version::ZERO,
                 hash: [0; 32],
                 prev_block_hash: [0; 32],
                 height: 1,
@@ -685,7 +676,7 @@ mod tests {
         hasher.update(&txid);
         hasher.update(&output_id.index.to_be_bytes());
         for o in &outputs {
-            hasher.update(&[o.version as u8]);
+            hasher.update(&[o.version.inner()]);
             hasher.update(&o.amount.to_be_bytes());
             hasher.update(&o.data);
             hasher.update(&o.commitment);
@@ -718,7 +709,7 @@ mod tests {
         }
         hasher.update(&tx.outputs.len().to_be_bytes());
         for out in &tx.outputs {
-            hasher.update(&[out.version as u8]);
+            hasher.update(&[out.version.inner()]);
             hasher.update(&out.amount.to_be_bytes());
             hasher.update(&out.data);
             hasher.update(&out.commitment);
@@ -738,7 +729,7 @@ mod tests {
         indexer.insert(
             utxo_id,
             Output {
-                version: Version::V1,
+                version: Version::ONE,
                 amount: 100,
                 data,
                 commitment: mask,
@@ -770,7 +761,7 @@ mod tests {
         indexer.insert(
             utxo_id,
             Output {
-                version: Version::V1,
+                version: Version::ONE,
                 amount: 100,
                 data: [12u8; 32],
                 commitment: [0u8; 32], // not a valid public key
@@ -843,7 +834,7 @@ mod tests {
         indexer.insert(
             utxo_id,
             Output {
-                version: Version::V0,
+                version: Version::ZERO,
                 amount,
                 data,
                 commitment: mask,
@@ -851,7 +842,7 @@ mod tests {
         );
 
         let new_outputs = vec![Output {
-            version: Version::V0,
+            version: Version::ZERO,
             amount: amount / 2,
             data,
             commitment: mask,
@@ -959,7 +950,7 @@ mod tests {
         indexer.insert(
             utxo_id,
             Output {
-                version: Version::V3,
+                version: Version::THREE,
                 amount,
                 data: bad_data,
                 commitment,
