@@ -30,49 +30,6 @@ const MAX_WITNESS_SIZE: usize = 1024;
 /// Maximum allowed number of inputs or outputs in a transaction.
 const MAX_ALLOWED: usize = 256;
 
-/// A blockchain transaction.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Transaction {
-    pub inputs: Vec<Input>,
-    pub outputs: Vec<Output>,
-}
-
-/// An output identifier.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct OutputId {
-    #[serde(
-        serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_arr"
-    )]
-    pub tx_hash: TransactionHash,
-    pub index: u8,
-}
-
-/// A blockchain transaction input.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Input {
-    /// The id of the output being spent.
-    pub(crate) output_id: OutputId,
-    #[serde(
-        serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_arr"
-    )]
-    /// The public key used to verify the signature.
-    pub(crate) public_key: PublicKey,
-    #[serde(
-        serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_vec"
-    )]
-    /// Witness data for the input.
-    pub(crate) witness: Vec<u8>,
-    #[serde(
-        serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_arr"
-    )]
-    /// The signature signed by the private key linked to the public key.
-    pub(crate) signature: Signature,
-}
-
 /// Protocol version used for outputs in the codebase.
 ///
 /// Adding a short doc comment makes the intent explicit and makes the type
@@ -90,34 +47,18 @@ pub enum Version {
     V3 = 3,
 }
 
-/// A blockchain transaction output.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Output {
-    /// Protocol version used for the output.
-    pub(crate) version: Version,
-    /// Amount of the output.
-    pub(crate) amount: u64,
-    #[serde(
-        serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_arr"
-    )]
-    /// Data associated with the output.
-    pub(crate) data: Hash,
-    #[serde(
-        serialize_with = "serialize_to_hex",
-        deserialize_with = "deserialize_arr"
-    )]
-    /// The hash of the public key.
-    pub(crate) commitment: Hash,
-}
-
 /// Error type for transaction validation.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum TransactionError {
     /// The referenced output (UTXO) was not found in the given transaction.
     InvalidOutput(OutputId),
     /// Execution error occurred during transaction validation.
-    Execution(ExecError),
+    Execution {
+        /// The output ID that caused the execution error.
+        output_id: OutputId,
+        /// The error that occurred during execution.
+        error: ExecError,
+    },
     /// Total outputs exceed total inputs.
     InvalidBalance { total_input: u64, total_output: u64 },
     /// Witness script is too large.
@@ -130,21 +71,18 @@ pub enum TransactionError {
     TooManyOutputs,
 }
 
-impl From<ExecError> for TransactionError {
-    fn from(err: ExecError) -> Self {
-        TransactionError::Execution(err)
-    }
-}
-
 impl fmt::Display for TransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TransactionError::InvalidOutput(output_id) => {
-                write!(f, "Invalid output: {:?}", output_id)
+                write!(f, "Invalid output {}", output_id)
             }
-            TransactionError::Execution(err) => {
-                // Assuming ExecError implements Display
-                write!(f, "Script execution error: {}", err)
+            TransactionError::Execution { output_id, error } => {
+                write!(
+                    f,
+                    "Execution error occurred for output {}\n\t{}",
+                    output_id, error
+                )
             }
             TransactionError::InvalidBalance {
                 total_input,
@@ -152,7 +90,7 @@ impl fmt::Display for TransactionError {
             } => {
                 write!(
                     f,
-                    "Invalid balance: total input ({}) is less than total output ({})",
+                    "The total input amount ({}) is less than total output amount ({})",
                     total_input, total_output
                 )
             }
@@ -184,23 +122,29 @@ impl fmt::Display for TransactionError {
     }
 }
 
-impl VirtualSize for Input {
-    fn vsize(&self) -> usize {
-        // the pk and sig can be pruned after validation
-        let witness_len = self.public_key.len() + self.signature.len() + self.witness.len();
-        self.output_id.vsize() + witness_len / 2
-    }
-}
-
-impl fmt::Debug for Input {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Input")
-            .field("output_id", &self.output_id)
-            .field("public_key", &hex::encode(&self.public_key))
-            .field("witness", &hex::encode(&self.witness))
-            .field("signature", &hex::encode(&self.signature))
-            .finish()
-    }
+/// A blockchain transaction input.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Input {
+    /// The id of the output being spent.
+    pub(crate) output_id: OutputId,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The public key used to verify the signature.
+    pub(crate) public_key: PublicKey,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_vec"
+    )]
+    /// Witness data for the input.
+    pub(crate) witness: Vec<u8>,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The signature signed by the private key linked to the public key.
+    pub(crate) signature: Signature,
 }
 
 impl Input {
@@ -227,19 +171,34 @@ impl Input {
     }
 }
 
-impl VirtualSize for OutputId {
+impl VirtualSize for Input {
     fn vsize(&self) -> usize {
-        1 + self.tx_hash.len()
+        // the pk and sig can be pruned after validation
+        let witness_len = self.public_key.len() + self.signature.len() + self.witness.len();
+        self.output_id.vsize() + witness_len / 2
     }
 }
 
-impl fmt::Debug for OutputId {
+impl fmt::Debug for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OutputId")
-            .field("tx_hash", &hex::encode(&self.tx_hash))
-            .field("index", &self.index)
+        f.debug_struct("Input")
+            .field("output_id", &self.output_id)
+            .field("public_key", &hex::encode(&self.public_key))
+            .field("witness", &hex::encode(&self.witness))
+            .field("signature", &hex::encode(&self.signature))
             .finish()
     }
+}
+
+/// An output identifier.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct OutputId {
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    pub tx_hash: TransactionHash,
+    pub index: u8,
 }
 
 impl OutputId {
@@ -261,6 +220,48 @@ impl PartialOrd for OutputId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+impl VirtualSize for OutputId {
+    fn vsize(&self) -> usize {
+        1 + self.tx_hash.len()
+    }
+}
+
+impl fmt::Debug for OutputId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutputId")
+            .field("tx_hash", &hex::encode_prefixed(&self.tx_hash))
+            .field("index", &self.index)
+            .finish()
+    }
+}
+
+impl fmt::Display for OutputId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}[{}]", hex::encode_prefixed(&self.tx_hash), self.index)
+    }
+}
+
+/// A blockchain transaction output.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Output {
+    /// Protocol version used for the output.
+    pub(crate) version: Version,
+    /// Amount of the output.
+    pub(crate) amount: u64,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// Data associated with the output.
+    pub(crate) data: Hash,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The hash of the public key.
+    pub(crate) commitment: Hash,
 }
 
 impl VirtualSize for Output {
@@ -411,6 +412,13 @@ impl Output {
     }
 }
 
+/// A blockchain transaction.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transaction {
+    pub inputs: Vec<Input>,
+    pub outputs: Vec<Output>,
+}
+
 impl fmt::Debug for Transaction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Transaction")
@@ -488,25 +496,28 @@ impl Transaction {
             match utxo.version {
                 Version::V0 => {
                     // For mining transactions, only the signature is checked
-                    vm.run(&check_sig_script())?;
+                    vm.run(&check_sig_script())
                 }
                 Version::V1 => {
                     // V1 transactions use a simple P2PK script
-                    vm.run(&p2pkh())?;
+                    vm.run(&p2pkh())
                 }
                 Version::V2 => {
                     // V2 transactions can use a more complex script
-                    vm.run(&utxo.data)?;
+                    vm.run(&utxo.data)
                 }
                 Version::V3 => {
                     // V3 transactions support segwit
                     if input.witness.len() > MAX_WITNESS_SIZE {
                         return Err(TransactionError::InvalidWitnessSize);
                     }
-                    vm.run(&p2wsh())?;
-                    vm.run(&input.witness)?;
+                    vm.run(&p2wsh()).and_then(|_| vm.run(&input.witness))
                 }
             }
+            .map_err(|err| TransactionError::Execution {
+                output_id: input.output_id,
+                error: err,
+            })?;
         }
         if reward.is_some() {
             return Ok(());
@@ -772,7 +783,7 @@ mod tests {
         };
 
         match spending_tx.verify(&indexer) {
-            Err(TransactionError::Execution(_)) => {}
+            Err(TransactionError::Execution { .. }) => {}
             other => panic!("Expected Execution error, got: {:?}", other),
         }
     }
@@ -967,7 +978,7 @@ mod tests {
         };
 
         match spending_tx.verify(&indexer) {
-            Err(TransactionError::Execution(_)) => {}
+            Err(TransactionError::Execution { .. }) => {}
             other => panic!("Expected Execution error, got: {:?}", other),
         }
     }
@@ -998,6 +1009,38 @@ mod tests {
         match spending_tx.verify(&indexer) {
             Ok(_) => {}
             other => panic!("Expected Ok, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_transaction_verify_v3_invalid_signature() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
+        let pubkey = signing_key.verifying_key().to_bytes();
+
+        let witness = check_sig_script().to_vec();
+        let amount = 42;
+
+        let utxo_id = OutputId::new([1u8; 32], 0);
+        let mut indexer = MockIndexer::default().with_balance_check();
+        indexer.insert(utxo_id, Output::new_v3(amount, &pubkey, &[0; 32], &witness));
+
+        let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &[0u8; 32])];
+        let sighash = sighash(&[utxo_id], &new_outputs);
+
+        // Create an input with an invalid signature
+        let mut input = Input::new_unsigned(utxo_id)
+            .with_witness(witness)
+            .sign(signing_key.as_bytes(), sighash);
+        input.signature[0] ^= 0xFF; // Corrupt the signature to make it invalid
+
+        let spending_tx = Transaction {
+            inputs: vec![input],
+            outputs: new_outputs,
+        };
+
+        match spending_tx.verify(&indexer) {
+            Err(TransactionError::Execution { .. }) => {}
+            other => panic!("Expected Execution error, got: {:?}", other),
         }
     }
 }

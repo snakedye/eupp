@@ -1,4 +1,5 @@
 use std::{
+    any::type_name,
     borrow::{Borrow, Cow},
     path::Path,
     usize,
@@ -58,7 +59,7 @@ impl Value for BlockMetadataValue {
         None
     }
     fn type_name() -> redb::TypeName {
-        redb::TypeName::new("BlockMetadata")
+        redb::TypeName::new(type_name::<Self::SelfType<'_>>())
     }
 }
 
@@ -87,7 +88,7 @@ impl Value for OutputValue {
         None
     }
     fn type_name() -> redb::TypeName {
-        redb::TypeName::new("Output")
+        redb::TypeName::new(type_name::<Self::SelfType<'_>>())
     }
 }
 
@@ -116,7 +117,7 @@ impl Value for OutputKey {
         None
     }
     fn type_name() -> redb::TypeName {
-        redb::TypeName::new("Output")
+        redb::TypeName::new(type_name::<Self::SelfType<'_>>())
     }
 }
 

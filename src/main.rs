@@ -7,7 +7,7 @@ use eupp_core::{
     miner,
 };
 use eupp_db::{FileStore, RedbIndexer};
-use eupp_net::{EuppNode, RpcClient, SyncHandle, config::Config, mempool::SimpleMempool};
+use eupp_net::{Config, EuppNode, RpcClient, SimpleMempool, SyncHandle};
 use indexer::NodeStore;
 use rand::{TryRngCore, rngs::OsRng};
 use std::{net::SocketAddr, time::Duration};
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create a mempool
-    let mempool = SimpleMempool::new();
+    let mempool = SimpleMempool::default();
 
     // Create the EuppNode (do not block the current task yet)
     let node = EuppNode::new(config.clone(), ledger, mempool);
@@ -144,9 +144,8 @@ async fn mining_loop(
                 debug!("Mempool is empty; skipping mining iteration");
                 continue;
             }
-            if let Ok(network_info) = rpc_client.get_network_info().await {
-                if let Ok(block_summary) = rpc_client.get_block_by_hash(network_info.tip_hash).await
-                {
+            if let Ok(info) = rpc_client.get_node_info().await {
+                if let Ok(block_summary) = rpc_client.get_block_by_hash(info.tip_hash).await {
                     if let Ok(outputs) = rpc_client
                         .get_outputs(Query::TransactionID(block_summary.lead_tx_hash))
                         .await

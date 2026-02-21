@@ -4,14 +4,14 @@ use super::{BlockMetadata, Indexer, IndexerExt, Ledger};
 use crate::Hash;
 use crate::block::Block;
 
-/// Iterator over the blockchain from the tip to genesis.
+/// Iterator over [`Block`] from the tip to genesis.
 #[derive(Clone, Copy)]
 pub struct BlockIter<'a, L: ?Sized> {
     pub current_hash: Hash,
     pub ledger: &'a L,
 }
 
-/// Iterator over the blockchain metadata from the tip to genesis.
+/// Iterator over [`BlockMetadata`] from the tip to genesis.
 #[derive(Clone, Copy)]
 pub struct BlockMetadataIter<'a, I: ?Sized> {
     pub current_hash: Hash,
