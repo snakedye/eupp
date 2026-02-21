@@ -44,6 +44,13 @@ pub const fn p2pkh() -> &'static [u8] {
 pub const fn p2wsh() -> &'static [u8] {
     use op::r#const::*;
     &[
+        // Verify signature
+        OP_PUSH_SIG,
+        OP_SIGHASH_ALL,
+        OP_PUSH_PK,
+        OP_CHECKSIG,
+        OP_VERIFY,
+        // Verify commitment
         OP_SELF_COMM,
         OP_PUSH_WITNESS,
         OP_SELF_DATA,

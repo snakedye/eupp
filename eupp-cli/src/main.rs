@@ -87,7 +87,7 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amoun
     let outputs: Vec<(OutputId, Output)> = resp.json().expect("Failed to parse outputs response");
     let utxos = outputs.iter().take(255);
     let balance: u64 = utxos.clone().map(|(_, output)| output.amount()).sum();
-    println!("Address: {}", hex::encode(self_address));
+    println!("Address: {}", hex::encode_prefixed(self_address));
     println!("Spendable balance: {} units", balance);
 
     if amount > balance {
@@ -139,7 +139,7 @@ fn cmd_send_to(peer: &str, secret_key: &str, address_hex: Option<&String>, amoun
         resp.json().expect("Failed to parse broadcast response");
     println!(
         "Transaction {} broadcasted successfully.",
-        hex::encode(broadcasted_hash)
+        hex::encode_prefixed(broadcasted_hash)
     );
 }
 
@@ -150,7 +150,7 @@ fn cmd_broadcast(peer: &str, tx_json: &str) {
     let tx: Transaction = serde_json::from_str(tx_json).expect("Failed to parse transaction JSON");
 
     let tx_hash = tx.hash();
-    println!("Transaction hash: 0x{}", hex::encode(tx_hash));
+    println!("Transaction hash: {}", hex::encode_prefixed(tx_hash));
 
     let resp = client
         .post(format!("{base}/transactions"))

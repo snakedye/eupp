@@ -143,25 +143,33 @@ impl std::fmt::Display for BlockError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockError::InvalidBlockHash(hash) => {
-                write!(f, "Invalid block hash: {}", hex::encode(hash))
+                write!(
+                    f,
+                    "Invalid block hash: {}",
+                    hex::const_encode::<_, false>(hash).as_str()
+                )
             }
             BlockError::InvalidBlockSize(size) => {
-                write!(f, "Invalid block size: {} exceeds maximum allowed", size)
+                write!(
+                    f,
+                    "{} exceeds maximum allowed block size ({} bytes)",
+                    size, MAX_BLOCK_SIZE
+                )
             }
             BlockError::ChallengeError => write!(f, "Mining challenge was not solved correctly"),
             BlockError::InvalidVersion(version) => {
-                write!(f, "Invalid lead UTXO version: {}", version)
+                write!(f, "Invalid lead UTXO version ({})", version)
             }
             BlockError::SupplyError {
                 min_expected,
                 actual,
             } => write!(
                 f,
-                "Supply error: actual {} is outside allowed range (min expected: {})",
+                "The block supply ({}) is lower than expected ({})",
                 actual, min_expected
             ),
-            BlockError::TransactionError(err) => write!(f, "Transaction error: {}", err),
-            BlockError::Other(err) => write!(f, "Other error: {}", err),
+            BlockError::TransactionError(err) => err.fmt(f),
+            BlockError::Other(err) => err.fmt(f),
         }
     }
 }

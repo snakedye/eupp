@@ -99,21 +99,21 @@ pub fn build_next_block<L: Indexer>(
     indexer: &L,
     secret_key: &[u8; 32],
     mask: Option<&Hash>,
-    max_attempts: usize,
+    range: impl IntoIterator<Item = usize>,
 ) -> Option<crate::block::Block> {
     let prev_block = indexer.get_last_block_metadata()?;
     let prev_block_hash = prev_block.hash;
-    let lead_utxo_id = prev_block.lead_output;
-    let lead_utxo = indexer.get_output(&lead_utxo_id)?;
+    let lead_output_id = prev_block.lead_output;
+    let lead_output = indexer.get_output(&lead_output_id)?;
 
     // Attempt to create a mining transaction that spends the prev block's minting UTXO
     let mining_tx = build_mining_tx(
         secret_key,
         &prev_block_hash,
-        &lead_utxo_id.tx_hash,
-        &lead_utxo,
+        &lead_output_id.tx_hash,
+        &lead_output,
         mask,
-        0..max_attempts,
+        range,
     )?;
 
     // Create a new block.
