@@ -84,7 +84,7 @@ impl<T: AsRef<BlockMetadata>> From<T> for BlockSummary {
     fn from(value: T) -> Self {
         let metadata = value.as_ref();
         Self {
-            version: metadata.version,
+            version: metadata.version.inner(),
             hash: metadata.hash,
             prev_block_hash: metadata.prev_block_hash,
             lead_tx_hash: metadata.lead_output.tx_hash,

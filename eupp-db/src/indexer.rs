@@ -1,5 +1,4 @@
 use std::{
-    any::type_name,
     borrow::{Borrow, Cow},
     path::Path,
     usize,
@@ -59,7 +58,7 @@ impl Value for BlockMetadataValue {
         None
     }
     fn type_name() -> redb::TypeName {
-        redb::TypeName::new(type_name::<Self::SelfType<'_>>())
+        redb::TypeName::new("BlockMetadata")
     }
 }
 
@@ -88,7 +87,7 @@ impl Value for OutputValue {
         None
     }
     fn type_name() -> redb::TypeName {
-        redb::TypeName::new(type_name::<Self::SelfType<'_>>())
+        redb::TypeName::new("Output")
     }
 }
 
@@ -117,7 +116,7 @@ impl Value for OutputKey {
         None
     }
     fn type_name() -> redb::TypeName {
-        redb::TypeName::new(type_name::<Self::SelfType<'_>>())
+        redb::TypeName::new("OutputId")
     }
 }
 
@@ -517,7 +516,7 @@ mod tests {
         };
         let funding_txid = funding_tx.hash();
 
-        let mut block = Block::new(0, [0u8; 32]);
+        let mut block = Block::new(Version::ZERO, [0u8; 32]);
         block.transactions.push(funding_tx);
 
         // Adding the genesis block should succeed
@@ -545,7 +544,7 @@ mod tests {
             outputs: vec![output],
         };
         let txid = tx.hash();
-        let mut block = Block::new(0, [0u8; 32]);
+        let mut block = Block::new(Version::ZERO, [0u8; 32]);
         block.transactions.push(tx);
 
         indexer.add_block(&block).expect("add block");
@@ -569,7 +568,7 @@ mod tests {
             outputs: vec![Output::new_v0(11, &[1u8; 32], &[2u8; 32])],
         };
         let txid = tx.hash();
-        let mut block = Block::new(0, [0u8; 32]);
+        let mut block = Block::new(Version::ZERO, [0u8; 32]);
         block.transactions.push(tx);
 
         indexer.add_block(&block).expect("add block");
@@ -594,7 +593,7 @@ mod tests {
             inputs: vec![],
             outputs: vec![output],
         };
-        let mut block = Block::new(0, [0u8; 32]);
+        let mut block = Block::new(Version::ZERO, [0u8; 32]);
         block.transactions.push(funding_tx);
 
         // Adding the genesis block should succeed
@@ -625,7 +624,7 @@ mod tests {
             outputs: vec![out1],
         };
         let tx_hash = tx1.hash();
-        let mut block1 = Block::new(0, [0u8; 32]);
+        let mut block1 = Block::new(Version::ZERO, [0u8; 32]);
         block1.transactions.push(tx1);
         indexer.add_block(&block1).expect("add block1");
 
@@ -638,7 +637,7 @@ mod tests {
             inputs: vec![input; 2],
             outputs: vec![out2],
         };
-        let mut block2 = Block::new(0, block1.header().hash());
+        let mut block2 = Block::new(Version::ZERO, block1.header().hash());
         block2.transactions.push(tx2);
         let res = indexer.add_block(&block2);
 
@@ -671,7 +670,7 @@ mod tests {
             outputs: vec![out1],
         };
         let tx_hash = tx1.hash();
-        let mut block1 = Block::new(0, [0u8; 32]);
+        let mut block1 = Block::new(Version::ZERO, [0u8; 32]);
         block1.transactions.push(tx1);
         indexer.add_block(&block1).expect("add block1");
 
@@ -684,7 +683,7 @@ mod tests {
             inputs: vec![input],
             outputs: vec![out2],
         };
-        let mut block2 = Block::new(0, block1.header().hash());
+        let mut block2 = Block::new(Version::ZERO, block1.header().hash());
         block2.transactions.push(tx2);
         indexer.add_block(&block2).expect("add block2");
 
@@ -715,7 +714,7 @@ mod tests {
             outputs: vec![out1],
         };
         let tx1_hash = tx1.hash();
-        let mut block1 = Block::new(0, [0u8; 32]);
+        let mut block1 = Block::new(Version::ZERO, [0u8; 32]);
         block1.transactions.push(tx1);
         indexer.add_block(&block1).expect("add block1");
 
@@ -729,7 +728,7 @@ mod tests {
             outputs: vec![out2],
         };
         let tx2_hash = tx2.hash();
-        let mut block2 = Block::new(0, block1.header().hash());
+        let mut block2 = Block::new(Version::ZERO, block1.header().hash());
         block2.transactions.push(tx2);
         indexer.add_block(&block2).expect("add block2");
 
@@ -742,7 +741,7 @@ mod tests {
             inputs: vec![input],
             outputs: vec![out3],
         };
-        let mut block3 = Block::new(0, block2.header().hash());
+        let mut block3 = Block::new(Version::ZERO, block2.header().hash());
         block3.transactions.push(tx3);
         indexer.add_block(&block3).expect("add block3");
 

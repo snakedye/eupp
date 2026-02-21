@@ -1,6 +1,6 @@
 use blake2::Digest;
 use ed25519_dalek::SigningKey;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 mod block;
 pub mod ledger;
@@ -33,6 +33,23 @@ pub type Signature = [u8; 64];
 pub trait VirtualSize {
     /// Returns the virtual size of the type in bytes.
     fn vsize(&self) -> usize;
+}
+
+/// Protocol versioning type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Version(u8);
+
+impl Version {
+    pub const ZERO: Version = Version(0);
+    pub const ONE: Version = Version(1);
+    pub const TWO: Version = Version(2);
+    pub const THREE: Version = Version(3);
+
+    /// Returns the inner version number.
+    pub const fn inner(&self) -> u8 {
+        self.0
+    }
 }
 
 /// Create a 32-byte commitment from a public key.

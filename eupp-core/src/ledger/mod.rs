@@ -13,7 +13,7 @@ use ethnum::U256;
 pub use query::Query;
 use serde::{Deserialize, Serialize};
 
-use crate::BlockHeader;
+use crate::{BlockHeader, Version};
 
 use super::{
     Hash,
@@ -25,7 +25,7 @@ use super::{
 /// Represents metadata for a block in the ledger.
 pub struct BlockMetadata {
     /// The block's version
-    pub version: u8,
+    pub version: Version,
 
     /// The unique identifier of this block
     pub hash: Hash,
@@ -282,7 +282,7 @@ mod tests {
     fn test_block_iter() {
         let mut mock = MockLedger::default();
         let genesis_hash = Hash::default();
-        let block = Block::new(0, genesis_hash);
+        let block = Block::new(Version::ZERO, genesis_hash);
         let block_hash = block.header().hash();
         mock.add_block(&block).unwrap();
 
@@ -296,7 +296,7 @@ mod tests {
         let mut mock = MockLedger::default();
         let block_hash = [1; 32];
         let metadata = BlockMetadata {
-            version: 0,
+            version: Version::ZERO,
             hash: block_hash,
             prev_block_hash: [0; 32],
             height: 0,

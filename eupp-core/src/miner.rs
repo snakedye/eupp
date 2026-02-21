@@ -117,7 +117,10 @@ pub fn build_next_block<L: Indexer>(
     )?;
 
     // Create a new block.
-    let mut block = crate::block::Block::new(0, indexer.get_last_block_metadata()?.hash);
+    let mut block = crate::block::Block::new(
+        crate::Version::ZERO,
+        indexer.get_last_block_metadata()?.hash,
+    );
 
     // Include the mining transaction as the first transaction in the block
     block.transactions.push(mining_tx);
@@ -128,7 +131,7 @@ pub fn build_next_block<L: Indexer>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::{Output, Transaction, Version};
+    use crate::transaction::{Output, Transaction};
     use ed25519_dalek::{Signature, VerifyingKey};
     use std::time::{Duration, Instant};
 
@@ -180,7 +183,7 @@ mod tests {
     fn test_build_mining_tx_deterministic_zero_attempts_returns_none() {
         let mask = [0x00u8; 32];
         let prev_mint_output = Output {
-            version: Version::V1,
+            version: crate::Version::ONE,
             amount: 100,
             data: [0u8; 32],
             commitment: mask,

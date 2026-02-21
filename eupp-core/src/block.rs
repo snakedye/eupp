@@ -33,6 +33,7 @@ accessing blockchain data and a `Transaction` structure for representing transac
 use std::error::Error;
 
 use crate::{
+    Version,
     miner::mining_solution,
     transaction::{OutputId, TransactionError},
 };
@@ -54,7 +55,7 @@ pub const MAX_BLOCK_SIZE: usize = 1_000_000;
 /// A block in the blockchain.
 pub struct Block {
     /// The version of the block, used to indicate protocol changes.
-    pub version: u8,
+    pub version: Version,
     /// The hash of the previous block in the blockchain.
     #[serde(
         serialize_with = "serialize_to_hex",
@@ -69,7 +70,7 @@ pub struct Block {
 /// The header of a block, offering an overview of the block.
 pub struct BlockHeader {
     /// The version of the block, used to indicate protocol changes.
-    pub version: u8,
+    pub version: Version,
     /// The hash of the previous block in the blockchain.
     #[serde(
         serialize_with = "serialize_to_hex",
@@ -93,8 +94,6 @@ pub enum BlockError {
     InvalidBlockSize(usize),
     /// The mining challenge was not solved correctly.
     ChallengeError,
-    /// The lead UTXO version is invalid.
-    InvalidVersion(u8),
     /// The supply in the block is outside the allowed range.
     SupplyError { min_expected: u64, actual: u64 },
     /// An error occurred in one of the block's transactions.
@@ -105,25 +104,7 @@ pub enum BlockError {
 
 impl PartialEq for BlockError {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (BlockError::InvalidBlockHash(a), BlockError::InvalidBlockHash(b)) => a == b,
-            (BlockError::InvalidBlockSize(a), BlockError::InvalidBlockSize(b)) => a == b,
-            (BlockError::ChallengeError, BlockError::ChallengeError) => true,
-            (BlockError::InvalidVersion(a), BlockError::InvalidVersion(b)) => a == b,
-            (
-                BlockError::SupplyError {
-                    min_expected: min_a,
-                    actual: actual_a,
-                },
-                BlockError::SupplyError {
-                    min_expected: min_b,
-                    actual: actual_b,
-                },
-            ) => min_a == min_b && actual_a == actual_b,
-            (BlockError::TransactionError(a), BlockError::TransactionError(b)) => a == b,
-            (BlockError::Other(_), BlockError::Other(_)) => false,
-            _ => false,
-        }
+        self.to_string() == other.to_string()
     }
 }
 
@@ -157,9 +138,6 @@ impl std::fmt::Display for BlockError {
                 )
             }
             BlockError::ChallengeError => write!(f, "Mining challenge was not solved correctly"),
-            BlockError::InvalidVersion(version) => {
-                write!(f, "Invalid lead UTXO version ({})", version)
-            }
             BlockError::SupplyError {
                 min_expected,
                 actual,
@@ -186,7 +164,7 @@ impl BlockHeader {
     pub fn hash(&self) -> Hash {
         let mut hasher = Blake2s256::new();
 
-        hasher.update(&[self.version as u8]);
+        hasher.update(&[self.version.inner()]);
         hasher.update(&self.prev_block_hash);
         hasher.update(&self.merkle_root);
 
@@ -200,7 +178,7 @@ impl BlockHeader {
 
 impl Block {
     /// Create a new `Block`.
-    pub fn new(version: u8, prev_block_hash: Hash) -> Self {
+    pub fn new(version: Version, prev_block_hash: Hash) -> Self {
         Self {
             version,
             prev_block_hash,
@@ -233,11 +211,11 @@ impl Block {
                 .transactions
                 .first()
                 .and_then(|tx| tx.inputs.first())
-                .ok_or(crate::transaction::TransactionError::MissingInputs)?;
+                .ok_or(TransactionError::MissingInputs)?;
             let this_lead_utxo = self.lead_output().ok_or(BlockError::ChallengeError)?;
-            let prev_lead_utxo = indexer.get_output(&lead_input.output_id).ok_or_else(|| {
-                crate::transaction::TransactionError::InvalidOutput(lead_input.output_id)
-            })?;
+            let prev_lead_utxo = indexer
+                .get_output(&lead_input.output_id)
+                .ok_or_else(|| TransactionError::InvalidOutput(lead_input.output_id))?;
 
             // Check that the lead input references the previous block's lead output
             if lead_input.output_id() != prev_block_metadata.lead_output {
@@ -247,7 +225,7 @@ impl Block {
             let (mask, nonce) = prev_lead_utxo
                 .mask()
                 .zip(this_lead_utxo.nonce())
-                .ok_or_else(|| BlockError::InvalidVersion(prev_lead_utxo.version as u8))?;
+                .ok_or_else(|| TransactionError::InvalidVersion(prev_lead_utxo.version.inner()))?;
             let solution = mining_solution(&prev_block_hash, &lead_input.public_key, nonce);
             if !matches_mask(mask, &solution) {
                 return Err(BlockError::ChallengeError);
@@ -294,8 +272,8 @@ impl Block {
             // Verify that the new lead utxo is v0 only
             let new_lead_output = self.transactions.first().and_then(|tx| tx.outputs.first());
             if let Some(output) = new_lead_output {
-                if !matches!(output.version, super::transaction::Version::V0) {
-                    return Err(BlockError::InvalidVersion(output.version as u8));
+                if !matches!(output.version, super::Version::ZERO) {
+                    return Err(TransactionError::InvalidVersion(output.version.inner()).into());
                 }
             }
         }
@@ -432,7 +410,7 @@ fn verify_proof(root: &Hash, proof: &[Leaf]) -> Option<()> {
 mod tests {
     use super::*;
     use crate::{
-        SecretKey,
+        SecretKey, Version,
         block::BlockError,
         ledger::{BlockMetadata, Indexer, Query},
         transaction::{Input, OutputId},
@@ -517,7 +495,7 @@ mod tests {
 
     fn genesis_block(mask: [u8; 32]) -> Block {
         let prev_block_hash = [0; 32];
-        let mut block = Block::new(0, prev_block_hash);
+        let mut block = Block::new(Version::ZERO, prev_block_hash);
         block.transactions.push(Transaction::new(
             vec![],
             vec![Output::new_v0(calculate_reward(&mask), &mask, &[0; 32])],
@@ -532,7 +510,7 @@ mod tests {
             .inputs
             .push(Input::new_unsigned(output_id).sign(sk, [0; 32]));
         transaction.outputs.push(Output {
-            version: crate::transaction::Version::V0,
+            version: Version::ZERO,
             amount: new_supply,
             data: [0; 32],
             commitment: [0; 32],
@@ -578,7 +556,7 @@ mod tests {
     fn test_block_with_invalid_prev_block_hash() {
         let (indexer, mining_transaction) = new_indexer([0; 32]);
 
-        let mut block = Block::new(1, [1; 32]); // Invalid prev_block_hash
+        let mut block = Block::new(Version::ZERO, [1; 32]); // Invalid prev_block_hash
         block.transactions.push(mining_transaction);
 
         let result = block.verify(&indexer);
@@ -595,7 +573,7 @@ mod tests {
         let first_tx_hash = genesis.transactions[0].hash();
         let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis_hash);
+        let mut block = Block::new(Version::ZERO, genesis_hash);
         block
             .transactions
             .push(mining_transaction(1, first_tx_hash, &[0; 32]));
@@ -609,7 +587,7 @@ mod tests {
         let first_tx_hash = genesis.transactions[0].hash();
         let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis.header().hash());
+        let mut block = Block::new(Version::ZERO, genesis.header().hash());
         block
             .transactions
             .push(mining_transaction(1, first_tx_hash, &[1; 32]));
@@ -626,7 +604,7 @@ mod tests {
         let first_tx_hash = genesis.transactions[0].hash();
         let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis.header().hash());
+        let mut block = Block::new(Version::ZERO, genesis.header().hash());
         block
             .transactions
             .push(mining_transaction(2, first_tx_hash, &[1; 32]));
@@ -643,13 +621,13 @@ mod tests {
         let first_tx_hash = genesis.transactions[0].hash();
         let indexer = MockIndexer::default().with_genesis(&genesis);
 
-        let mut block = Block::new(1, genesis.header().hash());
+        let mut block = Block::new(Version::ZERO, genesis.header().hash());
         let mut transaction = mining_transaction(1, first_tx_hash, &[1; 32]);
-        transaction.outputs[0].version = crate::transaction::Version::V1;
+        transaction.outputs[0].version = Version::ONE;
         block.transactions.push(transaction);
 
         match block.verify(&indexer) {
-            Err(BlockError::InvalidVersion(_)) => (),
+            Err(BlockError::TransactionError(TransactionError::InvalidVersion(_))) => (),
             e => panic!("Expected BlockError::InvalidVersion, got {:?}", e),
         }
     }
@@ -682,7 +660,7 @@ mod tests {
             .outputs
             .push(Output::new_v0(1, &[0; 32], &[0; 32]));
 
-        let mut block = Block::new(1, genesis_hash);
+        let mut block = Block::new(Version::ZERO, genesis_hash);
         block.transactions.push(transaction);
 
         let result = block.verify(&indexer);
@@ -707,7 +685,7 @@ mod tests {
 
         // Verify that the hash changes if the header changes
         let mut modified_header = header.clone();
-        modified_header.version = 89;
+        modified_header.version = Version::THREE;
         let modified_hash = modified_header.hash();
         assert_ne!(hash, modified_hash);
     }
