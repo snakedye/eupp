@@ -1,0 +1,22 @@
+name: Build and push Docker image to CEDILLE registry
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    uses: clubcedille/cedille-workflows/.github/workflows/external-build-push-ghcr.yaml@master
+    with:
+      container-name: helm
+      context: .
+      file: Dockerfile
+      branch: main
+    secrets:
+      GIT_AUTH_TOKEN: ${{ secrets.GHCR_TOKEN }}
