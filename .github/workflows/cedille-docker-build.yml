@@ -14,7 +14,7 @@ jobs:
   build-and-push:
     uses: clubcedille/cedille-workflows/.github/workflows/external-build-push-ghcr.yaml@master
     with:
-      container-name: helm
+      container-name: byzantium-helm
       context: .
       file: Dockerfile
       branch: main
