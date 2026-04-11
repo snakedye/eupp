@@ -2,9 +2,9 @@ name: Build and push Docker image to CEDILLE registry
 
 on:
   push:
-    branches: [ main ]
+    branches: [ releases/* ]
   pull_request:
-    branches: [ main ]
+    branches: [ realeases/* ]
 
 permissions:
   contents: read
