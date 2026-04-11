@@ -57,7 +57,7 @@ pub fn router(state: RpcClient) -> Router {
 }
 
 async fn root_handler() -> &'static str {
-    "Welcome to the Eupp API!"
+    "Welcome to the Helm API!"
 }
 
 async fn get_node_info(
