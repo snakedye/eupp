@@ -35,6 +35,8 @@ pub struct NodeInfo {
     )]
     /// The public key of the node.
     pub public_key: PublicKey,
+    /// The peer ID of the node.
+    pub peer_id: String,
     /// The list of connected peers.
     pub peers: Vec<String>,
     #[serde(
@@ -172,6 +174,9 @@ pub enum RpcRequest {
 
     /// Fetch the transactions in the mempool.
     GetMempool,
+
+    /// Dial a remote peer by multiaddr.
+    Dial { remote_multiaddr: String },
 }
 
 /// RPC responses for [`RpcRequest`].

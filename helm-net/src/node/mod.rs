@@ -9,7 +9,7 @@ use helm_core::{
 };
 use mempool::*;
 
-use libp2p::futures::StreamExt;
+use libp2p::{Multiaddr, futures::StreamExt};
 use libp2p::{
     PeerId, StreamProtocol, SwarmBuilder, gossipsub, mdns,
     request_response::{self, ProtocolSupport},
@@ -111,6 +111,19 @@ impl RpcClient {
     /// Broadcast a mined block to the network.
     pub async fn broadcast_block(&self, block: Block) -> Result<(), RpcError> {
         match self.request(RpcRequest::BroadcastBlock { block }).await? {
+            RpcResponse::Ok => Ok(()),
+            resp => Err(RpcError::UnexpectedResponse(resp)),
+        }
+    }
+
+    /// Dial a remote node by multiaddr.
+    pub async fn dial(&self, remote_multiaddr: impl Into<String>) -> Result<(), RpcError> {
+        match self
+            .request(RpcRequest::Dial {
+                remote_multiaddr: remote_multiaddr.into(),
+            })
+            .await?
+        {
             RpcResponse::Ok => Ok(()),
             resp => Err(RpcError::UnexpectedResponse(resp)),
         }
@@ -556,6 +569,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                         tip_hash: meta.hash,
                         tip_height: meta.height as u64,
                         public_key: self.config.public_key(),
+                        peer_id: swarm.local_peer_id().to_base58(),
                         available_supply: meta.available_supply,
                         peers: swarm
                             .connected_peers()
@@ -642,6 +656,15 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                     }
                     Err(err) => Err(RpcError::BadRequest(err.to_string())),
                 }
+            }
+            RpcRequest::Dial { remote_multiaddr } => {
+                let remote_multiaddr = remote_multiaddr
+                    .parse::<Multiaddr>()
+                    .map_err(|err| RpcError::BadRequest(err.to_string()))?;
+                swarm
+                    .dial(remote_multiaddr.clone())
+                    .map_err(|err| RpcError::BadRequest(err.to_string()))?;
+                Ok(RpcResponse::Ok)
             }
         }
     }

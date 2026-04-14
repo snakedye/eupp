@@ -49,6 +49,21 @@ enum Command {
 
     /// Fetch and display network information from the node.
     Info,
+
+    /// Dial a remote peer by multiaddr through the node API.
+    Dial {
+        /// Remote peer multiaddr (for example: /ip4/127.0.0.1/tcp/4001).
+        #[arg(long)]
+        multiaddr: String,
+
+        /// Basic auth username for the protected dial endpoint.
+        #[arg(long)]
+        user: String,
+
+        /// Basic auth password for the protected dial endpoint.
+        #[arg(long)]
+        password: String,
+    },
 }
 
 // ============================================================================
@@ -237,6 +252,27 @@ fn cmd_info(peer: &str) {
     print_end_section();
 }
 
+fn cmd_dial(peer: &str, multiaddr: &str, user: &str, password: &str) {
+    let base = base_url(peer);
+    let client = build_client();
+
+    let encoded = urlencoding::encode(multiaddr);
+    let resp = client
+        .post(format!("{base}/dial/{encoded}"))
+        .basic_auth(user, Some(password))
+        .send()
+        .expect("Failed to call dial endpoint");
+
+    if !resp.status().is_success() {
+        panic!("Failed to dial peer: {}", resp.text().unwrap());
+    }
+
+    print_section("Dial Status");
+    print_entry("Status", "✓ Success");
+    print_entry("Multiaddr", multiaddr);
+    print_end_section();
+}
+
 // ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
@@ -252,5 +288,10 @@ fn main() {
         } => cmd_send_to(&cli.peer, &secret_key, address.as_ref(), amount),
         Command::Broadcast { tx } => cmd_broadcast(&cli.peer, &tx),
         Command::Info => cmd_info(&cli.peer),
+        Command::Dial {
+            multiaddr,
+            user,
+            password,
+        } => cmd_dial(&cli.peer, &multiaddr, &user, &password),
     }
 }

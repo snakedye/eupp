@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::{StatusCode, header::LOCATION},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -75,7 +75,7 @@ fn parse_hex_hash<const N: usize>(s: &str) -> Result<[u8; N], RpcError> {
 
 async fn get_confirmations(
     State(client): State<RpcClient>,
-    axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
+    Path(tx_hash_hex): Path<String>,
 ) -> Result<Json<Confirmations>, ApiError> {
     let hash = parse_hex_hash(&tx_hash_hex)?;
     let n = client.get_confirmations(hash).await?;
@@ -84,7 +84,7 @@ async fn get_confirmations(
 
 async fn get_block_from_tx_id(
     State(client): State<RpcClient>,
-    axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
+    Path(tx_hash_hex): Path<String>,
 ) -> Result<Json<BlockSummary>, ApiError> {
     let tx_hash = parse_hex_hash(&tx_hash_hex)?;
     Ok(Json(client.get_block_by_tx_hash(tx_hash).await?))
@@ -99,7 +99,7 @@ async fn search_outputs(
 
 async fn get_block(
     State(client): State<RpcClient>,
-    axum::extract::Path(block_hash_hex): axum::extract::Path<String>,
+    Path(block_hash_hex): Path<String>,
 ) -> Result<Json<BlockSummary>, ApiError> {
     let hash = parse_hex_hash(&block_hash_hex)?;
     Ok(Json(client.get_block_by_hash(hash).await?))
@@ -117,4 +117,12 @@ async fn send_raw_tx(
     let body = Json(h);
     let resp = (StatusCode::CREATED, [(LOCATION, location.as_str())], body).into_response();
     Ok(resp)
+}
+
+async fn dial_node(
+    State(client): State<RpcClient>,
+    Path(multiaddr): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    client.dial(multiaddr).await?;
+    Ok(StatusCode::OK)
 }
