@@ -85,8 +85,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let addr = SocketAddr::from(([0, 0, 0, 0], bind_port));
             info!(address = %addr, "Starting HTTP API");
 
+            let rpc_client_clone = rpc_client.clone();
+            let bootstrap_multiaddr = config.bootstrap_multiaddr.clone();
+
             // Spawn the HTTP server as a background task, and run the node in the main task.
             tokio::spawn(async move {
+                if let Some(multiaddr) = bootstrap_multiaddr.as_deref() {
+                    rpc_client_clone.dial(multiaddr).await.unwrap();
+                }
                 let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
                 axum::serve(listener, app.into_make_service())
                     .await

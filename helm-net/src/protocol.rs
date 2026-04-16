@@ -172,6 +172,9 @@ pub enum RpcRequest {
 
     /// Fetch the transactions in the mempool.
     GetMempool,
+
+    /// Dial a remote peer by multiaddr.
+    Dial { remote_multiaddr: String },
 }
 
 /// RPC responses for [`RpcRequest`].
