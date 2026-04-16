@@ -92,6 +92,11 @@ pub struct Config {
     ///
     /// Environment variable: `HELM_NETWORK_NAME`
     pub network_name: String,
+
+    /// Optional bootstrap node multiaddr used for initial dialing.
+    ///
+    /// Environment variable: `HELM_BOOTSTRAP_MULTIADDR`
+    pub bootstrap_multiaddr: Option<String>,
 }
 
 impl Default for Config {
@@ -105,6 +110,7 @@ impl Default for Config {
             index_db_path: None,
             block_file_path: None,
             network_name: String::new(),
+            bootstrap_multiaddr: None,
         }
     }
 }
@@ -121,6 +127,7 @@ impl Config {
     /// - `HELM_INDEX_DB_PATH` - optional path to the indexing database used by `helm-db`
     /// - `HELM_BLOCK_FILE` - optional path to the block file where blocks are stored
     /// - `HELM_NETWORK_NAME` - required network name / gossipsub topic
+    /// - `HELM_BOOTSTRAP_MULTIADDR` - optional bootstrap node multiaddr used for initial dialing
     pub fn from_env() -> Result<Self, ConfigError> {
         // Load .env if present, ignore errors
         let _ = dotenv::dotenv();
@@ -162,6 +169,8 @@ impl Config {
         let network_name = env_var("HELM_NETWORK_NAME")
             .ok_or_else(|| ConfigError::new("HELM_NETWORK_NAME", "not set"))?;
 
+        let bootstrap_multiaddr = env_var("HELM_BOOTSTRAP_MULTIADDR");
+
         let sk_hex = env_var("HELM_SECRET_KEY")
             .or_else(|| env_var("SECRET_KEY"))
             .ok_or_else(|| {
@@ -186,6 +195,7 @@ impl Config {
             index_db_path,
             block_file_path,
             network_name,
+            bootstrap_multiaddr,
         })
     }
 

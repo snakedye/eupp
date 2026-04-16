@@ -118,11 +118,3 @@ async fn send_raw_tx(
     let resp = (StatusCode::CREATED, [(LOCATION, location.as_str())], body).into_response();
     Ok(resp)
 }
-
-async fn dial_node(
-    State(client): State<RpcClient>,
-    Path(multiaddr): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    client.dial(multiaddr).await?;
-    Ok(StatusCode::OK)
-}
