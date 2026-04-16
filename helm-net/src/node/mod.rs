@@ -569,7 +569,6 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                         tip_hash: meta.hash,
                         tip_height: meta.height as u64,
                         public_key: self.config.public_key(),
-                        peer_id: swarm.local_peer_id().to_base58(),
                         available_supply: meta.available_supply,
                         peers: swarm
                             .connected_peers()
