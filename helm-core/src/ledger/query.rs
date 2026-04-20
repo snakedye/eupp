@@ -1,14 +1,22 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Hash, Output, OutputId};
+use crate::{Hash, Output, OutputId, deserialize_arr, deserialize_hashes_from_hex, serialize_hashes_to_hex, serialize_to_hex};
 
 /// A query for UTXOs on the blockchain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Query {
     /// Set of commitment hashes to include in the query.
-    Addresses(Vec<Hash>),
+    Addresses(
+        #[serde(
+            serialize_with = "serialize_hashes_to_hex",
+            deserialize_with = "deserialize_hashes_from_hex"
+        )]
+        Vec<Hash>,
+    ),
     /// Transaction ID to include in the query.
-    TransactionID(Hash),
+    TransactionID(
+        #[serde(serialize_with = "serialize_to_hex", deserialize_with = "deserialize_arr")] Hash,
+    ),
 }
 
 impl Query {

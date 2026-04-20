@@ -134,6 +134,14 @@ where
     serializer.serialize_str(&hex::encode(hash))
 }
 
+/// Serialize a list of hashes to hexadecimal strings.
+pub fn serialize_hashes_to_hex<S>(hashes: &[Hash], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    hashes.iter().map(hex::encode).collect::<Vec<_>>().serialize(serializer)
+}
+
 /// Deserialize a hexadecimal string into a fixed-size array.
 pub fn deserialize_arr<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
 where
@@ -141,6 +149,17 @@ where
 {
     let s = String::deserialize(deserializer)?;
     hex::decode_to_array(&s).map_err(serde::de::Error::custom)
+}
+
+/// Deserialize a list of hexadecimal strings into hashes.
+pub fn deserialize_hashes_from_hex<'de, D>(deserializer: D) -> Result<Vec<Hash>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer)?
+        .into_iter()
+        .map(|s| hex::decode_to_array(&s).map_err(serde::de::Error::custom))
+        .collect()
 }
 
 /// Deserialize a hexadecimal string into a vector.

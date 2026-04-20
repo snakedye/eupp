@@ -2,3 +2,5 @@
 .env
 .*.dat
 .*.db
+
+.zed
