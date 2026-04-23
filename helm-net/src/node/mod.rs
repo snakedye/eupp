@@ -209,8 +209,12 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
     where
         I: Indexer,
     {
+        // Exit early if its already syncing.
+        if self.is_syncing() {
+            return;
+        }
         // Clear provisional sync target; we'll select the best peer after tip responses arrive.
-        self.sync_target.write().unwrap().take();
+        // self.sync_target.write().unwrap().take();
         if let Some((peer_id, _)) = self.find_sync_target() {
             info!(
                 peer_id = %peer_id,
@@ -255,14 +259,14 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
     {
         info!(
             peer_id = %peer_id,
-            "Initiating sync with peer, starting from their tip",
+            "Initiating sync with peer, starting from their tip:",
         );
         *self.sync_target.write().unwrap() = Some(peer_id);
         let idxer = self.indexer.read().unwrap();
         let to = idxer.get_last_block_metadata().map(|meta| meta.hash);
 
         // send_request returns an OutboundRequestId; ignore the return value.
-        debug!(peer_id = %peer_id, "Sending GetBlockHeaders request to peer");
+        debug!(peer_id = %peer_id, "Sending GetBlockHeaders request to:");
         swarm
             .behaviour_mut()
             .sync
@@ -290,14 +294,14 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                     Ok(_) => {
                         info!(
                             tx_hash = %hex::encode(tx_hash),
-                            "<- Recv Tx via gossip, added to mempool",
+                            "<- Recv Tx via gossip, added to mempool:",
                         );
                     }
                     Err(err) => {
                         debug!(
                             tx_hash = %hex::encode(tx_hash),
                             error = ?err,
-                            "Failed to add gossiped tx to mempool",
+                            "Failed to add gossiped tx to mempool:",
                         );
                     }
                 }
@@ -314,14 +318,14 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                         Ok(_) => {
                             info!(
                                 block_hash = %hex::encode(block.header().hash()),
-                                "<- Recv Block via gossip",
+                                "<- Recv Block via gossip:",
                             );
                         }
                         Err(err) => {
                             error!(
                                 block_hash = %hex::encode(block.header().hash()),
                                 error = ?err,
-                                "Failed to add gossiped block",
+                                "Failed to add gossiped block:",
                             );
                         }
                     }
@@ -340,21 +344,27 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                             hash: meta.hash,
                             cumulative_work: meta.cumulative_work,
                         };
+
                         if let Err(err) = swarm
                             .behaviour_mut()
                             .gossipsub
                             .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                         {
-                            debug!(?err, "Failed to publish ChainTip via gossip");
+                            debug!(?err, "Failed to publish ChainTip via gossip:");
                         }
                     }
                 }
             }
             GossipMessage::ChainTip {
-                hash: _hash,
+                hash,
                 cumulative_work,
             } => {
                 if let Some(source) = message.source {
+                    info!(
+                        peer_id = %source,
+                        hash = %hex::encode(hash),
+                        "ChainTip received:",
+                    );
                     self.peers_sync_state
                         .insert(source, PeerSyncState { cumulative_work });
                 }
@@ -372,7 +382,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
     ) {
         if let mdns::Event::Discovered(list) = event {
             for (peer_id, _multiaddr) in list {
-                info!(peer_id = %peer_id, "Discovered a new peer");
+                info!(peer_id = %peer_id, "Discovered a new peer:");
                 swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                 // Ask peers to advertise their chain tip via gossip.
                 let msg = GossipMessage::GetChainTip;
@@ -381,7 +391,10 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                     .gossipsub
                     .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                 {
-                    debug!(?err, "Failed to publish GetChainTip to new peer via gossip");
+                    debug!(
+                        ?err,
+                        "Failed to publish GetChainTip to new peer via gossip:"
+                    );
                 }
             }
         }
@@ -426,11 +439,6 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                         SyncRequest::GetBlocks { from, to } => {
                             if let Ok(idxer) = self.indexer.read() {
                                 if let Some(lg) = (*idxer).try_as_ref() {
-                                    debug!(
-                                        from = from.map(hex::encode),
-                                        to = to.map(hex::encode),
-                                        "Sending Blocks",
-                                    );
                                     let from = from
                                         .or_else(|| {
                                             idxer.get_last_block_metadata().map(|meta| meta.hash)
@@ -447,6 +455,11 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                                         .map(|(block, _)| block.into_owned())
                                         .collect();
 
+                                    info!(
+                                        from = hex::encode(from),
+                                        to = ?to.map(hex::encode),
+                                        "Sending Blocks:",
+                                    );
                                     if let Err(e) = swarm
                                         .behaviour_mut()
                                         .sync
@@ -465,71 +478,78 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                                 *self.sync_target.write().unwrap() = None;
                                 return;
                             }
+                            let from = headers.first().map(|h| h.hash()).map(hex::encode).unwrap();
+                            let to = headers.last().map(|h| h.hash()).map(hex::encode).unwrap();
                             self.block_fetch_queue = headers;
                             // This will start the block fetch process
-                            debug!(peer = %peer, "Sending initial GetBlocks request to peer");
+                            info!(from = %from, to = %to, "Sending initial GetBlocks request to peer:");
                             swarm.behaviour_mut().sync.send_request(
                                 &peer,
                                 SyncRequest::GetBlocks {
-                                    from: Some([0; 32]),
+                                    from: None,
                                     to: None,
                                 },
                             );
                         }
                         SyncResponse::Blocks(blocks) => {
                             let sync_peer = *self.sync_target.read().unwrap();
-                            if Some(peer) == sync_peer {
-                                let mut idxer = self.indexer.write().unwrap();
-                                for block in blocks.iter().rev() {
-                                    match idxer.add_block(block) {
-                                        Ok(_) => {
-                                            info!(
-                                                block_hash = %hex::encode(block.header().hash()),
-                                                "<- Synced Block",
-                                            );
-                                        }
-                                        Err(err) => {
-                                            debug!(?err, "Failed to add block");
-                                            *self.sync_target.write().unwrap() = None;
-                                            return;
+                            match sync_peer {
+                                Some(peer) => {
+                                    debug!(from = %peer, "Verifying {} blocks", blocks.len());
+                                    let mut idxer = self.indexer.write().unwrap();
+                                    for block in blocks.iter().rev() {
+                                        match idxer.add_block(block) {
+                                            Ok(_) => {
+                                                info!(
+                                                    block_hash = %hex::encode(block.header().hash()),
+                                                    "<- Synced Block",
+                                                );
+                                            }
+                                            Err(err) => {
+                                                debug!(?err, "Failed to add block");
+                                                *self.sync_target.write().unwrap() = None;
+                                                return;
+                                            }
                                         }
                                     }
+                                    // If there are no pending blocks, send a request to continue syncing
+                                    if self.block_fetch_queue.is_empty() {
+                                        let to = blocks.first().map(|block| block.header().hash());
+                                        debug!(peer = %peer, "Sending GetBlockHeaders request to continue sync");
+                                        swarm.behaviour_mut().sync.send_request(
+                                            &peer,
+                                            SyncRequest::GetBlockHeaders { from: None, to },
+                                        );
+                                        return;
+                                    }
+                                    // If there are pending blocks, send request the next chunk
+                                    if let Some(chunk) = self
+                                        .block_fetch_queue
+                                        .rchunks(self.config.block_chunk_size)
+                                        .next()
+                                    {
+                                        let from = chunk.first().map(|h| h.hash());
+                                        let to = chunk.last().map(|h| h.hash());
+                                        debug!(from = ?from.map(hex::encode), to = ?to.map(hex::encode), "Sending GetBlocks request for next chunk:");
+                                        swarm.behaviour_mut().sync.send_request(
+                                            &peer,
+                                            SyncRequest::GetBlocks { from, to },
+                                        );
+                                        self.block_fetch_queue.truncate(
+                                            self.block_fetch_queue
+                                                .len()
+                                                .saturating_sub(self.config.block_chunk_size),
+                                        );
+                                    }
                                 }
-                                // If there are no pending blocks, send a request to continue syncing
-                                if self.block_fetch_queue.is_empty() {
-                                    let to = blocks.first().map(|block| block.header().hash());
-                                    debug!(peer = %peer, "Sending GetBlockHeaders request to continue sync");
-                                    swarm.behaviour_mut().sync.send_request(
-                                        &peer,
-                                        SyncRequest::GetBlockHeaders { from: None, to },
-                                    );
-                                    return;
-                                }
-                                // If there are pending blocks, send request the next chunk
-                                if let Some(chunk) = self
-                                    .block_fetch_queue
-                                    .rchunks(self.config.block_chunk_size)
-                                    .next()
-                                {
-                                    let from = chunk.first().map(|h| h.hash());
-                                    let to = chunk.last().map(|h| h.hash());
-                                    debug!(peer = %peer, "Sending GetBlocks request for next chunk");
-                                    swarm
-                                        .behaviour_mut()
-                                        .sync
-                                        .send_request(&peer, SyncRequest::GetBlocks { from, to });
-                                    self.block_fetch_queue.truncate(
-                                        self.block_fetch_queue
-                                            .len()
-                                            .saturating_sub(self.config.block_chunk_size),
-                                    );
-                                }
+                                None => error!("No sync peer"),
                             }
                         }
                     },
                 }
             }
-            _ => {}
+            request_response::Event::ResponseSent { .. } => {}
+            ev => error!(?ev, "Sync error:"),
         }
     }
 
@@ -609,7 +629,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                     Ok(_) => {
                         info!(
                             block_hash = %hex::encode(block.header().hash()),
-                            "-> Send Block via gossip",
+                            "-> Send Block via gossip:",
                         );
 
                         // Remove transactions included in the block from the mempool
@@ -624,7 +644,7 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                             .gossipsub
                             .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                         {
-                            debug!(?err, "Failed to publish NewBlock via gossip");
+                            debug!(?err, "Failed to publish NewBlock via gossip:");
                         }
                         Ok(RpcResponse::Ok)
                     }
@@ -648,9 +668,9 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                             .gossipsub
                             .publish(topic.clone(), postcard::to_allocvec(&msg).unwrap())
                         {
-                            debug!(?err, "Failed to publish Transaction via gossip");
+                            debug!(?err, "Failed to publish Transaction via gossip:");
                         }
-                        info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC");
+                        info!(tx_hash = %hex::encode(tx_hash), "-> Gossiping Tx from RPC:");
                         Ok(RpcResponse::TransactionHash(tx_hash))
                     }
                     Err(err) => Err(RpcError::BadRequest(err.to_string())),
@@ -692,9 +712,12 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                         mdns::Config::default(),
                         key.public().to_peer_id(),
                     )?,
-                    sync: request_response::cbor::Behaviour::new(
+                    sync: request_response::cbor::Behaviour::with_codec(
+                        request_response::cbor::codec::Codec::default().set_response_size_maximum(
+                            (MAX_BLOCK_SIZE * self.config.block_chunk_size()) as u64,
+                        ),
                         [(StreamProtocol::new("/helm/sync/1"), ProtocolSupport::Full)],
-                        Default::default(),
+                        request_response::Config::default(),
                     ),
                 })
             })?
@@ -723,21 +746,21 @@ impl<I: Send + Sync + 'static, M: Mempool + Send + Sync + 'static> HelmNode<I, M
                     },
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. })) => {
                         if let Err(e) = self.handle_gossip_message(message, &mut swarm, topic.clone()).await {
-                             error!(?e, "Failed to handle gossip message");
+                             error!(?e, "Failed to handle gossip message:");
                         }
                     },
                     SwarmEvent::Behaviour(EuppBehaviourEvent::Sync(event)) => {
                         self.handle_sync_event(event, &mut swarm).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        info!(address = %address, "Local node listening on");
+                        info!(address = %address, "Local node listening on:");
                     }
                     _ => {}
                 },
                 Some((request, responder)) = rpc_rx.recv() => {
                     let result = self.handle_rpc_event(request, &mut swarm, topic.clone()).await;
                     if let Err(e) = responder.send(result) {
-                        error!(?e, "Failed to send RPC response");
+                        error!(?e, "Failed to send RPC response:");
                     }
                 }
                 _ = sync_check_interval.tick() => {
