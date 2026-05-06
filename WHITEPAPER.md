@@ -39,6 +39,7 @@ The VM is intentionally compact and stack-based. It enables:
 - deterministic script execution,
 - access to transaction-level context when needed,
 - programmable covenants and time/height checks,
+- register support to share data across inputs,
 - extensibility for new opcodes or logic versions.
 
 These capabilities allow common primitives (multisig, timelocks, atomic swap patterns) while preserving clear validation semantics.
