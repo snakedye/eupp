@@ -11,7 +11,7 @@
 
 use ethnum::U256;
 use helm_core::{
-    ledger::{BlockMetadata, Query},
+    ledger::{BlockMetadata, OutputEntry, Query},
     *,
 };
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,12 @@ pub struct NodeInfo {
     pub tip_height: u64,
     /// The currently available supply of coins.
     pub available_supply: u64,
+    #[serde(
+        serialize_with = "serialize_to_hex",
+        deserialize_with = "deserialize_arr"
+    )]
+    /// The public key of the node.
+    pub public_key: PublicKey,
     /// The list of connected peers.
     pub peers: Vec<String>,
     #[serde(
@@ -166,6 +172,9 @@ pub enum RpcRequest {
 
     /// Fetch the transactions in the mempool.
     GetMempool,
+
+    /// Dial a remote peer by multiaddr.
+    Dial { remote_multiaddr: String },
 }
 
 /// RPC responses for [`RpcRequest`].
@@ -180,8 +189,8 @@ pub enum RpcResponse {
     /// The number of confirmations for a given transaction hash.
     Confirmations(u64),
 
-    /// All matched UTXOs in one response: pairs of (OutputId, Output).
-    Outputs(Vec<(OutputId, Output)>),
+    /// A list of matched UTXOs.
+    Outputs(Vec<OutputEntry>),
 
     /// The hash of the broadcasted transaction.
     TransactionHash(TransactionHash),

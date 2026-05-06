@@ -1,0 +1,23 @@
+name: Build and push Docker image to CEDILLE registry
+
+on:
+  push:
+    tags: [ v* ]
+  pull_request:
+    branches: [ releases/* ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    uses: clubcedille/cedille-workflows/.github/workflows/external-build-push-ghcr.yaml@master
+    with:
+      container-name: byzantium-helm
+      context: .
+      file: Dockerfile
+      branch: main
+    secrets:
+      GIT_AUTH_TOKEN: ${{ secrets.GHCR_TOKEN }}

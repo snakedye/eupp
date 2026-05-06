@@ -6,7 +6,7 @@ use std::{
 
 use ethnum::U256;
 use helm_core::{
-    ledger::{BlockMetadata, Cursor, IndexerExt, Ledger},
+    ledger::{BlockMetadata, Cursor, IndexerExt, Ledger, OutputEntry},
     mask_difficulty, *,
 };
 use redb::{
@@ -260,7 +260,7 @@ impl<S, Fs> RedbIndexer<S, Fs> {
             .enumerate()
         {
             let output_id = input.output_id();
-            let spent_output = utxo_set.remove(output_id)?;
+            let spent_output = utxo_set.remove(output_id).map_err(BlockError::other)?;
             match spent_output {
                 Some(output) if i == 0 => prev_lead_output = Some((output_id, output.value())),
                 Some(_) => {}
@@ -272,7 +272,9 @@ impl<S, Fs> RedbIndexer<S, Fs> {
 
         // We re-insert the lead UTXO to allow for forks
         if let Some((prev_lead_utxo, prev_lead_output)) = prev_lead_output {
-            utxo_set.insert(prev_lead_utxo, prev_lead_output)?;
+            utxo_set
+                .insert(prev_lead_utxo, prev_lead_output)
+                .map_err(BlockError::other)?;
         }
 
         let block_hash = block.header().hash();
@@ -286,10 +288,16 @@ impl<S, Fs> RedbIndexer<S, Fs> {
         }) {
             let output_id = OutputId::new(tx_id, i as u8);
             if (self.scanner)(output) {
-                address_table.insert(output.address(), output_id.clone())?;
+                address_table
+                    .insert(output.address(), output_id.clone())
+                    .map_err(BlockError::other)?;
             }
-            utxo_set.insert(output_id, output)?;
-            tx_table.insert(tx_id, block_hash)?;
+            utxo_set
+                .insert(output_id, output)
+                .map_err(BlockError::other)?;
+            tx_table
+                .insert(tx_id, block_hash)
+                .map_err(BlockError::other)?;
         }
         Ok(())
     }
@@ -385,17 +393,21 @@ where
             {
                 // Update the tip to the new metadata hash.
                 self.tip = Some(metadata.hash);
-                recovery_table.insert(MAIN_CHAIN_TIP_KEY, metadata.hash.to_vec())?;
+                recovery_table
+                    .insert(MAIN_CHAIN_TIP_KEY, metadata.hash.to_vec())
+                    .map_err(BlockError::other)?;
             }
 
-            metadata_table.insert(metadata.hash, metadata)?;
+            metadata_table
+                .insert(metadata.hash, metadata)
+                .map_err(BlockError::other)?;
         }
 
         if let Some(fs) = self.fs.try_as_ref() {
-            fs.commit()?;
+            fs.commit().map_err(BlockError::other)?;
         }
 
-        write_tx.commit()?;
+        write_tx.commit().map_err(BlockError::other)?;
         Ok(())
     }
     fn get_block_metadata(&'_ self, hash: &Hash) -> Option<Cow<'_, BlockMetadata>> {
@@ -411,7 +423,7 @@ where
         let table = read_tx.open_table(UTXO_TABLE).ok()?;
         self.get(&table, output_id, |output| output)
     }
-    fn query_outputs(&self, query: &helm_core::ledger::Query) -> Vec<(OutputId, Output)> {
+    fn query_outputs(&self, query: &helm_core::ledger::Query) -> Vec<OutputEntry> {
         let read_tx = self.db.begin_read().unwrap();
         let address_table = read_tx.open_multimap_table(ADDRESS_TABLE).unwrap();
         let utxo_table = read_tx.open_table(UTXO_TABLE).unwrap();
@@ -428,14 +440,14 @@ where
                         .get(output_id)
                         .ok()
                         .flatten()
-                        .map(move |value| (output_id, value.value()))
+                        .map(move |value| (output_id, value.value()).into())
                 })
                 .collect(),
             ledger::Query::TransactionID(tx_hash) => utxo_table
                 .range(OutputId::new(*tx_hash, 0)..OutputId::new(*tx_hash, 255))
                 .map(|iter| {
                     iter.filter_map(|output| output.ok())
-                        .map(|(output_id, output)| (output_id.value(), output.value()))
+                        .map(|(output_id, output)| (output_id.value(), output.value()).into())
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -553,9 +565,9 @@ mod tests {
         let q = Query::Addresses(vec![*address]);
         let res = indexer.query_outputs(&q);
         // We expect at least one UTXO for our address
-        let (id, out) = res.first().unwrap();
+        let OutputEntry { id, output } = res.first().unwrap();
         assert_eq!(id.tx_hash, txid);
-        assert_eq!(out.address(), address);
+        assert_eq!(output.address(), address);
     }
 
     #[test]
@@ -632,7 +644,11 @@ mod tests {
         let out2 = Output::new_v0(99, &data, &data);
         let output_id = OutputId::new(tx_hash, 0);
         let sighash = sighash([&output_id; 2], [&out2]);
-        let input = Input::new_unsigned(output_id).sign(&[0; 32], sighash);
+        let input = Input::builder()
+            .with_output_id(output_id)
+            .sign(&[0; 32], sighash)
+            .build()
+            .unwrap();
         let tx2 = Transaction {
             inputs: vec![input; 2],
             outputs: vec![out2],
@@ -678,7 +694,11 @@ mod tests {
         let out2 = Output::new_v0(99, &data, &data);
         let output_id = OutputId::new(tx_hash, 0);
         let sighash = sighash([&output_id], [&out2]);
-        let input = Input::new_unsigned(output_id).sign(&[0; 32], sighash);
+        let input = Input::builder()
+            .with_output_id(output_id)
+            .sign(&[0; 32], sighash)
+            .build()
+            .unwrap();
         let tx2 = Transaction {
             inputs: vec![input],
             outputs: vec![out2],
@@ -722,7 +742,11 @@ mod tests {
         let out2 = Output::new_v0(99, &data, &data);
         let output_id = OutputId::new(tx1_hash, 0);
         let sighash1 = sighash([&output_id], [&out2]);
-        let input = Input::new_unsigned(output_id).sign(&[0; 32], sighash1);
+        let input = Input::builder()
+            .with_output_id(output_id)
+            .sign(&[0; 32], sighash1)
+            .build()
+            .unwrap();
         let tx2 = Transaction {
             inputs: vec![input],
             outputs: vec![out2],
@@ -736,7 +760,11 @@ mod tests {
         let out3 = Output::new_v0(98, &data, &data);
         let output_id = OutputId::new(tx2_hash, 0);
         let sighash2 = sighash([&output_id], [&out3]);
-        let input = Input::new_unsigned(output_id).sign(&[0; 32], sighash2);
+        let input = Input::builder()
+            .with_output_id(output_id)
+            .sign(&[0; 32], sighash2)
+            .build()
+            .unwrap();
         let tx3 = Transaction {
             inputs: vec![input],
             outputs: vec![out3],

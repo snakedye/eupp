@@ -10,7 +10,7 @@ pub use iter::{BlockIter, BlockMetadataIter};
 use std::borrow::Cow;
 
 use ethnum::U256;
-pub use query::Query;
+pub use query::{OutputEntry, Query};
 use serde::{Deserialize, Serialize};
 
 use crate::{BlockHeader, Version};
@@ -99,7 +99,7 @@ pub trait Indexer {
     fn get_output(&self, output_id: &OutputId) -> Option<Output>;
 
     /// Returns a list of all outputs matching the given query.
-    fn query_outputs(&self, query: &Query) -> Vec<(OutputId, Output)>;
+    fn query_outputs(&self, query: &Query) -> Vec<OutputEntry>;
 
     /// Fetches the block hash of a UTXO by its identifier.
     fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash>;
@@ -194,8 +194,8 @@ where
         self.deref().get_output(output_id)
     }
 
-    fn query_outputs(&self, query: &Query) -> Vec<(OutputId, Output)> {
-        self.deref().query_outputs(query)
+    fn query_outputs(&self, query: &Query) -> Vec<OutputEntry> {
+        self.deref().query_outputs(query).into()
     }
 
     fn get_block_from_output(&self, output_id: &OutputId) -> Option<Hash> {
@@ -255,7 +255,7 @@ mod tests {
             None
         }
 
-        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+        fn query_outputs(&self, _query: &Query) -> Vec<OutputEntry> {
             unimplemented!()
         }
 

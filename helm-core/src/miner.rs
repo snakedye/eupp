@@ -80,7 +80,11 @@ where
             let sighash = sighash(&[lead_utxo_id], &outputs);
 
             // Build input revealing pk and signature
-            let input = Input::new_unsigned(lead_utxo_id).sign(signing_key.as_bytes(), sighash);
+            let input = Input::builder()
+                .with_output_id(lead_utxo_id)
+                .sign(signing_key.as_bytes(), sighash)
+                .build()
+                .unwrap();
 
             let tx = Transaction {
                 inputs: vec![input],

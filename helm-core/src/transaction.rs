@@ -10,9 +10,9 @@ supports extensible script and witness validation for advanced transaction types
 */
 
 use crate::Version;
-use crate::vm::OwnedStackValue;
+use crate::vm::{check_sig_script, p2wsh};
 
-use super::vm::{ExecError, Vm, check_sig_script, p2pkh, p2wsh};
+use super::vm::{ExecError, Vm, p2pkh};
 use super::{
     Hash, PublicKey, commitment, deserialize_arr, deserialize_vec, ledger::Indexer,
     serialize_to_hex,
@@ -138,25 +138,80 @@ pub struct Input {
     pub(crate) signature: Signature,
 }
 
-impl Input {
-    pub fn new_unsigned(output_id: OutputId) -> Self {
-        Self {
-            output_id,
-            signature: [0; 64],
+/// A builder for creating [`Input`].
+pub struct InputBuilder(Input);
+impl InputBuilder {
+    /// Creates a new `InputBuilder` with default values.
+    ///
+    /// The `output_id` is initialized to a zero hash and index 0.
+    /// The `public_key` and `signature` are default (zeroed arrays).
+    /// The `witness` is an empty vector.
+    pub fn new() -> Self {
+        Self(Input {
+            output_id: OutputId::new([0; 32], 0),
             public_key: Default::default(),
             witness: vec![],
-        }
+            signature: [0; 64],
+        })
     }
-    pub fn with_witness(mut self, witness: Vec<u8>) -> Self {
-        self.witness = witness;
+    /// Sets the output ID for the input.
+    ///
+    /// This specifies which unspent transaction output (UTXO) this input is spending.
+    pub fn with_output_id(mut self, output_id: OutputId) -> Self {
+        self.0.output_id = output_id;
         self
     }
+    /// Sets the public key for the input.
+    ///
+    /// This public key is used to verify the signature against the transaction's sighash.
+    pub fn with_public_key(mut self, public_key: PublicKey) -> Self {
+        self.0.public_key = public_key;
+        self
+    }
+    /// Sets the witness data for the input.
+    ///
+    /// Witness data is used for SegWit-style transactions and typically contains
+    /// scripts or other data required for validation.
+    pub fn with_witness(mut self, witness: Vec<u8>) -> Self {
+        self.0.witness = witness;
+        self
+    }
+    /// Signs the input with the given secret key and transaction sighash.
+    ///
+    /// This method sets the `public_key` from the `SecretKey` and generates
+    /// the `signature` for the provided `sighash`.
     pub fn sign(mut self, sk: &SecretKey, sighash: Hash) -> Self {
         let signing_key = SigningKey::from_bytes(sk);
-        self.public_key = signing_key.verifying_key().to_bytes();
-        self.signature = signing_key.sign(&sighash).to_bytes();
+        self.0.public_key = signing_key.verifying_key().to_bytes();
+        self.0.signature = signing_key.sign(&sighash).to_bytes();
         self
     }
+    /// Builds the `Input` from the builder.
+    ///
+    /// Returns `Some(Input)` if the public key has been set (i.e., is not all zeros),
+    /// otherwise returns `None`, indicating an incomplete input.
+    pub fn build(self) -> Option<Input> {
+        if self.0.public_key == [0; 32] {
+            None
+        } else {
+            Some(self.0)
+        }
+    }
+}
+
+impl Input {
+    /// Returns a new `InputBuilder` to construct an `Input`.
+    pub fn builder() -> InputBuilder {
+        InputBuilder::new()
+    }
+    /// Sets the signature for the input.
+    ///
+    /// This is typically used when the signature is generated separately
+    /// or for modifying an existing input.
+    pub fn set_signature(&mut self, signature: Signature) {
+        self.signature = signature;
+    }
+    /// Returns the `OutputId` that this input is spending.
     pub fn output_id(&self) -> OutputId {
         self.output_id
     }
@@ -576,8 +631,8 @@ mod tests {
     use crate::{
         Hash,
         block::{Block, BlockError},
-        ledger::{BlockMetadata, Indexer, Query},
-        vm::p2pkh,
+        ledger::{BlockMetadata, Indexer, OutputEntry, Query},
+        vm::{p2pkh, p2wsh},
     };
     use blake2::Blake2s256;
     use ed25519_dalek::Signer;
@@ -644,7 +699,7 @@ mod tests {
             self.utxos.get(id).copied()
         }
 
-        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+        fn query_outputs(&self, _query: &Query) -> Vec<OutputEntry> {
             unimplemented!()
         }
 
@@ -692,10 +747,14 @@ mod tests {
 
     #[test]
     fn test_transaction_hash() {
-        let input = Input::new_unsigned(OutputId {
-            tx_hash: [1u8; 32],
-            index: 0,
-        });
+        let input = Input::builder()
+            .with_output_id(OutputId {
+                tx_hash: [1u8; 32],
+                index: 0,
+            })
+            .with_public_key([1; 32])
+            .build()
+            .unwrap();
         let output = Output::new_v1(10, &[0; 32], &[3u8; 32]);
         let tx = Transaction {
             inputs: vec![input.clone()],
@@ -746,8 +805,11 @@ mod tests {
         ]; // total output: 90
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let input =
-            Input::new_unsigned(utxo_id).sign(signing_key.verifying_key().as_bytes(), sighash);
+        let input = Input::builder()
+            .with_output_id(utxo_id)
+            .sign(signing_key.verifying_key().as_bytes(), sighash)
+            .build()
+            .unwrap();
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -773,7 +835,13 @@ mod tests {
         );
 
         let spending_tx = Transaction {
-            inputs: vec![Input::new_unsigned(utxo_id)],
+            inputs: vec![
+                Input::builder()
+                    .with_output_id(utxo_id)
+                    .with_public_key([1; 32])
+                    .build()
+                    .unwrap(),
+            ],
             outputs: vec![Output::new_v1(99, &[0u8; 32], &[0u8; 32])],
         };
 
@@ -816,7 +884,13 @@ mod tests {
         let sighash = sighash(&[utxo_id], &new_outputs);
 
         let spending_tx = Transaction {
-            inputs: vec![Input::new_unsigned(utxo_id).sign(signing_key.as_bytes(), sighash)],
+            inputs: vec![
+                Input::builder()
+                    .with_output_id(utxo_id)
+                    .sign(signing_key.as_bytes(), sighash)
+                    .build()
+                    .unwrap(),
+            ],
             outputs: new_outputs,
         };
 
@@ -852,7 +926,11 @@ mod tests {
             commitment: mask,
         }];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let input = Input::new_unsigned(utxo_id).sign(&[11u8; 32], sighash);
+        let input = Input::builder()
+            .with_output_id(utxo_id)
+            .sign(&[11u8; 32], sighash)
+            .build()
+            .unwrap();
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -881,7 +959,11 @@ mod tests {
 
         let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &script_data)];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let input = Input::new_unsigned(utxo_id).sign(signing_key.as_bytes(), sighash);
+        let input = Input::builder()
+            .with_output_id(utxo_id)
+            .sign(signing_key.as_bytes(), sighash)
+            .build()
+            .unwrap();
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -906,7 +988,13 @@ mod tests {
                 index: i as u8,
             };
             let sighash = sighash(&[utxo_id], &[]);
-            inputs.push(Input::new_unsigned(utxo_id).sign(&[11u8; 32], sighash));
+            inputs.push(
+                Input::builder()
+                    .with_output_id(utxo_id)
+                    .sign(&[11u8; 32], sighash)
+                    .build()
+                    .unwrap(),
+            );
         }
 
         let spending_tx = Transaction {
@@ -929,7 +1017,13 @@ mod tests {
             .collect();
 
         let spending_tx = Transaction {
-            inputs: vec![Input::new_unsigned(OutputId::new([1u8; 32], 0))],
+            inputs: vec![
+                Input::builder()
+                    .with_output_id(OutputId::new([1u8; 32], 0))
+                    .with_public_key([1; 32])
+                    .build()
+                    .unwrap(),
+            ],
             outputs,
         };
 
@@ -944,7 +1038,7 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
 
-        let witness = check_sig_script().to_vec();
+        let witness = p2pkh().to_vec();
         let bad_data = [0u8; 32]; // does NOT match blake2s(witness)
         let commitment = commitment(&pubkey, None);
         let amount = 42;
@@ -963,9 +1057,12 @@ mod tests {
 
         let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &[0u8; 32])];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let input = Input::new_unsigned(utxo_id)
+        let input = Input::builder()
+            .with_output_id(utxo_id)
             .with_witness(witness)
-            .sign(signing_key.as_bytes(), sighash);
+            .sign(signing_key.as_bytes(), sighash)
+            .build()
+            .unwrap();
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -983,7 +1080,7 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
 
-        let witness = check_sig_script().to_vec();
+        let witness = p2wsh().to_vec();
         let amount = 42;
 
         let utxo_id = OutputId::new([1u8; 32], 0);
@@ -992,9 +1089,12 @@ mod tests {
 
         let new_outputs = vec![Output::new_v1(amount, &[0u8; 32], &[0u8; 32])];
         let sighash = sighash(&[utxo_id], &new_outputs);
-        let input = Input::new_unsigned(utxo_id)
+        let input = Input::builder()
+            .with_output_id(utxo_id)
             .with_witness(witness)
-            .sign(signing_key.as_bytes(), sighash);
+            .sign(signing_key.as_bytes(), sighash)
+            .build()
+            .unwrap();
 
         let spending_tx = Transaction {
             inputs: vec![input],
@@ -1012,7 +1112,7 @@ mod tests {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[11u8; 32]);
         let pubkey = signing_key.verifying_key().to_bytes();
 
-        let witness = check_sig_script().to_vec();
+        let witness = p2wsh().to_vec();
         let amount = 42;
 
         let utxo_id = OutputId::new([1u8; 32], 0);
@@ -1023,9 +1123,12 @@ mod tests {
         let sighash = sighash(&[utxo_id], &new_outputs);
 
         // Create an input with an invalid signature
-        let mut input = Input::new_unsigned(utxo_id)
+        let mut input = Input::builder()
+            .with_output_id(utxo_id)
             .with_witness(witness)
-            .sign(signing_key.as_bytes(), sighash);
+            .sign(signing_key.as_bytes(), sighash)
+            .build()
+            .unwrap();
         input.signature[0] ^= 0xFF; // Corrupt the signature to make it invalid
 
         let spending_tx = Transaction {

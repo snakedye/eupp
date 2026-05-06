@@ -1,11 +1,14 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, State},
     http::{StatusCode, header::LOCATION},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use helm_core::{Output, OutputId, Transaction, ledger::Query};
+use helm_core::{
+    Transaction,
+    ledger::{OutputEntry, Query},
+};
 use helm_net::protocol::{self as protocol, RpcError};
 use helm_net::{RpcClient, protocol::BlockSummary};
 use serde::Serialize;
@@ -54,7 +57,7 @@ pub fn router(state: RpcClient) -> Router {
 }
 
 async fn root_handler() -> &'static str {
-    "Welcome to the Eupp API!"
+    "Welcome to the Helm API!"
 }
 
 async fn get_node_info(
@@ -67,12 +70,12 @@ async fn get_node_info(
 /// Accepts optional leading "0x".
 fn parse_hex_hash<const N: usize>(s: &str) -> Result<[u8; N], RpcError> {
     let s = s.strip_prefix("0x").unwrap_or(s);
-    const_hex::decode_to_array(s).map_err(|e| RpcError::BadRequest(format!("invalid hash: {e}")))
+    const_hex::decode_to_array(s).map_err(|e| RpcError::BadRequest(e.to_string()))
 }
 
 async fn get_confirmations(
     State(client): State<RpcClient>,
-    axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
+    Path(tx_hash_hex): Path<String>,
 ) -> Result<Json<Confirmations>, ApiError> {
     let hash = parse_hex_hash(&tx_hash_hex)?;
     let n = client.get_confirmations(hash).await?;
@@ -81,7 +84,7 @@ async fn get_confirmations(
 
 async fn get_block_from_tx_id(
     State(client): State<RpcClient>,
-    axum::extract::Path(tx_hash_hex): axum::extract::Path<String>,
+    Path(tx_hash_hex): Path<String>,
 ) -> Result<Json<BlockSummary>, ApiError> {
     let tx_hash = parse_hex_hash(&tx_hash_hex)?;
     Ok(Json(client.get_block_by_tx_hash(tx_hash).await?))
@@ -90,13 +93,13 @@ async fn get_block_from_tx_id(
 async fn search_outputs(
     State(client): State<RpcClient>,
     Json(query): Json<Query>,
-) -> Result<Json<Vec<(OutputId, Output)>>, ApiError> {
+) -> Result<Json<Vec<OutputEntry>>, ApiError> {
     Ok(Json(client.get_outputs(query).await?))
 }
 
 async fn get_block(
     State(client): State<RpcClient>,
-    axum::extract::Path(block_hash_hex): axum::extract::Path<String>,
+    Path(block_hash_hex): Path<String>,
 ) -> Result<Json<BlockSummary>, ApiError> {
     let hash = parse_hex_hash(&block_hash_hex)?;
     Ok(Json(client.get_block_by_hash(hash).await?))

@@ -114,9 +114,11 @@ impl From<TransactionError> for BlockError {
     }
 }
 
-impl<T: Error + 'static> From<T> for BlockError {
-    fn from(err: T) -> Self {
-        BlockError::Other(Box::new(err))
+impl Error for BlockError {}
+
+impl BlockError {
+    pub fn other(err: impl std::error::Error + 'static) -> Self {
+        Self::Other(Box::new(err))
     }
 }
 
@@ -412,7 +414,7 @@ mod tests {
     use crate::{
         SecretKey, Version,
         block::BlockError,
-        ledger::{BlockMetadata, Indexer, Query},
+        ledger::{BlockMetadata, Indexer, OutputEntry, Query},
         transaction::{Input, OutputId},
     };
     use ethnum::U256;
@@ -473,7 +475,7 @@ mod tests {
             self.utxos.get(id).copied()
         }
 
-        fn query_outputs(&self, _query: &Query) -> Vec<(OutputId, Output)> {
+        fn query_outputs(&self, _query: &Query) -> Vec<OutputEntry> {
             unimplemented!()
         }
 
@@ -506,9 +508,13 @@ mod tests {
     fn mining_transaction(new_supply: u64, tx_hash: Hash, sk: &SecretKey) -> Transaction {
         let output_id = OutputId::new(tx_hash, 0);
         let mut transaction = Transaction::new(vec![], vec![]);
-        transaction
-            .inputs
-            .push(Input::new_unsigned(output_id).sign(sk, [0; 32]));
+        transaction.inputs.push(
+            Input::builder()
+                .with_output_id(output_id)
+                .sign(sk, [0; 32])
+                .build()
+                .unwrap(),
+        );
         transaction.outputs.push(Output {
             version: Version::ZERO,
             amount: new_supply,
@@ -653,9 +659,13 @@ mod tests {
         // the genesis lead output (index 0).
         let sk: SecretKey = [1; 32];
         let mut transaction = Transaction::new(vec![], vec![]);
-        transaction
-            .inputs
-            .push(Input::new_unsigned(wrong_output_id).sign(&sk, [0; 32]));
+        transaction.inputs.push(
+            Input::builder()
+                .with_output_id(wrong_output_id)
+                .sign(&sk, [0; 32])
+                .build()
+                .unwrap(),
+        );
         transaction
             .outputs
             .push(Output::new_v0(1, &[0; 32], &[0; 32]));

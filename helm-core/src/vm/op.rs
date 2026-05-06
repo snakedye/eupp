@@ -29,6 +29,7 @@ pub mod r#const {
     pub const OP_OUT_AMT: u8 = 0x23; // Pops index, pushes the amount of Output[index].
     pub const OP_OUT_DATA: u8 = 0x24; // Pops index, pushes the data hash of Output[index].
     pub const OP_OUT_COMM: u8 = 0x25; // Pops index, pushes the commitment of Output[index].
+    pub const OP_OUT_COUNT: u8 = 0x26; // Pushes the number of outputs in the transaction.
 
     // Sighash Operations
     pub const OP_SIGHASH_ALL: u8 = 0x30; // Pushes the sighash for all inputs and outputs onto the stack.
@@ -64,11 +65,13 @@ pub mod r#const {
     pub const OP_VERIFY: u8 = 0x80; // Pops top item. If 0 (False), the entire transaction is invalid.
     pub const OP_RETURN: u8 = 0x81; // Immediately terminates the script.
     pub const OP_IF: u8 = 0x82; // Executes subsequent code only if the top item is non-zero.
-    pub const OP_END_IF: u8 = 0x83; // Marks the end of an if block.
+    pub const OP_ENDIF: u8 = 0x83; // Marks the end of an if block.
+    pub const OP_CLONE: u8 = 0x84; // Expands the next decoded opcode into `count` copies.
+    pub const OP_VERIFYSIG: u8 = 0x85; // Macro: expands to [OP_PUSH_SIG, OP_SIGHASH_ALL, OP_PUSH_PK, OP_CHECKSIG, OP_VERIFY].
+    pub const OP_ERR: u8 = 0x86; // Throws a verify error.
 
-    // Register Operations
-    pub const OP_LOAD: u8 = 0x90; // Pushes the value stored in a register onto the stack (register index follows).
-    pub const OP_STORE: u8 = 0x91; // Pops the top stack value and stores it in a register (register index follows).
+    pub const OP_PRAGMA: u8 = 0x87; // Delineates the beginning of a macro body.
+    pub const OP_ENDPRAGMA: u8 = 0x88; // Delineates the end of a macro body.
 }
 
 // Re-export the constants so existing imports like `use crate::core::vm::op::OP_TRUE`
@@ -79,10 +82,6 @@ pub use r#const::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op<'a> {
     // Stack Manipulation
-    /// Pushes an empty array (0) onto the stack.
-    False,
-    /// Pushes a 1 onto the stack.
-    True,
     /// Duplicates the top item on the stack.
     Dup,
     /// Removes the top item from the stack.
@@ -110,11 +109,22 @@ pub enum Op<'a> {
     /// Pushes the Commitment of the UTXO being spent.
     SelfComm,
     /// Pops index, pushes Amount of Output[index].
-    OutAmt(u8),
+    ///
+    /// The index is taken from the stack at runtime; the opcode itself carries
+    /// no immediate operand.
+    OutAmt,
     /// Pops index, pushes Data Hash of Output[index].
-    OutData(u8),
+    ///
+    /// The index is taken from the stack at runtime; the opcode itself carries
+    /// no immediate operand.
+    OutData,
     /// Pops index, pushes Commitment of Output[index].
-    OutComm(u8),
+    ///
+    /// The index is taken from the stack at runtime; the opcode itself carries
+    /// no immediate operand.
+    OutComm,
+    /// Pushes the number of outputs in the transaction.
+    OutCount,
     /// Pushes the current total supply of the currency onto the stack.
     Supply,
     /// Pushes the supply of the UTXO being spent onto the stack.
@@ -158,13 +168,15 @@ pub enum Op<'a> {
 
     // Control Flow
     /// Pops top item. If 0 (False), the entire transaction is invalid.
-    Verify,
+    // Verify,
     /// Immediately terminates the script.
     Return,
     /// Executes subsequent code only if the top item is non-zero.
     If,
     /// Mark the end of an if block.
     EndIf,
+    /// Throws a verify error.
+    Err,
 
     // Register Operations
     /// Pushes the value stored in the given register onto the stack.
@@ -211,8 +223,6 @@ impl core::convert::TryFrom<u8> for Op<'_> {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            OP_FALSE => Ok(Op::False),
-            OP_TRUE => Ok(Op::True),
             OP_DUP => Ok(Op::Dup),
             OP_DROP => Ok(Op::Drop),
             OP_SWAP => Ok(Op::Swap),
@@ -223,9 +233,10 @@ impl core::convert::TryFrom<u8> for Op<'_> {
             OP_SELF_AMT => Ok(Op::SelfAmt),
             OP_SELF_DATA => Ok(Op::SelfData),
             OP_SELF_COMM => Ok(Op::SelfComm),
-            OP_OUT_AMT => Ok(Op::OutAmt(0)), // placeholder; Scanner must read 1 byte after opcode
-            OP_OUT_DATA => Ok(Op::OutData(0)), // placeholder; Scanner must read 1 byte after opcode
-            OP_OUT_COMM => Ok(Op::OutComm(0)), // placeholder; Scanner must read 1 byte after opcode
+            OP_OUT_AMT => Ok(Op::OutAmt),
+            OP_OUT_DATA => Ok(Op::OutData),
+            OP_OUT_COMM => Ok(Op::OutComm),
+            OP_OUT_COUNT => Ok(Op::OutCount),
             OP_PUSH_SUPPLY => Ok(Op::Supply),
             OP_PUSH_HEIGHT => Ok(Op::Height),
             OP_SELF_HEIGHT => Ok(Op::SelfHeight),
@@ -242,15 +253,14 @@ impl core::convert::TryFrom<u8> for Op<'_> {
             OP_ADD => Ok(Op::Add),
             OP_SUB => Ok(Op::Sub),
 
-            OP_VERIFY => Ok(Op::Verify),
+            // OP_VERIFY => Ok(Op::Verify),
             OP_RETURN => Ok(Op::Return),
             OP_SIGHASH_ALL => Ok(Op::SighashAll),
             OP_IF => Ok(Op::If),
             OP_SIGHASH_OUT => Ok(Op::SighashOut),
             OP_PUSH_WITNESS => Ok(Op::PushWitness),
-            OP_END_IF => Ok(Op::EndIf),
-            OP_LOAD => Ok(Op::Load(0)), // placeholder; Scanner must read 1 byte after opcode
-            OP_STORE => Ok(Op::Store(0)), // placeholder; Scanner must read 1 byte after opcode
+            OP_ENDIF => Ok(Op::EndIf),
+            OP_ERR => Ok(Op::Err),
             OP_SPLIT => Ok(Op::Split(0)),
             OP_READ_U32 => Ok(Op::ReadU32),
             OP_READ_U64 => Ok(Op::ReadU64),
@@ -264,8 +274,6 @@ impl core::convert::TryFrom<u8> for Op<'_> {
 impl From<Op<'_>> for u8 {
     fn from(op: Op) -> u8 {
         match op {
-            Op::False => OP_FALSE,
-            Op::True => OP_TRUE,
             Op::Dup => OP_DUP,
             Op::Drop => OP_DROP,
             Op::Swap => OP_SWAP,
@@ -276,9 +284,10 @@ impl From<Op<'_>> for u8 {
             Op::SelfAmt => OP_SELF_AMT,
             Op::SelfData => OP_SELF_DATA,
             Op::SelfComm => OP_SELF_COMM,
-            Op::OutAmt(_) => OP_OUT_AMT,
-            Op::OutData(_) => OP_OUT_DATA,
-            Op::OutComm(_) => OP_OUT_COMM,
+            Op::OutAmt => OP_OUT_AMT,
+            Op::OutData => OP_OUT_DATA,
+            Op::OutComm => OP_OUT_COMM,
+            Op::OutCount => OP_OUT_COUNT,
             Op::Supply => OP_PUSH_SUPPLY,
             Op::Height => OP_PUSH_HEIGHT,
             Op::SelfHeight => OP_SELF_HEIGHT,
@@ -295,14 +304,11 @@ impl From<Op<'_>> for u8 {
             Op::Add => OP_ADD,
             Op::Sub => OP_SUB,
 
-            Op::Verify => OP_VERIFY,
-            // Op::MulHashB2(_) => OP_MUL_HASH_B2,
             Op::Return => OP_RETURN,
             Op::If => OP_IF,
+            Op::EndIf => OP_ENDIF,
+            Op::Err => OP_ERR,
             Op::SighashAll => OP_SIGHASH_ALL,
-            Op::EndIf => OP_END_IF,
-            Op::Load(_) => OP_LOAD,
-            Op::Store(_) => OP_STORE,
             Op::SighashOut => OP_SIGHASH_OUT,
             Op::PushWitness => OP_PUSH_WITNESS,
             Op::Split(_) => OP_SPLIT,
@@ -316,8 +322,6 @@ impl From<Op<'_>> for u8 {
 impl<'a> core::fmt::Display for Op<'a> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Op::False => write!(f, "False"),
-            Op::True => write!(f, "True"),
             Op::Dup => write!(f, "Dup"),
             Op::Drop => write!(f, "Drop"),
             Op::Swap => write!(f, "Swap"),
@@ -327,9 +331,10 @@ impl<'a> core::fmt::Display for Op<'a> {
             Op::SelfAmt => write!(f, "SelfAmt"),
             Op::SelfData => write!(f, "SelfData"),
             Op::SelfComm => write!(f, "SelfComm"),
-            Op::OutAmt(index) => write!(f, "OutAmt({})", index),
-            Op::OutData(index) => write!(f, "OutData({})", index),
-            Op::OutComm(index) => write!(f, "OutComm({})", index),
+            Op::OutAmt => write!(f, "OutAmt"),
+            Op::OutData => write!(f, "OutData"),
+            Op::OutComm => write!(f, "OutComm"),
+            Op::OutCount => write!(f, "OutCount"),
             Op::Supply => write!(f, "Supply"),
             Op::Height => write!(f, "Height"),
             Op::SelfHeight => write!(f, "SelfHeight"),
@@ -347,12 +352,10 @@ impl<'a> core::fmt::Display for Op<'a> {
             Op::ReadU64 => write!(f, "ReadU64"),
             Op::ReadU32 => write!(f, "ReadU32"),
             Op::ReadByte => write!(f, "ReadByte"),
-            Op::Verify => write!(f, "Verify"),
             Op::Return => write!(f, "Return"),
             Op::If => write!(f, "If"),
             Op::EndIf => write!(f, "EndIf"),
-            Op::Load(reg) => write!(f, "Load({})", reg),
-            Op::Store(reg) => write!(f, "Store({})", reg),
+            Op::Err => write!(f, "Err"),
             Op::SighashAll => write!(f, "SighashAll"),
             Op::SighashOut => write!(f, "SighashOut"),
             Op::PushWitness => write!(f, "PushWitness"),
@@ -368,8 +371,6 @@ mod tests {
     #[test]
     fn roundtrip_all_simple_ops() {
         let all = [
-            Op::False,
-            Op::True,
             Op::Dup,
             Op::Drop,
             Op::Swap,
@@ -377,9 +378,9 @@ mod tests {
             Op::SelfAmt,
             Op::SelfData,
             Op::SelfComm,
-            Op::OutAmt(0),
-            Op::OutData(0),
-            Op::OutComm(0),
+            Op::OutAmt,
+            Op::OutData,
+            Op::OutComm,
             Op::Supply,
             Op::SelfSupply,
             Op::Height,
@@ -393,13 +394,12 @@ mod tests {
             Op::Cat,
             Op::Add,
             Op::Sub,
-            Op::Verify,
+            // Op::Verify,
             Op::Return,
             Op::If,
             Op::EndIf,
             Op::PushByte(0),
             // Op::MulHashB2(0),
-            Op::Verify,
             Op::Return,
             Op::If,
             Op::EndIf,
@@ -448,26 +448,30 @@ mod tests {
     fn supply_height_and_out_ops_bytes() {
         let s: u8 = Op::Supply.into();
         let h: u8 = Op::Height.into();
-        let out_amt: u8 = Op::OutAmt(42).into();
-        let out_data: u8 = Op::OutData(42).into();
-        let out_comm: u8 = Op::OutComm(42).into();
+        // Out opcodes no longer take an immediate index; they are zero-arg opcodes.
+        let out_amt: u8 = Op::OutAmt.into();
+        let out_data: u8 = Op::OutData.into();
+        let out_comm: u8 = Op::OutComm.into();
+        let out_count: u8 = Op::OutCount.into();
 
         assert_eq!(s, OP_PUSH_SUPPLY);
         assert_eq!(out_amt, OP_OUT_AMT);
         assert_eq!(out_data, OP_OUT_DATA);
         assert_eq!(out_comm, OP_OUT_COMM);
-        assert_eq!(h, OP_PUSH_HEIGHT);
+        assert_eq!(out_count, OP_OUT_COUNT);
 
         let ps = Op::try_from(s).unwrap();
         let ph = Op::try_from(h).unwrap();
         let parsed_out_amt = Op::try_from(out_amt).unwrap();
         let parsed_out_data = Op::try_from(out_data).unwrap();
         let parsed_out_comm = Op::try_from(out_comm).unwrap();
+        let parsed_out_count = Op::try_from(out_count).unwrap();
 
         assert_eq!(ps, Op::Supply);
-        assert_eq!(parsed_out_amt, Op::OutAmt(0));
-        assert_eq!(parsed_out_data, Op::OutData(0));
-        assert_eq!(parsed_out_comm, Op::OutComm(0));
+        assert_eq!(parsed_out_amt, Op::OutAmt);
+        assert_eq!(parsed_out_data, Op::OutData);
+        assert_eq!(parsed_out_comm, Op::OutComm);
+        assert_eq!(parsed_out_count, Op::OutCount);
         assert_eq!(ph, Op::Height);
     }
     #[test]
