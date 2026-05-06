@@ -523,6 +523,8 @@ impl Transaction {
             .zip(prev_block.as_ref())
             .filter(|(utxo, meta)| &meta.lead_output == utxo);
 
+        let mut registers = std::array::from_fn(|_| OwnedStackValue::default());
+
         if self.inputs.len() > MAX_ALLOWED {
             return Err(TransactionError::TooManyInputs);
         }
@@ -542,22 +544,23 @@ impl Transaction {
             match utxo.version {
                 Version::ZERO => {
                     // For mining transactions, only the signature is checked
-                    vm.run(&check_sig_script())
+                    vm.run(&check_sig_script(), &mut registers)
                 }
                 Version::ONE => {
-                    // ONE transactions use a simple P2PK script
-                    vm.run(&p2pkh())
+                    // V1 transactions use a simple P2PK script
+                    vm.run(&p2pkh(), &mut registers)
                 }
                 Version::TWO => {
                     // V2 transactions can use a more complex script
-                    vm.run(&utxo.data)
+                    vm.run(&utxo.data, &mut registers)
                 }
                 Version::THREE => {
-                    // THREE transactions support segwit
+                    // V3 transactions support segwit
                     if input.witness.len() > MAX_WITNESS_SIZE {
                         return Err(TransactionError::InvalidWitnessSize);
                     }
-                    vm.run(&p2wsh()).and_then(|_| vm.run(&input.witness))
+                    vm.run(&p2wsh(), &mut registers)
+                        .and_then(|_| vm.run(&input.witness, &mut registers))
                 }
                 _ => unreachable!(),
             }

@@ -178,6 +178,16 @@ pub enum Op<'a> {
     /// Throws a verify error.
     Err,
 
+    // Register Operations
+    /// Pushes the value stored in the given register onto the stack.
+    ///
+    /// Encoding: `[OP_LOAD][register: u8]`.
+    Load(u8),
+    /// Pops the top stack value and stores it in the given register.
+    ///
+    /// Encoding: `[OP_STORE][register: u8]`.
+    Store(u8),
+
     // Sighash Operations
     /// Pushes the sighash for all inputs and outputs onto the stack.
     SighashAll,
@@ -400,6 +410,8 @@ mod tests {
             Op::ReadU32,
             Op::ReadByte,
             Op::SelfHeight,
+            Op::Load(0),
+            Op::Store(0),
         ];
 
         for &op in &all {

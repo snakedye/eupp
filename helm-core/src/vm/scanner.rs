@@ -102,6 +102,20 @@ impl<'a> Iterator for Scanner<'a> {
                 Some(v) => Some(Op::Split(v).into()),
                 None => self.fail_eof(),
             },
+            OP_LOAD => match self.read_u8() {
+                Some(v) => Some(Op::Load(v).into()),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
+            OP_STORE => match self.read_u8() {
+                Some(v) => Some(Op::Store(v).into()),
+                None => {
+                    self.idx = self.bytes.len();
+                    None
+                }
+            },
             OP_PUSH_BYTES => match self.read_u8() {
                 Some(n) => match self.read_exact(n as usize) {
                     Some(slice) => Some(Op::PushBytes(slice).into()),
@@ -128,6 +142,7 @@ impl<'a> Iterator for Scanner<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::op::Op;
     use super::super::op::r#const::*;
     use super::*;
 
